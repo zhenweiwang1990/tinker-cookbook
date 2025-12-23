@@ -26,13 +26,14 @@ logger = logging.getLogger(__name__)
 async def do_cua_group_rollout(
     env_group_builder: EnvGroupBuilder,
     policy: TokenCompleter,
+    model_path: str | None = None,
 ) -> TrajectoryGroup:
     """
     Custom rollout function for CUA environments.
     
     This function:
     1. Creates environments from the builder
-    2. Gets the current training model's checkpoint path from the policy
+    2. Gets the current training model's checkpoint path from the policy (or uses provided model_path)
     3. Uses Tinker's OpenAI-compatible API to run GBoxAgent rollout with the training model
     4. Converts the rollout results to TrajectoryGroup format
     
@@ -41,6 +42,8 @@ async def do_cua_group_rollout(
     Args:
         env_group_builder: Builder for creating environments
         policy: TokenCompleter (should be TinkerTokenCompleter with the training model)
+        model_path: Optional model path (tinker://...) to use for OpenAI-compatible API.
+                    If not provided, will try to extract from policy's SamplingClient.
         
     Returns:
         TrajectoryGroup with rollout results
@@ -54,45 +57,56 @@ async def do_cua_group_rollout(
     
     sampling_client = policy.sampling_client
     
-    # Get the model path from the sampling client
-    # The model_path is a tinker://... path that can be used with OpenAI-compatible API
-    # According to Tinker docs, SamplingClient has a model_path attribute
-    # Try multiple ways to get the model_path
-    model_path = None
-    
-    # Method 1: Direct attribute access (most common)
-    if hasattr(sampling_client, 'model_path'):
-        model_path = sampling_client.model_path
-    # Method 2: Check internal holder (if SamplingClient wraps a holder)
-    elif hasattr(sampling_client, '_holder') and hasattr(sampling_client._holder, 'model_path'):
-        model_path = sampling_client._holder.model_path
-    # Method 3: Check holder attribute (alternative naming)
-    elif hasattr(sampling_client, 'holder') and hasattr(sampling_client.holder, 'model_path'):
-        model_path = sampling_client.holder.model_path
-    # Method 4: Check __dict__ for any model_path-like attribute
-    elif hasattr(sampling_client, '__dict__'):
-        for key, value in sampling_client.__dict__.items():
-            if 'model_path' in key.lower() and isinstance(value, str) and value.startswith('tinker://'):
-                model_path = value
-                break
-    
-    if model_path is None or not model_path.startswith('tinker://'):
-        # If we can't get model_path, we need to save weights first to get a path
-        # This happens when using base_model instead of model_path
-        logger.warning(
-            f"Cannot get model_path from SamplingClient (got: {model_path}). "
-            "This may happen when using base_model. "
-            "The rollout will use the base model via Tinker's OpenAI-compatible API, "
-            "but it won't reflect training progress. "
-            "Consider using save_weights_and_get_sampling_client() to get a checkpoint path."
-        )
-        # For now, we'll raise an error to make this explicit
-        raise ValueError(
-            "Cannot get model_path from SamplingClient. "
-            "Please ensure the policy uses a SamplingClient created from a checkpoint path "
-            "(e.g., via training_client.save_weights_and_get_sampling_client()). "
-            f"SamplingClient attributes: {dir(sampling_client)}"
-        )
+    # If model_path was provided, validate and use it
+    if model_path is not None:
+        if not (isinstance(model_path, str) and model_path.startswith('tinker://')):
+            raise ValueError(f"Invalid model_path format: {model_path}. Expected tinker://... format.")
+        logger.info(f"Using provided model_path for rollout: {model_path}")
+    else:
+        # Try to extract model_path from sampling client
+        # The model_path is a tinker://... path that can be used with OpenAI-compatible API
+        logger.warning("model_path not provided, attempting to extract from SamplingClient...")
+        
+        # Try multiple ways to access the model_path
+        # Method 1: Direct attribute (most common for SamplingClient created with model_path)
+        if hasattr(sampling_client, 'model_path') and sampling_client.model_path is not None:
+            model_path = sampling_client.model_path
+        # Method 2: Check holder's model_path
+        elif hasattr(sampling_client, 'holder') and hasattr(sampling_client.holder, 'model_path'):
+            model_path = sampling_client.holder.model_path
+        # Method 3: Check holder's _model_path (private attribute)
+        elif hasattr(sampling_client, 'holder') and hasattr(sampling_client.holder, '_model_path'):
+            model_path = sampling_client.holder._model_path
+        
+        if model_path is None or not (isinstance(model_path, str) and model_path.startswith('tinker://')):
+            # If we can't get model_path, log detailed debug info and raise an error
+            debug_info = {
+                "sampling_client_attrs": dir(sampling_client),
+                "has_holder": hasattr(sampling_client, 'holder'),
+            }
+            if hasattr(sampling_client, 'holder'):
+                debug_info["holder_attrs"] = dir(sampling_client.holder)
+                # Try to get any path-like attributes
+                holder = sampling_client.holder
+                for attr in dir(holder):
+                    if 'path' in attr.lower() or 'model' in attr.lower():
+                        try:
+                            val = getattr(holder, attr)
+                            if isinstance(val, str):
+                                debug_info[f"holder.{attr}"] = val
+                        except:
+                            pass
+            
+            logger.error(
+                f"Cannot get model_path from SamplingClient (got: {model_path}). "
+                f"Debug info: {debug_info}"
+            )
+            raise ValueError(
+                "Cannot get model_path from SamplingClient. "
+                "Please ensure the training loop always saves checkpoints with explicit paths "
+                "or pass model_path explicitly to do_cua_group_rollout(). "
+                f"Current model_path value: {model_path}"
+            )
     
     # Create environments
     envs = await env_group_builder.make_envs()

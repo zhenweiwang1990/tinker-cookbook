@@ -45,7 +45,7 @@ class CLIConfig:
     
     # Training hyperparameters
     group_size: int = 4
-    groups_per_batch: int = 10
+    groups_per_batch: int = 4
     learning_rate: float = 1e-5
     max_tokens: int = 2048
     temperature: float = 1.0

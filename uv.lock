@@ -1120,6 +1120,35 @@ http = [
 ]
 
 [[package]]
+name = "gbox-agent"
+version = "0.1.0"
+source = { git = "https://github.com/zhenweiwang1990/gbox-agent.git#e006e418fbca181a2d6425918cd357e2b1a5d736" }
+dependencies = [
+    { name = "gbox-sdk" },
+    { name = "httpx" },
+    { name = "openai-agents" },
+    { name = "pillow" },
+]
+
+[[package]]
+name = "gbox-sdk"
+version = "0.1.0a41"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/bf/6f6fe9b4c28545c4d8126d3544f28efab8abac6e473003c48f391829833c/gbox_sdk-0.1.0a41.tar.gz", hash = "sha256:747189eb2df43a54365566fd05a69a159690054f43d0d17d0ddb1a4a076d4bb9", size = 217652, upload-time = "2025-10-14T01:50:29.778Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/09/466b3cce6d5eb30d7c08c8149991ca6d9d73fa6ef4f63906393b4ee10ee7/gbox_sdk-0.1.0a41-py3-none-any.whl", hash = "sha256:8a025ca006834ed241944b7fd8311ee6f3f30fa251b5a79fec1070aa3d149a3d", size = 238341, upload-time = "2025-10-14T01:50:27.877Z" },
+]
+
+[[package]]
 name = "gitdb"
 version = "4.0.12"
 source = { registry = "https://pypi.org/simple" }
@@ -4610,6 +4639,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "chromadb" },
+    { name = "gbox-agent" },
     { name = "google-genai" },
     { name = "huggingface-hub" },
     { name = "neptune-scale" },
@@ -4617,6 +4647,9 @@ all = [
     { name = "trackio" },
     { name = "verifiers" },
     { name = "wandb" },
+]
+cua = [
+    { name = "gbox-agent" },
 ]
 dev = [
     { name = "pyright" },
@@ -4651,6 +4684,7 @@ requires-dist = [
     { name = "chz" },
     { name = "cloudpickle" },
     { name = "datasets" },
+    { name = "gbox-agent", marker = "extra == 'cua'", git = "https://github.com/zhenweiwang1990/gbox-agent.git" },
     { name = "google-genai", marker = "extra == 'vector-search'" },
     { name = "huggingface-hub", marker = "extra == 'vector-search'" },
     { name = "inspect-ai" },

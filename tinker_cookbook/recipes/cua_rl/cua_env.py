@@ -34,6 +34,7 @@ class CUAEnv(ProblemEnv):
         self,
         task_description: str,
         gbox_api_key: str,
+        tinker_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         openai_api_base: Optional[str] = None,
         rollout_model_name: str = "gpt-4o",
@@ -222,6 +223,7 @@ class CUADataset(RLDataset):
         self.group_size = group_size
         self.gbox_api_key = gbox_api_key
         self.tinker_api_key = tinker_api_key
+        self.rollout_model_name = rollout_model_name
         self.renderer = renderer
         self.convo_prefix = convo_prefix
         self.max_turns = max_turns
@@ -298,6 +300,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
     async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
         from tinker_cookbook.tokenizer_utils import get_tokenizer
         from tinker_cookbook import model_info
+        from tinker_cookbook.image_processing_utils import get_image_processor
         from tinker_cookbook.recipes.cua_rl.task_loader import (
             TaskSourceConfig,
             load_tasks_from_config,
@@ -326,7 +329,10 @@ class CUADatasetBuilder(RLDatasetBuilder):
         renderer_name = self.renderer_name or model_info.get_recommended_renderer_name(
             self.model_name_for_tokenizer
         )
-        renderer = renderers.get_renderer(renderer_name, tokenizer=tokenizer)
+        # Get image processor if model is vision-language
+        attributes = model_info.get_model_attributes(self.model_name_for_tokenizer)
+        image_processor = get_image_processor(self.model_name_for_tokenizer) if attributes.is_vl else None
+        renderer = renderers.get_renderer(renderer_name, tokenizer=tokenizer, image_processor=image_processor)
         
         dataset = CUADataset(
             tasks=tasks,

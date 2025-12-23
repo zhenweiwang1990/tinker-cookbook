@@ -327,7 +327,7 @@ async def do_sync_training_with_stream_minibatch(
     trajectories to be ready. This allows us to overlap sampling and training.
     """
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
+    sampling_client, model_path, _ = await save_checkpoint_and_get_sampling_client(
         training_client, start_batch, cfg.log_path, cfg.save_every, start_batch
     )
 
@@ -371,6 +371,7 @@ async def do_sync_training_with_stream_minibatch(
                     temperature=cfg.temperature,
                     do_remove_constant_reward_groups=cfg.remove_constant_reward_groups,
                     enable_logging=enable_logging,
+                    model_path=model_path,
                 )
                 metrics["time/trajectory_group_worker_loop/total"] = time.time() - t_start
                 if trajectory_group is not None:
@@ -396,6 +397,7 @@ async def do_sync_training_with_stream_minibatch(
             # Run multiple optimizer substeps per training iteration
             (
                 sampling_client,
+                model_path,
                 full_batch_metrics,
             ) = await do_train_step_streaming_and_get_sampling_client(
                 cfg,
@@ -571,6 +573,7 @@ async def do_async_training(
                 await trajectory_groups_queue.put(wrapped_trajectory_group)
                 (
                     sampling_client,
+                    model_path,
                     train_step_metrics,
                 ) = await do_train_step_streaming_and_get_sampling_client(
                     cfg,
@@ -667,11 +670,19 @@ async def do_group_rollout_and_filter_constant_reward(
     temperature: float,
     do_remove_constant_reward_groups: bool,
     enable_logging: bool = True,
+    model_path: str | None = None,
 ) -> TrajectoryGroup | None:
     policy = TinkerTokenCompleter(sampling_client, max_tokens=max_tokens, temperature=temperature)
 
     with logtree.optional_enable_logging(enable_logging):
-        trajectory_group = await do_group_rollout(env_group_builder, policy)
+        # Pass model_path to do_group_rollout if it accepts the parameter
+        # Check if the function signature includes model_path parameter
+        import inspect
+        sig = inspect.signature(do_group_rollout)
+        if 'model_path' in sig.parameters:
+            trajectory_group = await do_group_rollout(env_group_builder, policy, model_path=model_path)
+        else:
+            trajectory_group = await do_group_rollout(env_group_builder, policy)
 
     # Remove if all trajectories have the same reward
     if do_remove_constant_reward_groups and all_same(trajectory_group.get_total_rewards()):
@@ -687,7 +698,7 @@ async def save_checkpoint_and_get_sampling_client(
     log_path: str,
     save_every: int,
     start_batch: int = 0,
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[tinker.SamplingClient, str, dict[str, Any]]:
     metrics = {}
     with timed("save_checkpoint", metrics):
         if save_every > 0 and i_batch > start_batch and i_batch % save_every == 0:
@@ -698,9 +709,19 @@ async def save_checkpoint_and_get_sampling_client(
                 loop_state={"batch": i_batch},
                 kind="both",
             )
-            return training_client.create_sampling_client(path_dict["sampler_path"]), metrics
+            sampler_path = path_dict["sampler_path"]
+            return training_client.create_sampling_client(sampler_path), sampler_path, metrics
         else:
-            return await training_client.save_weights_and_get_sampling_client_async(), metrics
+            # For non-checkpoint batches, still save with explicit path for on-policy rollout
+            path_dict = await checkpoint_utils.save_checkpoint_async(
+                training_client=training_client,
+                name=f"{i_batch:06d}_tmp",
+                log_path=log_path,
+                loop_state={},
+                kind="sampler",
+            )
+            sampler_path = path_dict["sampler_path"]
+            return training_client.create_sampling_client(sampler_path), sampler_path, metrics
 
 
 @scope
@@ -753,10 +774,10 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     log_path: str,
     save_every: int,
     do_compute_post_kl: bool,
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[tinker.SamplingClient, str, dict[str, Any]]:
     """
     At the end of the iteration, this will compute metrics for the full batch
-    and return the latest sampling client.
+    and return the latest sampling client with its model_path.
 
     The reason we return a sampling client is that if do_compute_post_kl is True,
     we need to create a sampling client from the post-update policy.
@@ -769,7 +790,7 @@ async def compute_full_batch_metrics_and_get_sampling_client(
         metrics.update(kl_sample_train_metrics)
 
     # Get a sampling client using the new weights
-    sampling_client, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(
+    sampling_client, model_path, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(
         training_client, i_batch, log_path, save_every
     )
     metrics.update(checkpoint_metrics)
@@ -780,7 +801,7 @@ async def compute_full_batch_metrics_and_get_sampling_client(
             post_kl_metrics = await compute_post_kl(data_D, sampling_client)
             metrics.update(post_kl_metrics)
 
-    return sampling_client, metrics
+    return sampling_client, model_path, metrics
 
 
 @scope
@@ -792,7 +813,7 @@ async def do_train_step_streaming_and_get_sampling_client(
     service_client: tinker.ServiceClient,
     tokenizer: Tokenizer,
     trajectory_group_filter: Callable[[WrappedTrajectoryGroup | None], bool] = lambda _: True,
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[tinker.SamplingClient, str, dict[str, Any]]:
     """
     As soon as we have enough trajectories for a minibatch, we will train on them.
     This allows us to overlap sampling and training.
@@ -892,6 +913,7 @@ async def do_train_step_streaming_and_get_sampling_client(
     )
     (
         sampling_client,
+        model_path,
         full_batch_metrics,
     ) = await compute_full_batch_metrics_and_get_sampling_client(
         training_client,
@@ -904,7 +926,7 @@ async def do_train_step_streaming_and_get_sampling_client(
         cfg.compute_post_kl,
     )
     metrics.update(full_batch_metrics)
-    return sampling_client, metrics
+    return sampling_client, model_path, metrics
 
 
 @scope
@@ -916,7 +938,7 @@ async def do_train_step_and_get_sampling_client(
     tokenizer: Tokenizer,
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[tinker.SamplingClient, str, dict[str, Any]]:
     update_scope_context({"step": i_batch})
 
     metrics = {}
@@ -940,7 +962,7 @@ async def do_train_step_and_get_sampling_client(
             cfg.loss_fn,
         )
 
-    sampling_client, full_batch_metrics = await compute_full_batch_metrics_and_get_sampling_client(
+    sampling_client, model_path, full_batch_metrics = await compute_full_batch_metrics_and_get_sampling_client(
         training_client,
         # NOTE: saving the checkpoint as the i + 1 step
         i_batch + 1,
@@ -952,7 +974,7 @@ async def do_train_step_and_get_sampling_client(
     )
     metrics.update(full_batch_metrics)
 
-    return sampling_client, metrics
+    return sampling_client, model_path, metrics
 
 
 @scope
@@ -970,7 +992,7 @@ async def do_sync_training(
 ):
     """Implements fully synchronous on-policy training"""
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
+    sampling_client, model_path, _ = await save_checkpoint_and_get_sampling_client(
         training_client, start_batch, cfg.log_path, cfg.save_every, start_batch
     )
 
@@ -1012,6 +1034,7 @@ async def do_sync_training(
                             temperature=cfg.temperature,
                             do_remove_constant_reward_groups=False,
                             enable_logging=i < cfg.num_groups_to_log,
+                            model_path=model_path,
                         ),
                         name=f"sample_task_{i}",
                     )
@@ -1023,7 +1046,7 @@ async def do_sync_training(
             trajectory_groups_P = remove_constant_reward_groups(trajectory_groups_P)
 
         # Train step
-        sampling_client, train_step_metrics = await do_train_step_and_get_sampling_client(
+        sampling_client, model_path, train_step_metrics = await do_train_step_and_get_sampling_client(
             cfg,
             i_batch,
             training_client,
