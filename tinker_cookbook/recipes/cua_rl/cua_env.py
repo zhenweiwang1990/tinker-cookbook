@@ -1,0 +1,377 @@
+"""
+CUA (Computer Use Agent) Environment for RL training.
+
+This environment wraps GBoxAgent to provide an RL-compatible interface.
+"""
+
+import asyncio
+import logging
+from functools import partial
+from typing import Any, Dict, List, Optional, Sequence
+
+import chz
+import tinker
+from gbox_agent.agent import GBoxAgent
+
+from tinker_cookbook import renderers
+from tinker_cookbook.completers import StopCondition
+from tinker_cookbook.rl.problem_env import ProblemEnv, ProblemGroupBuilder
+from tinker_cookbook.rl.types import Action, EnvGroupBuilder, RLDataset, RLDatasetBuilder, StepResult
+from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
+
+logger = logging.getLogger(__name__)
+
+
+class CUAEnv(ProblemEnv):
+    """
+    Environment for Computer Use Agent tasks.
+    
+    This environment uses GBoxAgent to interact with a device screen and complete tasks.
+    The agent receives screenshots and takes actions to complete the task.
+    """
+    
+    def __init__(
+        self,
+        task_description: str,
+        gbox_api_key: str,
+        openai_api_key: Optional[str] = None,
+        openai_api_base: Optional[str] = None,
+        rollout_model_name: str = "gpt-4o",
+        renderer: Optional[renderers.Renderer] = None,
+        convo_prefix: Optional[List[renderers.Message]] = None,
+        max_turns: int = 20,
+        box_type: str = "android",
+        format_coef: float = 0.0,  # No format penalty for CUA
+    ):
+        """
+        Initialize CUA Environment.
+        
+        Args:
+            task_description: Description of the task to complete
+            gbox_api_key: GBox API key
+            tinker_api_key: Tinker API key for OpenAI-compatible API (for rollout)
+            rollout_model_name: Not used, kept for compatibility
+            renderer: Renderer instance (for training, not used in rollout)
+            convo_prefix: Conversation prefix (for training, not used in rollout)
+            max_turns: Maximum number of turns
+            box_type: Type of GBox environment (android or linux)
+            format_coef: Format coefficient (not used for CUA)
+        """
+        # Initialize parent with renderer (needed for training conversion)
+        super().__init__(renderer or renderers.RoleColonRenderer(None), convo_prefix, format_coef=format_coef)
+        
+        self.task_description = task_description
+        self.gbox_api_key = gbox_api_key
+        self.tinker_api_key = tinker_api_key
+        self.max_turns = max_turns
+        self.box_type = box_type
+        
+        # GBoxAgent instance (created lazily during rollout)
+        self._agent: Optional[GBoxAgent] = None
+        
+        # Track rollout state
+        self._rollout_messages: List[Dict[str, Any]] = []
+        self._rollout_result: Optional[Dict[str, Any]] = None
+    
+    def get_question(self) -> str:
+        """Return the task description."""
+        return self.task_description
+    
+    def check_format(self, sample_str: str) -> bool:
+        """CUA doesn't have strict format requirements."""
+        return True
+    
+    def check_answer(self, sample_str: str) -> bool:
+        """Check if task was completed successfully."""
+        if self._rollout_result is None:
+            return False
+        return bool(self._rollout_result.get("task_success", False))
+    
+    def get_reference_answer(self) -> str:
+        """Return the result message."""
+        if self._rollout_result is None:
+            return "Task not completed"
+        return self._rollout_result.get("result_message", "Task not completed")
+    
+    
+    async def run_rollout_with_tinker_model(
+        self,
+        tinker_model_path: str,
+        tinker_api_key: str,
+    ) -> Dict[str, Any]:
+        """
+        Run a rollout using GBoxAgent with Tinker's OpenAI-compatible API.
+        
+        This allows using the current training model for rollout (on-policy RL).
+        The model_path is a tinker://... checkpoint path that dynamically updates
+        as training progresses.
+        
+        According to Tinker's OpenAI-compatible API docs:
+        https://tinker-docs.thinkingmachines.ai/compatible-apis/openai
+        - Base URL: https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1
+        - Model name: tinker://... checkpoint path (e.g., tinker://.../sampler_weights/000080)
+        - API key: Tinker API key
+        
+        Args:
+            tinker_model_path: Tinker checkpoint path (e.g., tinker://.../sampler_weights/000080)
+            tinker_api_key: Tinker API key (same as TINKER_API_KEY)
+            
+        Returns:
+            Dictionary with rollout results
+        """
+        # Tinker's OpenAI-compatible API endpoint
+        # See: https://tinker-docs.thinkingmachines.ai/compatible-apis/openai
+        TINKER_OAI_BASE_URL = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
+        
+        # Create GBoxAgent instance with Tinker's OpenAI-compatible API
+        # This allows using the current training model checkpoint for rollout
+        # The model_path dynamically updates as training progresses
+        self._agent = GBoxAgent(
+            gbox_api_key=self.gbox_api_key,
+            openai_api_key=tinker_api_key,  # Use Tinker API key
+            openai_api_base=TINKER_OAI_BASE_URL,  # Use Tinker's OpenAI-compatible endpoint
+            model_name=tinker_model_path,  # Use checkpoint path as model name (dynamically updates)
+            max_turns=self.max_turns,
+            box_type=self.box_type,
+        )
+        
+        try:
+            # Run task with current training model
+            result = await self._agent.run_task(
+                task_description=self.task_description,
+                verbose=False,
+            )
+            
+            self._rollout_result = result
+            return result
+        finally:
+            # Cleanup
+            await self._agent.close()
+            self._agent = None
+    
+    async def initial_observation(self) -> tuple[tinker.ModelInput, StopCondition]:
+        """
+        Initial observation for training.
+        
+        Note: This is used during training data preparation, not during rollout.
+        The actual rollout is done via run_rollout().
+        """
+        # For training, we need to convert the rollout messages to ModelInput
+        # This will be called after rollout is complete
+        if not self._rollout_messages:
+            # If no messages yet, return empty (shouldn't happen in normal flow)
+            return tinker.ModelInput.empty(), self.stop_condition
+        
+        # Convert OpenAI format messages to Tinker Message format
+        tinker_messages = [
+            convert_openai_responses_to_message(msg) for msg in self._rollout_messages
+        ]
+        
+        # Build ModelInput using renderer
+        model_input = self.renderer.build_generation_prompt(tinker_messages)
+        return model_input, self.stop_condition
+    
+    async def step(self, action: Action) -> StepResult:
+        """
+        Step function for training.
+        
+        Note: This is used during training data preparation, not during rollout.
+        The actual rollout is done via run_rollout().
+        """
+        # For training, we parse the action and check if task was successful
+        message, parse_success = self.renderer.parse_response(action)
+        content = renderers.ensure_text(message["content"])
+        
+        # Check if task was completed successfully
+        task_success = self.check_answer(content)
+        
+        # Reward is 1.0 if task succeeded, 0.0 otherwise
+        reward = 1.0 if task_success else 0.0
+        
+        return StepResult(
+            reward=reward,
+            episode_done=True,
+            next_observation=tinker.ModelInput.empty(),
+            next_stop_condition=self.stop_condition,
+            metrics={
+                "task_success": float(task_success),
+                "task_completed": float(self._rollout_result.get("task_completed", False) if self._rollout_result else False),
+            },
+        )
+
+
+class CUADataset(RLDataset):
+    """Dataset for CUA tasks."""
+    
+    def __init__(
+        self,
+        tasks: List[str],
+        batch_size: int,
+        group_size: int,
+        gbox_api_key: str,
+        tinker_api_key: Optional[str] = None,
+        rollout_model_name: Optional[str] = None,  # Not used, kept for compatibility
+        renderer: Optional[renderers.Renderer] = None,
+        convo_prefix: Optional[List[renderers.Message]] = None,
+        max_turns: int = 20,
+        box_type: str = "android",
+        seed: int = 0,
+    ):
+        self.tasks = tasks
+        self.batch_size = batch_size
+        self.group_size = group_size
+        self.gbox_api_key = gbox_api_key
+        self.tinker_api_key = tinker_api_key
+        self.renderer = renderer
+        self.convo_prefix = convo_prefix
+        self.max_turns = max_turns
+        self.box_type = box_type
+        self.seed = seed
+        
+        # Shuffle tasks with seed
+        import random
+        rng = random.Random(seed)
+        self.tasks = tasks.copy()
+        rng.shuffle(self.tasks)
+    
+    def __len__(self) -> int:
+        return (len(self.tasks) + self.batch_size - 1) // self.batch_size
+    
+    def get_batch(self, index: int) -> Sequence[EnvGroupBuilder]:
+        start = index * self.batch_size
+        end = min((index + 1) * self.batch_size, len(self.tasks))
+        if start >= end:
+            raise IndexError(f"Incorrect batch index {index} for CUADataset")
+        
+        builders: List[EnvGroupBuilder] = []
+        for task in self.tasks[start:end]:
+            builder = self._make_env_group_builder(task, self.group_size)
+            builders.append(builder)
+        
+        return builders
+    
+    def _make_env_group_builder(
+        self, task: str, group_size: int
+    ) -> ProblemGroupBuilder:
+        return ProblemGroupBuilder(
+            env_thunk=partial(
+                CUAEnv,
+                task,
+                self.gbox_api_key,
+                tinker_api_key=self.tinker_api_key,
+                rollout_model_name=self.rollout_model_name,
+                renderer=self.renderer,
+                convo_prefix=self.convo_prefix,
+                max_turns=self.max_turns,
+                box_type=self.box_type,
+            ),
+            num_envs=group_size,
+            dataset_name="cua",
+        )
+
+
+@chz.chz
+class CUADatasetBuilder(RLDatasetBuilder):
+    """Builder for CUA dataset.
+    
+    Tasks are configured using TaskSourceConfig:
+    - dict: Single TaskSourceConfig (e.g., {"source_type": "demo_training"})
+    - List[dict]: Multiple TaskSourceConfig objects
+    
+    Evaluation dataset (eval_tasks) is optional and uses the same configuration format.
+    """
+    
+    tasks: dict | list[dict]  # TaskSourceConfig dict(s) for training
+    eval_tasks: Optional[dict | list[dict]] = None  # Optional TaskSourceConfig dict(s) for evaluation
+    batch_size: int
+    group_size: int
+    gbox_api_key: str
+    tinker_api_key: Optional[str] = None
+    rollout_model_name: Optional[str] = None  # Not used, kept for compatibility
+    model_name_for_tokenizer: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+    renderer_name: Optional[str] = None
+    convo_prefix: Optional[List[renderers.Message]] = None
+    max_turns: int = 20
+    box_type: str = "android"
+    seed: int = 0
+    
+    async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
+        from tinker_cookbook.tokenizer_utils import get_tokenizer
+        from tinker_cookbook import model_info
+        from tinker_cookbook.recipes.cua_rl.task_loader import (
+            TaskSourceConfig,
+            load_tasks_from_config,
+            load_tasks_from_multiple_sources,
+        )
+        
+        # Load tasks from TaskSourceConfig
+        if isinstance(self.tasks, dict):
+            # Single TaskSourceConfig
+            config = TaskSourceConfig(**self.tasks)
+            tasks = load_tasks_from_config(config)
+        elif isinstance(self.tasks, list):
+            if len(self.tasks) == 0:
+                raise ValueError("tasks list cannot be empty")
+            # List of TaskSourceConfig dicts
+            configs = [TaskSourceConfig(**item) for item in self.tasks]
+            tasks = load_tasks_from_multiple_sources(configs)
+        else:
+            raise ValueError(
+                f"Invalid tasks format: {type(self.tasks)}. "
+                "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
+            )
+        
+        # Get renderer
+        tokenizer = get_tokenizer(self.model_name_for_tokenizer)
+        renderer_name = self.renderer_name or model_info.get_recommended_renderer_name(
+            self.model_name_for_tokenizer
+        )
+        renderer = renderers.get_renderer(renderer_name, tokenizer=tokenizer)
+        
+        dataset = CUADataset(
+            tasks=tasks,
+            batch_size=self.batch_size,
+            group_size=self.group_size,
+            gbox_api_key=self.gbox_api_key,
+            tinker_api_key=self.tinker_api_key,
+            rollout_model_name=self.rollout_model_name,
+            renderer=renderer,
+            convo_prefix=self.convo_prefix,
+            max_turns=self.max_turns,
+            box_type=self.box_type,
+            seed=self.seed,
+        )
+        
+        # Load evaluation tasks if provided
+        eval_dataset = None
+        if self.eval_tasks is not None:
+            if isinstance(self.eval_tasks, dict):
+                eval_config = TaskSourceConfig(**self.eval_tasks)
+                eval_tasks = load_tasks_from_config(eval_config)
+            elif isinstance(self.eval_tasks, list):
+                if len(self.eval_tasks) == 0:
+                    raise ValueError("eval_tasks list cannot be empty")
+                eval_configs = [TaskSourceConfig(**item) for item in self.eval_tasks]
+                eval_tasks = load_tasks_from_multiple_sources(eval_configs)
+            else:
+                raise ValueError(
+                    f"Invalid eval_tasks format: {type(self.eval_tasks)}. "
+                    "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
+                )
+            
+            eval_dataset = CUADataset(
+                tasks=eval_tasks,
+                batch_size=self.batch_size,
+                group_size=self.group_size,
+                gbox_api_key=self.gbox_api_key,
+                tinker_api_key=self.tinker_api_key,
+                rollout_model_name=self.rollout_model_name,
+                renderer=renderer,
+                convo_prefix=self.convo_prefix,
+                max_turns=self.max_turns,
+                box_type=self.box_type,
+                seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
+            )
+        
+        return dataset, eval_dataset
+

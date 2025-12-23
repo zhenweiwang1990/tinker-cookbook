@@ -59,12 +59,17 @@ verifiers = [
     "verifiers>=0.1.8.post0",
     "openai",
 ]
+cua = [
+    # gbox-agent should be installed via:
+    # pip install git+https://github.com/zhenweiwang1990/gbox-agent.git
+]
 all = [
     "tinker_cookbook[vector-search]",
     "tinker_cookbook[wandb]",
     "tinker_cookbook[neptune-scale]",
     "tinker_cookbook[trackio]",
     "tinker_cookbook[verifiers]",
+    "tinker_cookbook[cua]",
 ]
 
 [build-system]
