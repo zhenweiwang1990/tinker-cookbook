@@ -1,5 +1,6 @@
 import asyncio
 import itertools
+import logging
 from collections import defaultdict
 from typing import Dict, List
 
@@ -12,6 +13,8 @@ from tinker_cookbook.rl.types import EnvGroupBuilder, RLDataset, TrajectoryGroup
 from tinker_cookbook.utils.misc_utils import all_same, dict_mean
 from tinker_cookbook.utils import logtree
 from tinker_cookbook.completers import TokenCompleter
+
+logger = logging.getLogger(__name__)
 
 
 def _compute_by_group_metrics(trajectory_groups_P: List[TrajectoryGroup], good_thresh: float = 0.5):
@@ -128,8 +131,113 @@ class RLTestSetEvaluator(SamplingClientEvaluator):
         taglist_P = [builder.logging_tags() for builder in self.env_group_builders_P]
         metrics = compute_trajectory_metrics(trajectory_groups_P, taglist_P)
 
+        # Print comprehensive evaluation results table
+        self._print_evaluation_results_table(trajectory_groups_P)
+
         metrics = {f"{self.name}/{k}": v for k, v in metrics.items()}
         return metrics
+    
+    def _print_evaluation_results_table(self, trajectory_groups_P: List[TrajectoryGroup]):
+        """Print a comprehensive evaluation results table."""
+        # Collect results from all trajectory groups
+        all_results = []
+        for tg in trajectory_groups_P:
+            for traj in tg.trajectories_G:
+                # Extract metrics from trajectory transitions
+                # Metrics are stored in transition.metrics
+                task_success = False
+                task_completed = False
+                num_turns = len(traj.transitions)
+                reward = 0.0
+                rollout_time = 0.0
+                
+                # Get metrics from the last transition (which contains the final metrics)
+                if traj.transitions:
+                    last_transition = traj.transitions[-1]
+                    if hasattr(last_transition, 'metrics') and last_transition.metrics:
+                        task_success = bool(last_transition.metrics.get("task_success", False))
+                        task_completed = bool(last_transition.metrics.get("task_completed", False))
+                        num_turns = int(last_transition.metrics.get("num_turns", num_turns))
+                        # rollout_time might not be in metrics, use 0.0 as fallback
+                        rollout_time = float(last_transition.metrics.get("rollout_time", 0.0))
+                    
+                    # Get reward from transition
+                    if hasattr(last_transition, 'reward'):
+                        reward = float(last_transition.reward)
+                
+                all_results.append({
+                    "success": task_success,
+                    "completed": task_completed,
+                    "turns": num_turns,
+                    "reward": reward,
+                    "time": rollout_time,
+                })
+        
+        if not all_results:
+            return
+        
+        # Calculate summary statistics
+        total_tasks = len(all_results)
+        success_count = sum(1 for r in all_results if r["success"])
+        completed_count = sum(1 for r in all_results if r["completed"])
+        error_count = total_tasks - success_count
+        success_rate = (success_count / total_tasks * 100) if total_tasks > 0 else 0.0
+        total_turns = sum(r["turns"] for r in all_results)
+        avg_turns = total_turns / total_tasks if total_tasks > 0 else 0.0
+        total_time = sum(r["time"] for r in all_results)
+        avg_time = total_time / total_tasks if total_tasks > 0 else 0.0
+        avg_reward = sum(r["reward"] for r in all_results) / total_tasks if total_tasks > 0 else 0.0
+        
+        # Print evaluation results table
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("EVALUATION RESULTS SUMMARY")
+        logger.info("=" * 80)
+        
+        # Print summary statistics
+        enable_color = True  # You can make this configurable
+        GREEN = "\033[92m"
+        RED = "\033[91m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        
+        success_str = f"{GREEN}✓{RESET}" if success_count > 0 else f"{RED}✗{RESET}"
+        
+        logger.info(f"Total Tasks: {total_tasks}")
+        logger.info(f"Successful: {success_str} {success_count}/{total_tasks} ({success_rate:.1f}%)")
+        logger.info(f"Completed: {completed_count}/{total_tasks} ({completed_count/total_tasks*100:.1f}%)")
+        logger.info(f"Failed: {error_count}/{total_tasks} ({error_count/total_tasks*100:.1f}%)")
+        logger.info(f"Total Turns: {total_turns}")
+        logger.info(f"Average Turns per Task: {avg_turns:.2f}")
+        logger.info(f"Total Time: {total_time:.2f}s")
+        logger.info(f"Average Time per Task: {avg_time:.2f}s")
+        logger.info(f"Average Reward: {avg_reward:.4f}")
+        logger.info("=" * 80)
+        
+        # Print detailed table for each task
+        logger.info("")
+        logger.info("DETAILED TASK RESULTS")
+        logger.info("=" * 80)
+        header = f"{'#':<4} {'Success':<8} {'Completed':<10} {'Turns':<7} {'Reward':<8} {'Time (s)':<10}"
+        logger.info(header)
+        logger.info("-" * 80)
+        
+        for i, result in enumerate(all_results):
+            success_str = f"{GREEN}✓{RESET}" if result["success"] else f"{RED}✗{RESET}"
+            completed_str = f"{GREEN}✓{RESET}" if result["completed"] else f"{RED}✗{RESET}"
+            
+            row = (
+                f"{i+1:<4} "
+                f"{success_str:<12} "  # Account for ANSI codes
+                f"{completed_str:<14} "  # Account for ANSI codes
+                f"{result['turns']:<7} "
+                f"{result['reward']:<8.4f} "
+                f"{result['time']:<10.2f}"
+            )
+            logger.info(row)
+        
+        logger.info("=" * 80)
+        logger.info("")
 
     async def __call__(self, sampling_client: tinker.SamplingClient) -> dict[str, float]:
         policy = TinkerTokenCompleter(sampling_client, max_tokens=self.max_tokens)

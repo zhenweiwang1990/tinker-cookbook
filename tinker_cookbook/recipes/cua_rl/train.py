@@ -97,11 +97,11 @@ class CLIConfig:
     eval_tasks: dict | list[dict] | None = None  # Optional TaskSourceConfig dict(s) for evaluation. If None and use_default_eval_tasks=True, will use default (10 random tasks from demo_eval)
     use_default_eval_tasks: bool = True  # If True and eval_tasks is None, will use default: 10 random tasks from demo_eval
     seed: int = 0
-    max_turns: int = 10
+    max_turns: int = 8
     
     # Training hyperparameters
     group_size: int = 4
-    groups_per_batch: int = 4
+    groups_per_batch: int = 2
     learning_rate: float = 1e-5
     max_tokens: int = 2048
     temperature: float = 1.0

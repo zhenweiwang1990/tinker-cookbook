@@ -198,6 +198,7 @@ async def _run_single_env_rollout(
             "task_success": float(task_success),
             "task_completed": float(task_completed),
             "num_turns": num_turns,
+            "rollout_time": env_rollout_time,  # Store rollout time for evaluation results
         },
     )
     
@@ -370,11 +371,12 @@ async def do_cua_group_rollout(
     
     total_rollout_time = time.time() - rollout_start_time
     
-    # Print group-level summary table
-    logger.info("")
-    logger.info("=" * 57)
-    logger.info("ROLLOUT GROUP SUMMARY")
-    logger.info("=" * 57)
+    # Print group-level summary table (skip for evaluation mode)
+    if not is_eval:
+        logger.info("")
+        logger.info("=" * 57)
+        logger.info("ROLLOUT GROUP SUMMARY")
+        logger.info("=" * 57)
     
     # Print table header (without Task Description since all tasks in a group are the same)
     # Column widths: #(4) + Completed(10) + Success(8) + Turns(6) + Reward(7) + Time(10) + Temp(6) + spaces(6) = 57
@@ -422,17 +424,57 @@ async def do_cua_group_rollout(
         )
         logger.info(row)
     
-    # Print summary statistics
-    logger.info("-" * 57)
-    logger.info(f"Total environments: {len(envs)}")
-    logger.info(f"Total rollout time: {total_rollout_time:.2f}s")
-    logger.info(f"Average time per environment: {total_rollout_time / len(envs):.2f}s")
-    success_count = sum(1 for m in metrics_list if m.get("task_success", False))
-    logger.info(f"Successful tasks: {success_count}/{len(envs)} ({100 * success_count / len(envs):.1f}%)")
-    total_turns = sum(m.get("num_turns", 0) for m in metrics_list)
-    logger.info(f"Total turns across all environments: {total_turns}")
-    logger.info(f"Average turns per environment: {total_turns / len(envs):.1f}")
-    logger.info("=" * 57)
+    # Print summary statistics (skip for evaluation mode)
+    if not is_eval:
+        logger.info("-" * 57)
+        logger.info(f"Total environments: {len(envs)}")
+        logger.info(f"Total rollout time: {total_rollout_time:.2f}s")
+        logger.info(f"Average time per environment: {total_rollout_time / len(envs):.2f}s")
+        success_count = sum(1 for m in metrics_list if m.get("task_success", False))
+        logger.info(f"Successful tasks: {success_count}/{len(envs)} ({100 * success_count / len(envs):.1f}%)")
+        total_turns = sum(m.get("num_turns", 0) for m in metrics_list)
+        logger.info(f"Total turns across all environments: {total_turns}")
+        logger.info(f"Average turns per environment: {total_turns / len(envs):.1f}")
+        logger.info("=" * 57)
+        
+        # Check for learning signal: if all rewards are the same, there's no learning signal
+        # Extract rewards from trajectories (each trajectory has transitions with rewards)
+        if len(trajectories) > 0:
+            # Get rewards from all transitions in all trajectories
+            all_rewards = []
+            for traj in trajectories:
+                for transition in traj.transitions:
+                    all_rewards.append(transition.reward)
+            
+            if len(all_rewards) > 0:
+                unique_rewards = set(all_rewards)
+                if len(unique_rewards) == 1:
+                    # All rewards are the same - no learning signal
+                    reward_value = list(unique_rewards)[0]
+                    YELLOW = "\033[93m"
+                    BOLD = "\033[1m"
+                    RESET = "\033[0m"
+                    if enable_color:
+                    warning_msg = (
+                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
+                        f"{YELLOW}{BOLD}⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️{RESET}\n"
+                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
+                        f"{YELLOW}All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}{RESET}\n"
+                        f"{YELLOW}This means there is no learning signal for policy gradient updates.{RESET}\n"
+                        f"{YELLOW}Consider: increasing group_size, using different tasks, or adjusting the reward structure.{RESET}\n"
+                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}"
+                    )
+                else:
+                    warning_msg = (
+                        f"{'=' * 80}\n"
+                        f"⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️\n"
+                        f"{'=' * 80}\n"
+                        f"All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}\n"
+                        f"This means there is no learning signal for policy gradient updates.\n"
+                        f"Consider: increasing group_size, using different tasks, or adjusting the reward structure.\n"
+                        f"{'=' * 80}"
+                    )
+                logger.warning(warning_msg)
     
     return TrajectoryGroup(
         trajectories_G=trajectories,

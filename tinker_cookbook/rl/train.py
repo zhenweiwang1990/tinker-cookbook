@@ -4,10 +4,13 @@ Implements RL on general MDPs
 
 import asyncio
 import io
+import json
 import logging
 import os
 import time
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterator, List, Sequence
 
 import chz
@@ -331,6 +334,14 @@ async def run_evaluations_parallel(
     metrics = {}
     for result in results:
         metrics.update(result)
+    
+    # Clear model_path after evaluation
+    if model_path is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(None)
+        except ImportError:
+            pass
 
     return metrics
 
@@ -340,12 +351,22 @@ async def run_baseline_evaluations_parallel(
     evaluators: list[SamplingClientEvaluator],
     sampling_client: tinker.SamplingClient,
     cfg: Config,
+    model_path: str | None = None,
 ) -> dict[str, Any]:
     """Run all evaluators in parallel for baseline evaluation (before training starts)."""
 
     # Early return if no evaluators
     if len(evaluators) == 0:
         return {}
+    
+    # Set model_path for evaluation rollouts (for CUA custom rollout function)
+    if model_path is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(model_path)
+        except ImportError:
+            # Not using CUA RL, skip
+            pass
 
     # Create tasks for all evaluators with names for better traceability
     tasks = []
@@ -364,6 +385,14 @@ async def run_baseline_evaluations_parallel(
     metrics = {}
     for result in results:
         metrics.update(result)
+    
+    # Clear model_path after evaluation
+    if model_path is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(None)
+        except ImportError:
+            pass
 
     return metrics
 
@@ -402,11 +431,25 @@ async def do_sync_training_with_stream_minibatch(
 
         # Run evaluations
         if (cfg.eval_every > 0 and i_batch % cfg.eval_every == 0) or i_batch == end_batch - 1:
+            eval_start = time.time()
             with timed("run_evals", metrics):
                 eval_metrics = await run_evaluations_parallel(
                     evaluators, sampling_client, cfg, i_batch
                 )
                 metrics.update(eval_metrics)
+            eval_time = time.time() - eval_start
+            
+            # Save evaluation results to a separate JSON file for easy reference
+            eval_results_file = Path(cfg.log_path) / f"eval_results_batch_{i_batch:06d}.json"
+            eval_results = {
+                "batch": i_batch,
+                "evaluation_time_seconds": eval_time,
+                "timestamp": datetime.now().isoformat(),
+                "metrics": eval_metrics,
+            }
+            with open(eval_results_file, "w") as f:
+                json.dump(eval_results, f, indent=2)
+            logger.info(f"Evaluation results saved to {eval_results_file.name}")
 
         with _get_logtree_scope(
             cfg.log_path,
@@ -1091,6 +1134,9 @@ async def do_sync_training(
     logger.info(f"[Training Setup] ✓ Initial sampling client created in {init_time:.3f}s")
     logger.info(f"[Training Setup] Initial model path: {model_path}")
 
+    # Store previous evaluation metrics for comparison
+    previous_eval_metrics: dict[str, Any] = {}
+    
     for i_batch in range(start_batch, end_batch):
         batch_start_time = time.time()
         logger.info("")
@@ -1125,6 +1171,25 @@ async def do_sync_training(
                 logger.info(f"║ ✓ Evaluations completed in {eval_time:.2f}s" + " " * (78 - len(f"✓ Evaluations completed in {eval_time:.2f}s")) + "║")
                 for key, value in eval_metrics.items():
                     logger.info(f"║   {key}: {value}" + " " * (78 - len(f"  {key}: {value}")) + "║")
+                
+                # Save evaluation results to a separate JSON file for easy reference
+                eval_results_file = Path(cfg.log_path) / f"eval_results_batch_{i_batch:06d}.json"
+                eval_results = {
+                    "batch": i_batch,
+                    "evaluation_time_seconds": eval_time,
+                    "timestamp": datetime.now().isoformat(),
+                    "metrics": eval_metrics,
+                }
+                with open(eval_results_file, "w") as f:
+                    json.dump(eval_results, f, indent=2)
+                logger.info(f"║ Evaluation results saved to {eval_results_file.name}" + " " * (78 - len(f"Evaluation results saved to {eval_results_file.name}")) + "║")
+                
+                # Log evaluation metrics with comparison to previous step
+                # Only show comparison if we have previous metrics
+                ml_logger.log_metrics(eval_metrics, step=i_batch, previous_metrics=previous_eval_metrics if previous_eval_metrics else None)
+                
+                # Update previous_eval_metrics for next comparison
+                previous_eval_metrics = eval_metrics.copy()
 
         # Get batch and sample trajectories
         batch_text = f"Getting batch {i_batch} from dataset..."
@@ -1214,6 +1279,7 @@ async def do_sync_training(
         logger.info(f"║ Total batch time: {batch_total_time:.2f}s" + " " * (78 - len(f"Total batch time: {batch_total_time:.2f}s")) + "║")
         logger.info("╚" + "=" * 78 + "╝")
         
+        # Log all metrics (without comparison for non-eval metrics)
         ml_logger.log_metrics(metrics, step=i_batch)
 
 
@@ -1350,7 +1416,7 @@ async def main(
         # Run baseline evaluation
         baseline_start = time.time()
         baseline_metrics = await run_baseline_evaluations_parallel(
-            evaluators, baseline_sampling_client, cfg
+            evaluators, baseline_sampling_client, cfg, model_path=baseline_model_path
         )
         
         # Clear model_path after evaluation
@@ -1369,6 +1435,19 @@ async def main(
         # Log to ML logger with step -1 to indicate baseline
         baseline_metrics_with_prefix = {f"baseline/{k}": v for k, v in baseline_metrics.items()}
         ml_logger.log_metrics(baseline_metrics_with_prefix, step=-1)
+        
+        # Save baseline evaluation results to a separate JSON file for easy reference
+        baseline_results_file = Path(cfg.log_path) / "baseline_eval_results.json"
+        baseline_results = {
+            "step": -1,
+            "model_path": baseline_model_path,
+            "evaluation_time_seconds": baseline_time,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": baseline_metrics,
+        }
+        with open(baseline_results_file, "w") as f:
+            json.dump(baseline_results, f, indent=2)
+        logger.info(f"[Baseline] Evaluation results saved to {baseline_results_file}")
         
         logger.info("=" * 80)
         logger.info("")

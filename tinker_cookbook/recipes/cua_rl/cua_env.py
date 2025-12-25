@@ -408,10 +408,12 @@ class CUADatasetBuilder(RLDatasetBuilder):
                     "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
                 )
             
+            # For evaluation, use group_size=1 (each task runs independently)
+            # and batch_size=1 (each task is a separate batch for simpler evaluation)
             eval_dataset = CUADataset(
                 tasks=eval_tasks,
-                batch_size=self.batch_size,
-                group_size=self.group_size,
+                batch_size=1,  # Each task is a separate batch for evaluation
+                group_size=1,  # Each task runs independently, no group comparison needed
                 gbox_api_key=self.gbox_api_key,
                 tinker_api_key=self.tinker_api_key,
                 rollout_model_name=self.rollout_model_name,

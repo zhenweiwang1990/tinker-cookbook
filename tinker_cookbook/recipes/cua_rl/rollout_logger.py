@@ -212,6 +212,9 @@ class RolloutLogger:
             "tool_calls": [],
             "action_results": [],
             "turn_header_logged": False,  # Track if turn header has been logged
+            "total_tool_coord_time": 0.0,  # Total time for getting coordinates
+            "total_tool_exec_time": 0.0,  # Total time for tool execution
+            "total_tool_time": 0.0,  # Total time for all tools (non-perform_action)
         }
         # Don't log turn header here, will be logged together with screenshot/model inference
         self.log("")
@@ -253,26 +256,7 @@ class RolloutLogger:
             self.current_turn["model_response"] = response_text
             self.current_turn["parse_success"] = parse_success
             self.current_turn["model_inference_time"] = inference_time
-        
-        # Log message inside turn block (combine Turn header, screenshot and model inference)
-        if self.current_turn:
-            # Build the combined message
-            turn_info = f"Turn {self.current_turn['turn_num']}/{self.current_turn['max_turns']}"
-            
-            # Get screenshot info if available
-            screenshot_info = ""
-            if self.current_turn.get("screenshot_time") is not None:
-                screenshot_time = self.current_turn["screenshot_time"]
-                screenshot_info = f" | Screenshot: {screenshot_time:.3f}s"
-            
-            model_info = f" | Model inference: {len(response_text)} chars, parse={'✓' if parse_success else '✗'}, time={inference_time:.3f}s"
-            
-            msg = f"{turn_info}{screenshot_info}{model_info}"
-            padding = max(0, 116 - len(msg))
-            self.log(f"│ {msg}" + " " * padding + "│")
-            self.current_turn["turn_header_logged"] = True
-            # Store response text to be logged in a separate box after turn ends
-            # Don't log it here - will be logged in end_turn()
+            # Don't log turn header here - will be logged in end_turn() with all timing info
         else:
             self.log(
                 f"[Turn {turn_num}] Model inference: {len(response_text)} chars, "
@@ -305,68 +289,57 @@ class RolloutLogger:
         
         if self.current_turn:
             self.current_turn["action_results"].append(action_info)
-        
-        # Build combined log message (2 lines) with colors for action type and coordinates
-        colored_action_type = self._color(action_type, "CYAN")
-        if action_type == "swipe":
-            line1 = (
-                f"Action: {colored_action_type} | "
-                f"start={start_target or 'N/A'} | "
-                f"end={end_target or 'N/A'}"
-            )
-            if coordinates:
-                start_coords = coordinates.get("start", {})
-                end_coords = coordinates.get("end", {})
-                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                # Color coordinates
-                colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
-                colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
-                line2 = (
-                    f"  ↳ Coords: start={colored_start_coords} | "
-                    f"end={colored_end_coords} | "
-                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-                )
-            else:
-                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+            # Accumulate tool execution times
+            if coord_time is not None:
+                self.current_turn["total_tool_coord_time"] += coord_time
+            if exec_time is not None:
+                self.current_turn["total_tool_exec_time"] += exec_time
+            # Don't log here - will be logged in end_turn() after Model Response
         else:
-            line1 = f"Action: {colored_action_type}"
-            if target_desc:
-                line1 += f" | target={target_desc}"
-            if coordinates:
-                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                # Color coordinates
-                colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
-                line2 = (
-                    f"  ↳ Coords: {colored_coords} | "
-                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+            # Fallback for when not in a turn - log immediately
+            colored_action_type = self._color(action_type, "CYAN")
+            if action_type == "swipe":
+                line1 = (
+                    f"Action: {colored_action_type} | "
+                    f"start={start_target or 'N/A'} | "
+                    f"end={end_target or 'N/A'}"
                 )
+                if coordinates:
+                    start_coords = coordinates.get("start", {})
+                    end_coords = coordinates.get("end", {})
+                    coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                    exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                    total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                    colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
+                    colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                    line2 = (
+                        f"  ↳ Coords: start={colored_start_coords} | "
+                        f"end={colored_end_coords} | "
+                        f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                    )
+                else:
+                    coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                    exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                    total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                    line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
             else:
-                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-        
-        # Log inside table if we're in a turn
-        if self.current_turn:
-            # Calculate padding for line1 (accounting for ANSI color codes)
-            # Strip ANSI codes for length calculation
-            line1_stripped = re.sub(r'\033\[[0-9;]*m', '', line1)
-            padding1 = max(0, 116 - len(line1_stripped))
-            self.log(f"│ {line1}" + " " * padding1 + "│")
-            
-            # Calculate padding for line2 (accounting for ANSI color codes)
-            line2_stripped = re.sub(r'\033\[[0-9;]*m', '', line2)
-            padding2 = max(0, 116 - len(line2_stripped))
-            self.log(f"│ {line2}" + " " * padding2 + "│")
-        else:
-            # Fallback for when not in a turn
+                line1 = f"Action: {colored_action_type}"
+                if target_desc:
+                    line1 += f" | target={target_desc}"
+                if coordinates:
+                    coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                    exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                    total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                    colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                    line2 = (
+                        f"  ↳ Coords: {colored_coords} | "
+                        f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                    )
+                else:
+                    coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                    exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                    total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                    line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
             self.log(line1)
             self.log(line2)
     
@@ -382,12 +355,8 @@ class RolloutLogger:
         if self.current_turn:
             self.current_turn["tool_calls"] = tool_calls
             self.current_turn["tool_call_parse_time"] = parse_time
-        
-        # Log inside table if we're in a turn
-        if self.current_turn:
-            msg = f"[Turn {turn_num}] Tool calls: {num_tools} found via {parser_type}, parse_time={parse_time:.3f}s"
-            padding = max(0, 116 - len(msg))
-            self.log(f"│ {msg}" + " " * padding + "│")
+            self.current_turn["tool_call_parser_type"] = parser_type
+            # Don't log here - will be logged in end_turn() after Model Response
         else:
             # Fallback for when not in a turn
             self.log(
@@ -410,29 +379,48 @@ class RolloutLogger:
         Note: For perform_action, details are logged separately via log_action in cua_tools.py,
         so this method only logs the summary line for perform_action.
         """
-        # Summary line
-        status = "✓" if error is None else "✗"
-        exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-        summary = f"[Turn {turn_num}] Tool {tool_idx}/{total_tools}: {tool_name} {status} in {exec_time_str}"
+        # Accumulate tool execution time for non-perform_action tools
+        if self.current_turn and tool_name != "perform_action" and exec_time is not None:
+            self.current_turn["total_tool_time"] += exec_time
         
-        # For perform_action, details are already logged via log_action, so just log summary
-        if tool_name == "perform_action":
-            return
-        
-        # For other tools, show details on second line
-        args_summary = json.dumps(tool_args, separators=(',', ':'))[:100]
-        if len(args_summary) >= 100:
-            args_summary += "..."
-        details = f"  ↳ args={args_summary}"
-        if result:
-            result_summary = json.dumps(result, default=str, separators=(',', ':'))[:100]
-            if len(result_summary) >= 100:
-                result_summary += "..."
-            details += f" | result={result_summary}"
-        if error:
-            details += f" | error={error}"
-        
-        self.log(details)
+        # Store tool execution info for later logging
+        if self.current_turn:
+            if "tool_executions" not in self.current_turn:
+                self.current_turn["tool_executions"] = []
+            self.current_turn["tool_executions"].append({
+                "tool_idx": tool_idx,
+                "total_tools": total_tools,
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "result": result,
+                "exec_time": exec_time,
+                "error": error,
+            })
+            # Don't log here - will be logged in end_turn() after Model Response
+        else:
+            # Fallback for when not in a turn - log immediately
+            status = "✓" if error is None else "✗"
+            exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+            summary = f"[Turn {turn_num}] Tool {tool_idx}/{total_tools}: {tool_name} {status} in {exec_time_str}"
+            self.log(summary)
+            
+            # For perform_action, details are already logged via log_action
+            if tool_name == "perform_action":
+                return
+            
+            # For other tools, show details on second line
+            args_summary = json.dumps(tool_args, separators=(',', ':'))[:100]
+            if len(args_summary) >= 100:
+                args_summary += "..."
+            details = f"  ↳ args={args_summary}"
+            if result:
+                result_summary = json.dumps(result, default=str, separators=(',', ':'))[:100]
+                if len(result_summary) >= 100:
+                    result_summary += "..."
+                details += f" | result={result_summary}"
+            if error:
+                details += f" | error={error}"
+            self.log(details)
     
     def end_turn(self, turn_num: int):
         """End logging for current turn."""
@@ -441,15 +429,57 @@ class RolloutLogger:
             self.current_turn["duration"] = (
                 self.current_turn["end_time"] - self.current_turn["start_time"]
             )
+            
+            # Calculate total tool execution time (coord_time + exec_time for actions + exec_time for other tools)
+            total_tool_exec_time = (
+                self.current_turn.get("total_tool_coord_time", 0.0) +
+                self.current_turn.get("total_tool_exec_time", 0.0) +
+                self.current_turn.get("total_tool_time", 0.0)
+            )
+            
+            # Build and log the complete turn summary line with all timing info
+            turn_info = f"Turn {self.current_turn['turn_num']}/{self.current_turn['max_turns']}"
+            
+            # Turn total time
+            turn_total_time = self.current_turn["duration"]
+            turn_total_info = f" | Total: {turn_total_time:.3f}s"
+            
+            # Screenshot time
+            screenshot_info = ""
+            if self.current_turn.get("screenshot_time") is not None:
+                screenshot_time = self.current_turn["screenshot_time"]
+                screenshot_info = f" | Screenshot: {screenshot_time:.3f}s"
+            
+            # Model inference time
+            model_info = ""
+            if self.current_turn.get("model_inference_time") is not None:
+                inference_time = self.current_turn["model_inference_time"]
+                parse_success = self.current_turn.get("parse_success", False)
+                response_text = self.current_turn.get("model_response", "")
+                model_info = f" | Model inference: {len(response_text)} chars, parse={'✓' if parse_success else '✗'}, time={inference_time:.3f}s"
+            
+            # Tool execution time (with coord_time and exec_time breakdown)
+            tool_info = ""
+            if total_tool_exec_time > 0:
+                coord_time = self.current_turn.get("total_tool_coord_time", 0.0)
+                exec_time = self.current_turn.get("total_tool_exec_time", 0.0) + self.current_turn.get("total_tool_time", 0.0)
+                tool_info = f" | Tool execution: coord={coord_time:.3f}s, exec={exec_time:.3f}s, total={total_tool_exec_time:.3f}s"
+            
+            msg = f"{turn_info}{turn_total_info}{screenshot_info}{model_info}{tool_info}"
+            padding = max(0, 116 - len(msg))
+            self.log(f"│ {msg}" + " " * padding + "│")
+            
             # Close the turn block
             self.log("└" + "─" * 118 + "┘")
             
-            # Log response text in a new box after turn block closes
+            # Log Model Response in a new box
             if self.current_turn.get("model_response"):
                 response_text = self.current_turn["model_response"]
                 # Create a new box for response text
-                self.log("｜ Model response:" + " " * 102 + "｜")
+                self.log("")
                 self.log("┌" + "─" * 118 + "┐")
+                self.log("│ Model Response:" + " " * 102 + "│")
+                self.log("├" + "─" * 118 + "┤")
                 # Process response text line by line
                 max_line_length = 116  # Account for "│ " prefix and " │" suffix (2 + 2 = 4, 118 - 4 = 114, but we use 116 for consistency)
                 lines = response_text.split("\n")
@@ -467,6 +497,125 @@ class RolloutLogger:
                         # Log the remaining part (or the whole line if it fits)
                         padding = max(0, 116 - len(line))
                         self.log(f"│ {line}" + " " * padding + "│")
+                self.log("└" + "─" * 118 + "┘")
+            
+            # Log tool parsing and execution details
+            if self.current_turn.get("tool_calls") or self.current_turn.get("action_results") or self.current_turn.get("tool_executions"):
+                self.log("")
+                self.log("┌" + "─" * 118 + "┐")
+                
+                # Log tool call parsing info
+                if self.current_turn.get("tool_calls"):
+                    tool_calls = self.current_turn["tool_calls"]
+                    parse_time = self.current_turn.get("tool_call_parse_time", 0.0)
+                    parser_type = self.current_turn.get("tool_call_parser_type", "renderer")
+                    num_tools = len(tool_calls)
+                    msg = f"[Turn {turn_num}] Tool calls: {num_tools} found via {parser_type}, parse_time={parse_time:.3f}s"
+                    padding = max(0, 116 - len(msg))
+                    self.log(f"│ {msg}" + " " * padding + "│")
+                    self.log("├" + "─" * 118 + "┤")
+                
+                # Log action execution details
+                if self.current_turn.get("action_results"):
+                    for action_info in self.current_turn["action_results"]:
+                        action_type = action_info["action_type"]
+                        target_desc = action_info.get("target")
+                        start_target = action_info.get("start_target")
+                        end_target = action_info.get("end_target")
+                        coordinates = action_info.get("coordinates")
+                        coord_time = action_info.get("coord_time")
+                        exec_time = action_info.get("exec_time")
+                        total_time = action_info.get("total_time")
+                        
+                        colored_action_type = self._color(action_type, "CYAN")
+                        if action_type == "swipe":
+                            line1 = (
+                                f"Action: {colored_action_type} | "
+                                f"start={start_target or 'N/A'} | "
+                                f"end={end_target or 'N/A'}"
+                            )
+                            if coordinates:
+                                start_coords = coordinates.get("start", {})
+                                end_coords = coordinates.get("end", {})
+                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                                colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
+                                colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                                line2 = (
+                                    f"  ↳ Coords: start={colored_start_coords} | "
+                                    f"end={colored_end_coords} | "
+                                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                                )
+                            else:
+                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                        else:
+                            line1 = f"Action: {colored_action_type}"
+                            if target_desc:
+                                line1 += f" | target={target_desc}"
+                            if coordinates:
+                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                                colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                                line2 = (
+                                    f"  ↳ Coords: {colored_coords} | "
+                                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                                )
+                            else:
+                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+                                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                        
+                        # Calculate padding (accounting for ANSI color codes)
+                        line1_stripped = re.sub(r'\033\[[0-9;]*m', '', line1)
+                        padding1 = max(0, 116 - len(line1_stripped))
+                        self.log(f"│ {line1}" + " " * padding1 + "│")
+                        
+                        line2_stripped = re.sub(r'\033\[[0-9;]*m', '', line2)
+                        padding2 = max(0, 116 - len(line2_stripped))
+                        self.log(f"│ {line2}" + " " * padding2 + "│")
+                
+                # Log tool execution details (non-perform_action tools)
+                if self.current_turn.get("tool_executions"):
+                    for tool_exec in self.current_turn["tool_executions"]:
+                        tool_idx = tool_exec["tool_idx"]
+                        total_tools = tool_exec["total_tools"]
+                        tool_name = tool_exec["tool_name"]
+                        tool_args = tool_exec["tool_args"]
+                        result = tool_exec.get("result")
+                        exec_time = tool_exec.get("exec_time")
+                        error = tool_exec.get("error")
+                        
+                        # Skip perform_action as it's already logged above
+                        if tool_name == "perform_action":
+                            continue
+                        
+                        status = "✓" if error is None else "✗"
+                        exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+                        summary = f"[Turn {turn_num}] Tool {tool_idx}/{total_tools}: {tool_name} {status} in {exec_time_str}"
+                        padding = max(0, 116 - len(summary))
+                        self.log(f"│ {summary}" + " " * padding + "│")
+                        
+                        # Show details on second line
+                        args_summary = json.dumps(tool_args, separators=(',', ':'))[:100]
+                        if len(args_summary) >= 100:
+                            args_summary += "..."
+                        details = f"  ↳ args={args_summary}"
+                        if result:
+                            result_summary = json.dumps(result, default=str, separators=(',', ':'))[:100]
+                            if len(result_summary) >= 100:
+                                result_summary += "..."
+                            details += f" | result={result_summary}"
+                        if error:
+                            details += f" | error={error}"
+                        padding = max(0, 116 - len(details))
+                        self.log(f"│ {details}" + " " * padding + "│")
+                
                 self.log("└" + "─" * 118 + "┘")
             
             self.trajectory_data["turns"].append(self.current_turn)

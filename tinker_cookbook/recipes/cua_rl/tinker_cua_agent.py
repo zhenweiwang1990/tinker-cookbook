@@ -306,6 +306,15 @@ class TinkerCuaAgent:
             )
             self._checkpoint_loaded = True
     
+    def _get_message_role(self, message) -> str:
+        """Get role from a message, handling both dict and Message object formats."""
+        if isinstance(message, dict):
+            return message.get("role", "")
+        elif hasattr(message, "role"):
+            return message.role
+        else:
+            return ""
+    
     def _truncate_messages_to_recent_turns(
         self,
         messages: List[renderers.Message],
@@ -335,8 +344,8 @@ class TinkerCuaAgent:
         system_prompt = []
         start_idx = 0
         
-        # Check if first message is system prompt
-        if messages and messages[0].role == "system":
+        # Check if first message is system prompt (handle both dict and Message object)
+        if messages and self._get_message_role(messages[0]) == "system":
             system_prompt = [messages[0]]
             start_idx = 1
         
@@ -347,7 +356,7 @@ class TinkerCuaAgent:
         # Find all assistant message indices (these mark the end of each turn)
         assistant_indices = []
         for i in range(start_idx, len(messages)):
-            if messages[i].role == "assistant":
+            if self._get_message_role(messages[i]) == "assistant":
                 assistant_indices.append(i)
         
         # If we have fewer turns than max_turns, keep all messages
@@ -369,7 +378,7 @@ class TinkerCuaAgent:
         # user message with screenshot that actually starts the turn
         # In practice, we'll just go back to the first user message before this assistant
         while turn_start_idx > start_idx:
-            if messages[turn_start_idx - 1].role == "user":
+            if self._get_message_role(messages[turn_start_idx - 1]) == "user":
                 turn_start_idx = turn_start_idx - 1
                 # Continue looking backwards until we find a non-user message or reach the start
                 # This handles the case where there's a tool result (user) right before the assistant

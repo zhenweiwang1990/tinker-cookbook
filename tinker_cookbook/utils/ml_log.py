@@ -151,6 +151,7 @@ class PrettyPrintLogger(Logger):
     def __init__(self):
         self.console = Console()
         self._last_step = None
+        self._last_metrics: Dict[str, Any] = {}  # Store last step's metrics for comparison
 
     def log_hparams(self, config: Any) -> None:
         """Print configuration summary."""
@@ -160,27 +161,88 @@ class PrettyPrintLogger(Logger):
             for key, value in config_dict.items():
                 self.console.print(f"  {key}: {_maybe_truncate_repr(value)}")
 
-    def log_metrics(self, metrics: Dict[str, Any], step: int | None = None) -> None:
-        """Display metrics in console."""
+    def log_metrics(self, metrics: Dict[str, Any], step: int | None = None, previous_metrics: Dict[str, Any] | None = None) -> None:
+        """Display metrics in console with optional comparison to previous step.
+        
+        Args:
+            metrics: Current step's metrics
+            step: Current step number (None for baseline)
+            previous_metrics: Previous step's metrics for comparison (if None, will use stored _last_metrics)
+        """
         if not metrics:
             return
 
+        # Use provided previous_metrics or stored _last_metrics
+        prev_metrics = previous_metrics if previous_metrics is not None else self._last_metrics
+        
+        # Determine if we should show comparison (not for baseline step -1)
+        show_comparison = (step is not None and step != -1 and prev_metrics)
+        
+        # Create table with appropriate columns
         table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Metric", style="cyan", width=30)
-        table.add_column("Value", style="green")
+        table.add_column("Metric", style="cyan", width=50)  # Wider column for full metric names
+        table.add_column("Value", style="green", width=15)
+        
+        if show_comparison:
+            table.add_column("Previous", style="dim", width=15)
+            table.add_column("Change", style="yellow", width=15)
+            table.add_column("Change %", style="yellow", width=12)
 
         if step is not None:
-            table.title = f"Step {step}"
+            if step == -1:
+                table.title = "Baseline"
+            else:
+                table.title = f"Step {step}"
 
-        for key, value in sorted(metrics.items()):
+        for key in sorted(metrics.keys()):
+            value = metrics[key]
             if isinstance(value, float):
                 value_str = f"{value:.6f}"
             else:
                 value_str = str(value)
-            table.add_row(key, value_str)
+            
+            if show_comparison and key in prev_metrics:
+                prev_value = prev_metrics[key]
+                if isinstance(prev_value, float):
+                    prev_value_str = f"{prev_value:.6f}"
+                else:
+                    prev_value_str = str(prev_value)
+                
+                # Calculate change
+                if isinstance(value, (int, float)) and isinstance(prev_value, (int, float)):
+                    change = value - prev_value
+                    if prev_value != 0:
+                        change_pct = (change / abs(prev_value)) * 100
+                        change_pct_str = f"{change_pct:+.2f}%"
+                    else:
+                        change_pct_str = "N/A" if change == 0 else "∞"
+                    
+                    change_str = f"{change:+.6f}"
+                    # Color code: green for positive, red for negative
+                    if change > 0:
+                        change_str = f"[green]{change_str}[/green]"
+                        change_pct_str = f"[green]{change_pct_str}[/green]"
+                    elif change < 0:
+                        change_str = f"[red]{change_str}[/red]"
+                        change_pct_str = f"[red]{change_pct_str}[/red]"
+                else:
+                    change_str = "N/A"
+                    change_pct_str = "N/A"
+                
+                table.add_row(key, value_str, prev_value_str, change_str, change_pct_str)
+            else:
+                # No comparison available
+                if show_comparison:
+                    table.add_row(key, value_str, "-", "-", "-")
+                else:
+                    table.add_row(key, value_str)
 
         with _rich_console_use_logger(self.console):
             self.console.print(table)
+        
+        # Store current metrics as last metrics for next comparison (but not for baseline)
+        if step is not None and step != -1:
+            self._last_metrics = metrics.copy()
 
 
 def _maybe_truncate_repr(value: Any) -> str:
@@ -350,10 +412,14 @@ class MultiplexLogger(Logger):
         for logger in self.loggers:
             logger.log_hparams(config)
 
-    def log_metrics(self, metrics: Dict[str, Any], step: int | None = None) -> None:
+    def log_metrics(self, metrics: Dict[str, Any], step: int | None = None, previous_metrics: Dict[str, Any] | None = None) -> None:
         """Forward log_metrics to all child loggers."""
         for logger in self.loggers:
-            logger.log_metrics(metrics, step)
+            # Only PrettyPrintLogger supports previous_metrics parameter
+            if isinstance(logger, PrettyPrintLogger):
+                logger.log_metrics(metrics, step, previous_metrics)
+            else:
+                logger.log_metrics(metrics, step)
 
     def log_long_text(self, key: str, text: str) -> None:
         """Forward log_long_text to all child loggers."""
