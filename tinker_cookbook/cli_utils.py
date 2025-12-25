@@ -35,18 +35,18 @@ def check_log_dir(log_dir: str, behavior_if_exists: LogdirBehavior):
         elif behavior_if_exists == "ask":
             while True:
                 user_input = input(
-                    f"Log directory {log_dir} already exists. What do you want to do? [delete, resume, exit]: "
-                )
-                if user_input == "delete":
-                    shutil.rmtree(log_dir)
+                    f"Log directory {log_dir} already exists. What do you want to do? [delete, resume (default), exit]: "
+                ).strip()
+                if user_input == "" or user_input == "resume":
                     return
-                elif user_input == "resume":
+                elif user_input == "delete":
+                    shutil.rmtree(log_dir)
                     return
                 elif user_input == "exit":
                     exit(0)
                 else:
                     logger.warning(
-                        f"Invalid input: {user_input}. Please enter 'delete', 'resume', or 'exit'."
+                        f"Invalid input: {user_input}. Please enter 'delete', 'resume' (or press Enter), or 'exit'."
                     )
         elif behavior_if_exists == "resume":
             return

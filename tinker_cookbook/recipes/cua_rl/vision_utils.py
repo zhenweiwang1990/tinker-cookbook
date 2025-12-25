@@ -1,7 +1,7 @@
 """
-Utilities for converting OpenAI Responses API format to Tinker ModelInput format.
+Utilities for converting OpenAI Chat Completions API format to Tinker ModelInput format.
 
-GBoxAgent uses OpenAI Responses API format with input_text and input_image,
+GBoxAgent uses standard OpenAI Chat Completions API format with text and image_url,
 which needs to be converted to Tinker's Message format (with ImagePart) and then
 to ModelInput (with ImageChunk) for training.
 """
@@ -23,9 +23,20 @@ def convert_openai_responses_to_message(
     openai_message: Dict[str, Any]
 ) -> renderers.Message:
     """
-    Convert OpenAI Responses API format message to Tinker Message format.
+    Convert OpenAI Chat Completions API format message to Tinker Message format.
     
-    OpenAI Responses API format:
+    Supports both standard OpenAI format and legacy Responses API format:
+    
+    Standard OpenAI Chat Completions API format:
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "..."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+        ]
+    }
+    
+    Legacy Responses API format (for backward compatibility):
     {
         "role": "user",
         "content": [
@@ -44,7 +55,7 @@ def convert_openai_responses_to_message(
     }
     
     Args:
-        openai_message: Message in OpenAI Responses API format
+        openai_message: Message in OpenAI Chat Completions API format
         
     Returns:
         Message in Tinker format
@@ -54,21 +65,40 @@ def convert_openai_responses_to_message(
     
     # If content is a string, convert to list
     if isinstance(content, str):
-        content = [{"type": "input_text", "text": content}]
+        content = [{"type": "text", "text": content}]
     
     # Convert content parts
     converted_parts: List[renderers.TextPart | renderers.ImagePart] = []
     for part in content:
-        if part.get("type") == "input_text":
+        part_type = part.get("type")
+        
+        # Standard OpenAI format: "text"
+        if part_type == "text":
             converted_parts.append(renderers.TextPart(type="text", text=part.get("text", "")))
-        elif part.get("type") == "input_image":
+        # Standard OpenAI format: "image_url"
+        elif part_type == "image_url":
+            image_url_obj = part.get("image_url", {})
+            # Handle both dict format {"url": "..."} and string format
+            if isinstance(image_url_obj, dict):
+                image_url = image_url_obj.get("url", "")
+            else:
+                image_url = image_url_obj
+            if isinstance(image_url, str):
+                converted_parts.append(renderers.ImagePart(type="image", image=image_url))
+            else:
+                logger.warning(f"Unexpected image_url type: {type(image_url)}")
+        # Legacy Responses API format: "input_text" (for backward compatibility)
+        elif part_type == "input_text":
+            converted_parts.append(renderers.TextPart(type="text", text=part.get("text", "")))
+        # Legacy Responses API format: "input_image" (for backward compatibility)
+        elif part_type == "input_image":
             image_url = part.get("image_url", "")
             if isinstance(image_url, str):
                 converted_parts.append(renderers.ImagePart(type="image", image=image_url))
             else:
                 logger.warning(f"Unexpected image_url type: {type(image_url)}")
         else:
-            logger.warning(f"Unknown content part type: {part.get('type')}")
+            logger.warning(f"Unknown content part type: {part_type}")
     
     # Return message with appropriate content format
     if len(converted_parts) == 0:

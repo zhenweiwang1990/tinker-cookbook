@@ -60,8 +60,9 @@ verifiers = [
     "openai",
 ]
 cua = [
-    "gbox-agent @ git+https://github.com/zhenweiwang1990/gbox-agent.git",
+    "gbox-sdk",
 ]
+
 all = [
     "tinker_cookbook[vector-search]",
     "tinker_cookbook[wandb]",

@@ -12,10 +12,65 @@ from pathlib import Path
 import chz
 from tinker_cookbook import cli_utils, model_info
 from tinker_cookbook.recipes.cua_rl.cua_env import CUADatasetBuilder
-from tinker_cookbook.recipes.cua_rl.rollout import do_cua_group_rollout
-from tinker_cookbook.rl import train
+from tinker_cookbook.recipes.cua_rl.rollout import (
+    do_cua_group_rollout,
+    set_rollout_output_dir,
+    set_rollout_context,
+)
+# IMPORTANT: Override rollouts.do_group_rollout BEFORE importing train module
+# because train imports metric_util which binds do_group_rollout at import time
+from tinker_cookbook.rl import rollouts
+from tinker_cookbook.rl.types import EnvGroupBuilder
+from tinker_cookbook.completers import TokenCompleter
 
 logger = logging.getLogger(__name__)
+
+# Global variable to store current model_path for evaluation
+# This is set during baseline evaluation and regular evaluation
+_current_eval_model_path: str | None = None
+
+
+def set_eval_model_path(model_path: str | None):
+    """Set the current model_path for evaluation rollouts."""
+    global _current_eval_model_path
+    _current_eval_model_path = model_path
+
+
+async def _cua_group_rollout_for_eval(
+    env_group_builder: EnvGroupBuilder, 
+    policy: TokenCompleter
+):
+    """
+    Wrapper for do_cua_group_rollout that sets is_eval=True for evaluation.
+    This is used when RLTestSetEvaluator calls do_group_rollout.
+    """
+    global _current_eval_model_path
+    
+    # Use the global model_path if available, otherwise try to extract from policy
+    model_path = _current_eval_model_path
+    
+    return await do_cua_group_rollout(
+        env_group_builder=env_group_builder,
+        policy=policy,
+        model_path=model_path,  # Use global model_path if set, otherwise will try to extract from policy
+        step=None,
+        batch=None,
+        group=None,
+        output_dir=None,
+        is_eval=True,  # Always True for evaluation
+    )
+
+# Override rollouts.do_group_rollout BEFORE importing train module
+# This ensures that when train imports metric_util, it will use our custom function
+rollouts.do_group_rollout = _cua_group_rollout_for_eval
+
+# Now import train module (which will import metric_util)
+from tinker_cookbook.rl import train
+
+# Also update metric_util's reference to do_group_rollout
+# because it was bound at import time, we need to update it explicitly
+from tinker_cookbook.rl import metric_util
+metric_util.do_group_rollout = _cua_group_rollout_for_eval
 
 
 @chz.chz
@@ -26,7 +81,7 @@ class CLIConfig:
     model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Model for training (also used for rollout in on-policy RL)
     lora_rank: int = 32
     renderer_name: str | None = None
-    load_checkpoint_path: str | None = None
+    load_checkpoint_path: str | None = None  # Optional: path to a specific checkpoint to load. If None, will auto-resume from log_path if checkpoint exists. If set, will load weights from this checkpoint (fresh optimizer, starts from batch 0).
     
     # GBox configuration
     gbox_api_key: str = ""  # Will use GBOX_API_KEY env var if empty
@@ -39,9 +94,10 @@ class CLIConfig:
     # - List[dict]: Multiple TaskSourceConfig objects
     #   Example: [{"source_type": "demo_training"}, {"source_type": "demo_eval"}]
     tasks: dict | list[dict] = chz.field(default_factory=lambda: {"source_type": "demo_training"})  # TaskSourceConfig dict(s) for training
-    eval_tasks: dict | list[dict] | None = None  # Optional TaskSourceConfig dict(s) for evaluation
+    eval_tasks: dict | list[dict] | None = None  # Optional TaskSourceConfig dict(s) for evaluation. If None and use_default_eval_tasks=True, will use default (10 random tasks from demo_eval)
+    use_default_eval_tasks: bool = True  # If True and eval_tasks is None, will use default: 10 random tasks from demo_eval
     seed: int = 0
-    max_turns: int = 20
+    max_turns: int = 10
     
     # Training hyperparameters
     group_size: int = 4
@@ -53,13 +109,13 @@ class CLIConfig:
     num_substeps: int = 1
     
     # Logging / eval / checkpoints
-    log_dir: str | None = None
-    log_path: str | None = None
+    log_dir: str | None = None  # Directory to create run in (will create subdirectory with run name)
+    log_path: str | None = None  # Full path to log directory (overrides log_dir). If this path contains checkpoints, training will automatically resume from the latest checkpoint.
     wandb_project: str | None = None
     wandb_name: str | None = None
     compute_post_kl: bool = False
     eval_every: int = 10
-    save_every: int = 10
+    save_every: int = 10  # Save checkpoint every N batches (0 = disabled)
     num_groups_to_log: int = 1
     
     # Service configuration
@@ -82,7 +138,8 @@ async def cli_main(cli_config: CLIConfig) -> None:
     
     # Tinker API key (for OpenAI-compatible API)
     # Usually same as TINKER_API_KEY, but can be different
-    tinker_api_key = cli_config.tinker_api_key or os.getenv("TINKER_API_KEY")
+    # If not provided, default to gbox_api_key (they are often the same for Tinker)
+    tinker_api_key = cli_config.tinker_api_key or os.getenv("TINKER_API_KEY") or gbox_api_key
     
     # Get renderer name
     renderer_name = cli_config.renderer_name or model_info.get_recommended_renderer_name(
@@ -110,12 +167,24 @@ async def cli_main(cli_config: CLIConfig) -> None:
     wandb_name = cli_config.wandb_name or run_name
     
     # Check log directory
+    # Note: If log_path contains checkpoints, training will automatically resume from the latest checkpoint
+    # To enable resume, either:
+    # 1. Set log_path to a fixed path (not using run_name with timestamp), or
+    # 2. Use behavior_if_log_dir_exists="resume" to allow using existing log directory
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)
+    
+    # Set default eval_tasks if needed
+    eval_tasks = cli_config.eval_tasks
+    if eval_tasks is None and cli_config.use_default_eval_tasks:
+        eval_tasks = {"source_type": "demo_eval", "limit": 10, "seed": cli_config.seed}
+        logger.info(f"Using default eval_tasks: randomly sampling 10 tasks from demo_eval (seed={cli_config.seed})")
+    elif eval_tasks is None:
+        logger.info("No eval_tasks configured, evaluation will be disabled")
     
     # Build dataset builder
     dataset_builder = CUADatasetBuilder(
         tasks=cli_config.tasks,
-        eval_tasks=cli_config.eval_tasks,
+        eval_tasks=eval_tasks,
         batch_size=cli_config.groups_per_batch,
         group_size=cli_config.group_size,
         gbox_api_key=gbox_api_key,
@@ -128,8 +197,13 @@ async def cli_main(cli_config: CLIConfig) -> None:
         seed=cli_config.seed,
     )
     
-    # Override do_group_rollout with our custom function
+    # Override train.do_group_rollout with our custom function for training rollouts
+    # Note: rollouts.do_group_rollout was already overridden at module import time
+    # to ensure metric_util uses our custom function
     train.do_group_rollout = do_cua_group_rollout
+    
+    # Set output directory for trajectory saving
+    set_rollout_output_dir(log_path)
     
     # Build training config
     config = train.Config(

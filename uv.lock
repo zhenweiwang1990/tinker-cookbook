@@ -1120,17 +1120,6 @@ http = [
 ]
 
 [[package]]
-name = "gbox-agent"
-version = "0.1.0"
-source = { git = "https://github.com/zhenweiwang1990/gbox-agent.git#e006e418fbca181a2d6425918cd357e2b1a5d736" }
-dependencies = [
-    { name = "gbox-sdk" },
-    { name = "httpx" },
-    { name = "openai-agents" },
-    { name = "pillow" },
-]
-
-[[package]]
 name = "gbox-sdk"
 version = "0.1.0a41"
 source = { registry = "https://pypi.org/simple" }
@@ -4639,7 +4628,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "chromadb" },
-    { name = "gbox-agent" },
+    { name = "gbox-sdk" },
     { name = "google-genai" },
     { name = "huggingface-hub" },
     { name = "neptune-scale" },
@@ -4649,7 +4638,7 @@ all = [
     { name = "wandb" },
 ]
 cua = [
-    { name = "gbox-agent" },
+    { name = "gbox-sdk" },
 ]
 dev = [
     { name = "pyright" },
@@ -4684,7 +4673,7 @@ requires-dist = [
     { name = "chz" },
     { name = "cloudpickle" },
     { name = "datasets" },
-    { name = "gbox-agent", marker = "extra == 'cua'", git = "https://github.com/zhenweiwang1990/gbox-agent.git" },
+    { name = "gbox-sdk", marker = "extra == 'cua'" },
     { name = "google-genai", marker = "extra == 'vector-search'" },
     { name = "huggingface-hub", marker = "extra == 'vector-search'" },
     { name = "inspect-ai" },

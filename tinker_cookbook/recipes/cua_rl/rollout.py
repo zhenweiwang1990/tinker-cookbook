@@ -8,6 +8,8 @@ allow GBoxAgent to use the current training model for rollout (on-policy RL).
 
 import asyncio
 import logging
+import os
+import time
 from typing import Any, Dict, List, Optional, cast
 
 import tinker
@@ -19,14 +21,210 @@ from tinker_cookbook.recipes.cua_rl.cua_env import CUAEnv
 from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
 from tinker_cookbook.recipes.verifiers_rl.tinker_openai import TinkerAsyncOpenAIClient
 from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
+from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
 
 logger = logging.getLogger(__name__)
+
+# Global variables to store rollout context for trajectory saving
+_rollout_output_dir: Optional[str] = None
+_rollout_step: Optional[int] = None
+_rollout_batch: Optional[int] = None
+
+def set_rollout_output_dir(output_dir: Optional[str]):
+    """Set the output directory for saving trajectories."""
+    global _rollout_output_dir
+    _rollout_output_dir = output_dir
+
+def set_rollout_context(step: Optional[int] = None, batch: Optional[int] = None):
+    """Set the current training step and batch for trajectory saving."""
+    global _rollout_step, _rollout_batch
+    _rollout_step = step
+    _rollout_batch = batch
+
+
+async def _run_single_env_rollout(
+    env: CUAEnv,
+    env_idx: int,
+    total_envs: int,
+    model_path: str,
+    policy: TokenCompleter,
+    trajectory_step: int | None,
+    trajectory_batch: int | None,
+    group_num: int,
+    output_dir: str | None,
+    is_eval: bool,
+) -> tuple[Trajectory, float, dict, dict]:
+    """
+    Run rollout for a single environment.
+    
+    Returns:
+        tuple of (trajectory, final_reward, metrics, summary_dict)
+    """
+    # Create rollout logger for this environment
+    rollout_id = f"env_{env_idx}"
+    rollout_logger = RolloutLogger(
+        rollout_id=rollout_id,
+        step=trajectory_step,
+        batch=trajectory_batch,
+        group=group_num,
+        rollout_index=env_idx,
+    )
+    
+    # Log environment-specific information
+    rollout_logger.log("-" * 120)
+    rollout_logger.log(f"ENVIRONMENT {env_idx + 1}/{total_envs} ROLLOUT START")
+    rollout_logger.log("-" * 120)
+    
+    env_rollout_start = time.time()
+    
+    # Run TinkerCuaAgent rollout with current training model
+    # Use Tinker's native API (supports multimodal inputs)
+    # Get base_model_name from policy if available, otherwise use default
+    base_model_name = (
+        policy.model_name 
+        if hasattr(policy, 'model_name') and policy.model_name is not None
+        else "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Default model name
+    )
+    
+    rollout_result = await env.run_rollout_with_tinker_model(
+        tinker_model_path=model_path,
+        tinker_api_key=env.tinker_api_key,  # Use Tinker API key (not gbox_api_key!)
+        base_model_name=base_model_name,
+        renderer_name=env.renderer.name if hasattr(env.renderer, 'name') else None,
+        rollout_logger=rollout_logger,
+    )
+    
+    env_rollout_time = time.time() - env_rollout_start
+    rollout_logger.log(f"✓ Environment rollout completed in {env_rollout_time:.2f}s")
+    
+    # Extract results
+    task_success = rollout_result.get("task_success", False)
+    task_completed = rollout_result.get("task_completed", False)
+    num_turns = rollout_result.get("num_turns", 0)
+    
+    # Set summary in rollout logger
+    rollout_logger.set_summary({
+        "task_success": task_success,
+        "task_completed": task_completed,
+        "num_turns": num_turns,
+        "rollout_time": env_rollout_time,
+        "reward": 1.0 if task_success else 0.0,
+    })
+    
+    # Log rollout results to buffer
+    rollout_logger.log(f"Rollout Results:")
+    rollout_logger.log(f"  Task success: {task_success}")
+    rollout_logger.log(f"  Task completed: {task_completed}")
+    rollout_logger.log(f"  Number of turns: {num_turns}")
+    rollout_logger.log(f"  Total rollout time: {env_rollout_time:.2f}s")
+    rollout_logger.log(f"  Average time per turn: {env_rollout_time / max(num_turns, 1):.2f}s")
+    
+    # Validate task and compute reward
+    validation_start = time.time()
+    validation_method = "binary_reward"  # Simple binary reward based on task_success
+    rollout_logger.log(f"[Validation] Method: {validation_method} (1.0 if task_success=True, 0.0 otherwise)")
+    
+    # Reward is 1.0 if task succeeded, 0.0 otherwise
+    reward = 1.0 if task_success else 0.0
+    
+    validation_time = time.time() - validation_start
+    validation_result = "success" if task_success else "failed"
+    result_color = "GREEN" if task_success else "RED"
+    rollout_logger.log(
+        f"[Validation] Result: {validation_result} | reward={reward:.1f} | "
+        f"task_success={task_success} | task_completed={task_completed} | "
+        f"validation_time={validation_time:.3f}s",
+        color=result_color,
+    )
+    
+    # Get temperature from policy if available
+    temperature = None
+    if hasattr(policy, 'temperature'):
+        temperature = policy.temperature
+    elif hasattr(policy, 'sampling_params') and hasattr(policy.sampling_params, 'temperature'):
+        temperature = policy.sampling_params.temperature
+    
+    # Create summary dict
+    summary_dict = {
+        "rollout_id": rollout_id,
+        "task_description": env.task_description[:50] + "..." if len(env.task_description) > 50 else env.task_description,
+        "task_completed": task_completed,
+        "task_success": task_success,
+        "num_turns": num_turns,
+        "reward": reward,
+        "rollout_time": env_rollout_time,
+        "temperature": temperature,
+    }
+    
+    rollout_logger.log("-" * 120)
+    
+    # Save trajectory BEFORE flush (so logs are still in buffer)
+    if output_dir:
+        from pathlib import Path
+        output_path = Path(output_dir)
+        rollout_logger.save_trajectory(
+            base_dir=output_path,
+            step=trajectory_step,
+            batch=trajectory_batch,
+            group=env_idx,
+            is_eval=is_eval,
+        )
+    
+    # Flush all logs at once for this environment (after saving)
+    rollout_logger.flush()
+    
+    # Create a simplified trajectory
+    # For now, we create a single transition with the task description as observation
+    # and a dummy action. In the future, we could extract actual messages from GBoxAgent.
+    
+    # Build initial observation from task description
+    # Note: This is a simplified version. In practice, we'd want to include
+    # the actual conversation history with screenshots.
+    initial_ob = env.renderer.build_generation_prompt([
+        {"role": "user", "content": env.task_description}
+    ])
+    
+    # Create a dummy action (empty tokens) since we don't have the actual agent response
+    # In practice, we'd extract this from GBoxAgent's internal state
+    dummy_action = TokensWithLogprobs(tokens=[], maybe_logprobs=None)
+    
+    # Create transition
+    transition = Transition(
+        ob=initial_ob,
+        ac=dummy_action,
+        reward=reward,
+        episode_done=True,
+        metrics={
+            "task_success": float(task_success),
+            "task_completed": float(task_completed),
+            "num_turns": num_turns,
+        },
+    )
+    
+    # Create trajectory
+    trajectory = Trajectory(
+        transitions=[transition],
+        final_ob=tinker.ModelInput.empty(),
+    )
+    
+    metrics = {
+        "task_success": float(task_success),
+        "task_completed": float(task_completed),
+        "num_turns": num_turns,
+    }
+    
+    return trajectory, 0.0, metrics, summary_dict
 
 
 async def do_cua_group_rollout(
     env_group_builder: EnvGroupBuilder,
     policy: TokenCompleter,
     model_path: str | None = None,
+    step: int | None = None,
+    batch: int | None = None,
+    group: int | None = None,
+    output_dir: str | None = None,
+    is_eval: bool = False,
 ) -> TrajectoryGroup:
     """
     Custom rollout function for CUA environments.
@@ -34,10 +232,14 @@ async def do_cua_group_rollout(
     This function:
     1. Creates environments from the builder
     2. Gets the current training model's checkpoint path from the policy (or uses provided model_path)
-    3. Uses Tinker's OpenAI-compatible API to run GBoxAgent rollout with the training model
+    3. Uses Tinker's native API to run GBoxAgent rollout with the training model
     4. Converts the rollout results to TrajectoryGroup format
     
     The rollout model dynamically updates as training progresses (on-policy RL).
+    
+    **Parallel Execution**: All environments in a group are executed in parallel using
+    asyncio.gather, allowing multiple GBox instances to run simultaneously. This significantly
+    speeds up rollout when you have multiple environments (controlled by group_size parameter).
     
     Args:
         env_group_builder: Builder for creating environments
@@ -61,7 +263,6 @@ async def do_cua_group_rollout(
     if model_path is not None:
         if not (isinstance(model_path, str) and model_path.startswith('tinker://')):
             raise ValueError(f"Invalid model_path format: {model_path}. Expected tinker://... format.")
-        logger.info(f"Using provided model_path for rollout: {model_path}")
     else:
         # Try to extract model_path from sampling client
         # The model_path is a tinker://... path that can be used with OpenAI-compatible API
@@ -109,73 +310,129 @@ async def do_cua_group_rollout(
             )
     
     # Create environments
-    envs = await env_group_builder.make_envs()
+    rollout_start_time = time.time()
     
-    # Run rollout for each environment
+    env_creation_start = time.time()
+    envs = await env_group_builder.make_envs()
+    env_creation_time = time.time() - env_creation_start
+    
+    # Validate all environments are CUAEnv
+    for env_idx, env in enumerate(envs):
+        if not isinstance(env, CUAEnv):
+            raise ValueError(f"Expected CUAEnv, got {type(env)}")
+    
+    # Use provided step/batch or fall back to global variables
+    trajectory_step = step if step is not None else _rollout_step
+    trajectory_batch = batch if batch is not None else _rollout_batch
+    trajectory_output_dir = output_dir or _rollout_output_dir or os.getenv("CUA_ROLLOUT_OUTPUT_DIR")
+    
+    # Log global setup information
+    logger.info("=" * 120)
+    logger.info(f"ROLLOUT START, with environment count: {len(envs)}")
+    logger.info(f"Model path: {model_path}")
+    logger.info("=" * 120)
+    
+    # Run rollouts in parallel using asyncio.gather
+    # This allows multiple GBox environments to execute simultaneously
+    rollout_tasks = []
+    for env_idx, env in enumerate(envs):
+        # Use provided group number if available, otherwise fall back to env_idx
+        # group should represent the group index in the batch, not the env index within the group
+        group_num = group if group is not None else env_idx
+        task = _run_single_env_rollout(
+            env=env,
+            env_idx=env_idx,
+            total_envs=len(envs),
+            model_path=model_path,
+            policy=policy,
+            trajectory_step=trajectory_step,
+            trajectory_batch=trajectory_batch,
+            group_num=group_num,
+            output_dir=trajectory_output_dir,
+            is_eval=is_eval,
+        )
+        rollout_tasks.append(task)
+    
+    # Execute all rollouts in parallel
+    results = await asyncio.gather(*rollout_tasks)
+    
+    # Unpack results (results are already sorted by env_idx)
     trajectories = []
     final_rewards = []
     metrics_list = []
+    rollout_summaries = []
     
-    for env in envs:
-        if not isinstance(env, CUAEnv):
-            raise ValueError(f"Expected CUAEnv, got {type(env)}")
-        
-        # Run GBoxAgent rollout with current training model
-        # Use Tinker's OpenAI-compatible API endpoint and model_path
-        rollout_result = await env.run_rollout_with_tinker_model(
-            tinker_model_path=model_path,
-            tinker_api_key=env.gbox_api_key,  # Use Tinker API key
-        )
-        
-        # Extract results
-        task_success = rollout_result.get("task_success", False)
-        task_completed = rollout_result.get("task_completed", False)
-        num_turns = rollout_result.get("num_turns", 0)
-        
-        # Reward is 1.0 if task succeeded, 0.0 otherwise
-        reward = 1.0 if task_success else 0.0
-        
-        # Create a simplified trajectory
-        # For now, we create a single transition with the task description as observation
-        # and a dummy action. In the future, we could extract actual messages from GBoxAgent.
-        
-        # Build initial observation from task description
-        # Note: This is a simplified version. In practice, we'd want to include
-        # the actual conversation history with screenshots.
-        initial_ob = env.renderer.build_generation_prompt([
-            {"role": "user", "content": env.task_description}
-        ])
-        
-        # Create a dummy action (empty tokens) since we don't have the actual agent response
-        # In practice, we'd extract this from GBoxAgent's internal state
-        dummy_action = TokensWithLogprobs(tokens=[], logprobs=[])
-        
-        # Create transition
-        transition = Transition(
-            ob=initial_ob,
-            ac=dummy_action,
-            reward=reward,
-            episode_done=True,
-            metrics={
-                "task_success": float(task_success),
-                "task_completed": float(task_completed),
-                "num_turns": num_turns,
-            },
-        )
-        
-        # Create trajectory
-        trajectory = Trajectory(
-            transitions=[transition],
-            final_ob=tinker.ModelInput.empty(),
-        )
-        
+    for trajectory, final_reward, metrics, summary_dict in results:
         trajectories.append(trajectory)
-        final_rewards.append(0.0)  # No additional group reward
-        metrics_list.append({
-            "task_success": float(task_success),
-            "task_completed": float(task_completed),
-            "num_turns": num_turns,
-        })
+        final_rewards.append(final_reward)
+        metrics_list.append(metrics)
+        rollout_summaries.append(summary_dict)
+    
+    total_rollout_time = time.time() - rollout_start_time
+    
+    # Print group-level summary table
+    logger.info("")
+    logger.info("=" * 57)
+    logger.info("ROLLOUT GROUP SUMMARY")
+    logger.info("=" * 57)
+    
+    # Print table header (without Task Description since all tasks in a group are the same)
+    # Column widths: #(4) + Completed(10) + Success(8) + Turns(6) + Reward(7) + Time(10) + Temp(6) + spaces(6) = 57
+    header = f"{'#':<4} {'Completed':<10} {'Success':<8} {'Turns':<6} {'Reward':<7} {'Time (s)':<10} {'Temp':<6}"
+    logger.info(header)
+    logger.info("-" * 57)
+    
+    # Print each rollout's summary
+    enable_color = os.environ.get("NO_COLOR", "").strip() == ""
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+    
+    for i, summary in enumerate(rollout_summaries):
+        completed_str = "✓" if summary["task_completed"] else "✗"
+        success_str = "✓" if summary["task_success"] else "✗"
+        # Apply colors to success status
+        if enable_color:
+            if summary["task_success"]:
+                success_str_colored = f"{GREEN}{success_str}{RESET}"
+            else:
+                success_str_colored = f"{RED}{success_str}{RESET}"
+        else:
+            success_str_colored = success_str
+        
+        temp_str = f"{summary['temperature']:.2f}" if summary['temperature'] is not None else "N/A"
+        
+        # Build row with proper alignment
+        # For colored strings, we need to pad after the RESET code to ensure proper alignment
+        # The display width of success_str_colored is 1 (just ✓ or ✗), but the string length includes ANSI codes
+        if enable_color:
+            # Pad the colored string to 8 characters display width (ANSI codes don't count)
+            success_padded = success_str_colored + " " * (8 - 1)  # 8 display width - 1 char
+        else:
+            success_padded = f"{success_str_colored:<8}"
+        
+        row = (
+            f"{i+1:<4} "
+            f"{completed_str:<10} "
+            f"{success_padded} "
+            f"{summary['num_turns']:<6} "
+            f"{summary['reward']:<7.1f} "
+            f"{summary['rollout_time']:<10.2f} "
+            f"{temp_str:<6}"
+        )
+        logger.info(row)
+    
+    # Print summary statistics
+    logger.info("-" * 57)
+    logger.info(f"Total environments: {len(envs)}")
+    logger.info(f"Total rollout time: {total_rollout_time:.2f}s")
+    logger.info(f"Average time per environment: {total_rollout_time / len(envs):.2f}s")
+    success_count = sum(1 for m in metrics_list if m.get("task_success", False))
+    logger.info(f"Successful tasks: {success_count}/{len(envs)} ({100 * success_count / len(envs):.1f}%)")
+    total_turns = sum(m.get("num_turns", 0) for m in metrics_list)
+    logger.info(f"Total turns across all environments: {total_turns}")
+    logger.info(f"Average turns per environment: {total_turns / len(envs):.1f}")
+    logger.info("=" * 57)
     
     return TrajectoryGroup(
         trajectories_G=trajectories,

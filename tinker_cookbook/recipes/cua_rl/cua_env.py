@@ -6,18 +6,19 @@ This environment wraps GBoxAgent to provide an RL-compatible interface.
 
 import asyncio
 import logging
+import time
 from functools import partial
 from typing import Any, Dict, List, Optional, Sequence
 
 import chz
 import tinker
-from gbox_agent.agent import GBoxAgent
 
 from tinker_cookbook import renderers
 from tinker_cookbook.completers import StopCondition
 from tinker_cookbook.rl.problem_env import ProblemEnv, ProblemGroupBuilder
 from tinker_cookbook.rl.types import Action, EnvGroupBuilder, RLDataset, RLDatasetBuilder, StepResult
 from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
+from tinker_cookbook.recipes.cua_rl.tinker_cua_agent import TinkerCuaAgent
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,8 @@ class CUAEnv(ProblemEnv):
         self.max_turns = max_turns
         self.box_type = box_type
         
-        # GBoxAgent instance (created lazily during rollout)
-        self._agent: Optional[GBoxAgent] = None
+        # TinkerCuaAgent instance (created lazily during rollout)
+        self._agent: Optional[TinkerCuaAgent] = None
         
         # Track rollout state
         self._rollout_messages: List[Dict[str, Any]] = []
@@ -99,55 +100,97 @@ class CUAEnv(ProblemEnv):
         self,
         tinker_model_path: str,
         tinker_api_key: str,
+        base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        renderer_name: Optional[str] = None,
+        rollout_logger = None,
     ) -> Dict[str, Any]:
         """
-        Run a rollout using GBoxAgent with Tinker's OpenAI-compatible API.
+        Run a rollout using TinkerCuaAgent with Tinker's native API.
         
         This allows using the current training model for rollout (on-policy RL).
         The model_path is a tinker://... checkpoint path that dynamically updates
         as training progresses.
         
-        According to Tinker's OpenAI-compatible API docs:
-        https://tinker-docs.thinkingmachines.ai/compatible-apis/openai
-        - Base URL: https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1
-        - Model name: tinker://... checkpoint path (e.g., tinker://.../sampler_weights/000080)
-        - API key: Tinker API key
+        Uses Tinker's native API which supports multimodal inputs (images),
+        unlike the OpenAI-compatible API which only supports text.
         
         Args:
             tinker_model_path: Tinker checkpoint path (e.g., tinker://.../sampler_weights/000080)
             tinker_api_key: Tinker API key (same as TINKER_API_KEY)
+            base_model_name: Base model name for tokenizer/renderer
+            renderer_name: Renderer name (auto-detected if None)
             
         Returns:
             Dictionary with rollout results
         """
-        # Tinker's OpenAI-compatible API endpoint
-        # See: https://tinker-docs.thinkingmachines.ai/compatible-apis/openai
-        TINKER_OAI_BASE_URL = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
-        
-        # Create GBoxAgent instance with Tinker's OpenAI-compatible API
+        # Create TinkerCuaAgent instance with Tinker's native API
         # This allows using the current training model checkpoint for rollout
         # The model_path dynamically updates as training progresses
-        self._agent = GBoxAgent(
+        # Native API supports multimodal inputs (images) unlike OpenAI-compatible API
+        agent_init_start = time.time()
+        
+        # Log environment initialization (2 lines: config + agent creation)
+        if rollout_logger:
+            # Truncate task description if too long
+            task_desc_short = self.task_description[:80] + "..." if len(self.task_description) > 80 else self.task_description
+            rollout_logger.log(f"[CUAEnv] Task: {self.task_description}")
+            rollout_logger.log(
+                f"[CUAEnv] Config: model={base_model_name} | "
+                f"renderer={renderer_name or 'auto'} | box={self.box_type} | max_turns={self.max_turns}"
+            )
+        else:
+            logger.info(f"[CUAEnv] Initializing environment for rollout")
+            logger.info(f"[CUAEnv] Task: {self.task_description}")
+            logger.info(f"[CUAEnv] Model path: {tinker_model_path}")
+            logger.info(f"[CUAEnv] Base model: {base_model_name}")
+            logger.info(f"[CUAEnv] Renderer: {renderer_name or 'auto'}")
+            logger.info(f"[CUAEnv] Box type: {self.box_type}")
+            logger.info(f"[CUAEnv] Max turns: {self.max_turns}")
+        
+        self._agent = TinkerCuaAgent(
             gbox_api_key=self.gbox_api_key,
-            openai_api_key=tinker_api_key,  # Use Tinker API key
-            openai_api_base=TINKER_OAI_BASE_URL,  # Use Tinker's OpenAI-compatible endpoint
-            model_name=tinker_model_path,  # Use checkpoint path as model name (dynamically updates)
+            tinker_api_key=tinker_api_key,
+            tinker_model_path=tinker_model_path,  # Use checkpoint path (dynamically updates)
+            base_model_name=base_model_name,
+            renderer_name=renderer_name,
             max_turns=self.max_turns,
             box_type=self.box_type,
+            rollout_logger=rollout_logger,
         )
+        agent_init_time = time.time() - agent_init_start
+        if rollout_logger:
+            rollout_logger.log(f"[CUAEnv] ✓ TinkerCuaAgent created in {agent_init_time:.3f}s")
+        else:
+            logger.info(f"[CUAEnv] ✓ TinkerCuaAgent created in {agent_init_time:.3f}s")
         
         try:
             # Run task with current training model
+            task_start = time.time()
             result = await self._agent.run_task(
                 task_description=self.task_description,
                 verbose=False,
             )
+            task_time = time.time() - task_start
+            if rollout_logger:
+                rollout_logger.log(f"[CUAEnv] ✓ Task execution completed in {task_time:.3f}s")
+            else:
+                logger.info(f"[CUAEnv] ✓ Task execution completed in {task_time:.3f}s")
             
             self._rollout_result = result
             return result
         finally:
             # Cleanup
+            cleanup_start = time.time()
+            if rollout_logger:
+                rollout_logger.log(f"[CUAEnv] Cleaning up agent...")
+            else:
+                logger.info(f"[CUAEnv] Cleaning up agent...")
             await self._agent.close()
+            cleanup_time = time.time() - cleanup_start
+            if rollout_logger:
+                rollout_logger.log(f"[CUAEnv] ✓ Agent cleanup completed in {cleanup_time:.3f}s")
+            else:
+                logger.info(f"[CUAEnv] ✓ Agent cleanup completed in {cleanup_time:.3f}s")
             self._agent = None
     
     async def initial_observation(self) -> tuple[tinker.ModelInput, StopCondition]:

@@ -659,7 +659,8 @@ class Qwen3Renderer(Renderer):
         if not isinstance(tool_call, dict):
             return None
         name = tool_call.get("name")
-        args = tool_call.get("args")
+        # Support both "args" and "arguments" for compatibility
+        args = tool_call.get("args") or tool_call.get("arguments")
         tool_id = tool_call.get("id")
         if not isinstance(name, str) or not isinstance(args, dict):
             return None

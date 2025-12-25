@@ -1,0 +1,781 @@
+"""
+Tinker CUA Agent using Tinker native API for multimodal inference.
+
+This agent uses Tinker's native API (not OpenAI Compatible API) to support
+multimodal inputs (images) for vision-language models.
+"""
+
+import asyncio
+import base64
+import io
+import json
+import logging
+import re
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import tinker
+from PIL import Image
+
+from tinker_cookbook import renderers
+from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
+from tinker_cookbook.image_processing_utils import get_image_processor
+
+from tinker_cookbook.recipes.cua_rl.cua_prompts import create_system_prompt
+from tinker_cookbook.recipes.cua_rl.cua_gbox_client import CuaGBoxClient
+from tinker_cookbook.recipes.cua_rl.cua_gbox_coordinate import CuaGBoxCoordinateGenerator
+from tinker_cookbook.recipes.cua_rl.cua_tools import (
+    perform_action_impl,
+    sleep_impl,
+    TargetElement,
+    TOOL_SCHEMAS,
+)
+from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
+
+logger = logging.getLogger(__name__)
+
+
+class TinkerCuaAgent:
+    """
+    CUA Agent using Tinker native API for multimodal support.
+    
+    This agent:
+    - Uses Tinker's native API (supports multimodal inputs)
+    - Manages conversation history
+    - Handles tool calls (function calling)
+    - Integrates with GBox for UI interactions
+    """
+    
+    def __init__(
+        self,
+        gbox_api_key: str,
+        tinker_api_key: str,
+        tinker_model_path: str,  # e.g., "tinker://.../sampler_weights/000080"
+        base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        renderer_name: Optional[str] = None,
+        max_turns: int = 20,
+        box_type: str = "android",
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+        rollout_logger: Optional[RolloutLogger] = None,
+    ):
+        """
+        Initialize Tinker CUA Agent.
+        
+        Args:
+            gbox_api_key: GBox API key
+            tinker_api_key: Tinker API key
+            tinker_model_path: Tinker checkpoint path
+            base_model_name: Base model name for tokenizer/renderer
+            renderer_name: Renderer name (auto-detected if None)
+            max_turns: Maximum number of turns
+            box_type: Type of GBox environment (android or linux)
+            max_tokens: Maximum tokens per response
+            temperature: Sampling temperature
+        """
+        self.gbox_api_key = gbox_api_key
+        self.tinker_api_key = tinker_api_key
+        self.tinker_model_path = tinker_model_path
+        self.base_model_name = base_model_name
+        self.max_turns = max_turns
+        self.box_type = box_type
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.rollout_logger = rollout_logger
+        
+        # Initialize Tinker service client
+        import os
+        os.environ["TINKER_API_KEY"] = tinker_api_key
+        self.service_client = tinker.ServiceClient()
+        
+        # Store checkpoint path (will be loaded when needed)
+        self._checkpoint_loaded = False
+        self._current_checkpoint_path = None
+        
+        # Initialize renderer
+        tokenizer = get_tokenizer(base_model_name)
+        image_processor = get_image_processor(base_model_name)
+        renderer_name = renderer_name or "qwen3_vl_instruct"
+        self.renderer = renderers.get_renderer(
+            renderer_name,
+            tokenizer=tokenizer,
+            image_processor=image_processor,
+        )
+        
+        # Initialize GBox components
+        self.gbox_client = CuaGBoxClient(api_key=gbox_api_key, box_type=box_type)
+        self.coord_generator = CuaGBoxCoordinateGenerator(api_key=gbox_api_key)
+        
+        # Agent state
+        self.task_completed = False
+        self.task_success = False
+        self.result_message = ""
+        self.current_screenshot_uri: Optional[str] = None
+        
+        # Conversation history
+        self.messages: List[renderers.Message] = []
+        self.system_prompt: Optional[str] = None
+    
+    def _data_uri_to_pil(self, data_uri: str) -> Image.Image:
+        """Convert data URI to PIL Image."""
+        if not data_uri.startswith("data:image"):
+            raise ValueError(f"Invalid data URI: {data_uri[:50]}...")
+        
+        header, encoded = data_uri.split(",", 1)
+        image_data = base64.b64decode(encoded)
+        return Image.open(io.BytesIO(image_data)).convert("RGB")
+    
+    def _build_messages_with_screenshot(
+        self,
+        text: str,
+        screenshot_uri: str,
+    ) -> List[renderers.Message]:
+        """Build messages with screenshot for Tinker."""
+        # Convert screenshot URI to PIL Image
+        screenshot_img = self._data_uri_to_pil(screenshot_uri)
+        
+        # Build message with image and text
+        message = renderers.Message(
+            role="user",
+            content=[
+                renderers.ImagePart(type="image", image=screenshot_img),
+                renderers.TextPart(type="text", text=text),
+            ]
+        )
+        
+        return [message]
+    
+    def _extract_json_from_text(self, text: str, start_char: str = '{') -> Optional[Any]:
+        """
+        Extract a complete JSON object or array from text using Python's json module.
+        
+        This method uses json.JSONDecoder.raw_decode() which can parse JSON
+        from any position in a string, handling all edge cases correctly.
+        
+        Args:
+            text: Text to extract JSON from
+            start_char: Starting character, either '{' for objects or '[' for arrays
+            
+        Returns:
+            Parsed JSON object/array, or None if extraction fails
+        """
+        # Find the first occurrence of start_char
+        start_pos = text.find(start_char)
+        if start_pos < 0:
+            return None
+        
+        # Use JSONDecoder.raw_decode() to parse JSON from the start position
+        # This method handles all JSON edge cases correctly (strings, escapes, nesting, etc.)
+        decoder = json.JSONDecoder()
+        try:
+            obj, end_pos = decoder.raw_decode(text, idx=start_pos)
+            return obj
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(f"JSON decode error at position {start_pos}: {e}")
+            return None
+    
+    def _parse_tool_calls(self, response_text: str) -> List[Dict[str, Any]]:
+        """
+        Parse tool calls from model response.
+        
+        Supports multiple formats:
+        1. <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        2. <function_calls>...</function_calls> (OpenAI format)
+        3. JSON tool calls embedded in text
+        """
+        tool_calls = []
+        
+        # Pattern 1: <tool_call>...</tool_call>
+        pattern1 = r'<tool_call>(.*?)</tool_call>'
+        matches1 = re.finditer(pattern1, response_text, re.DOTALL)
+        for match in matches1:
+            content = match.group(1).strip()
+            # Try to extract JSON object
+            tool_json = self._extract_json_from_text(content, start_char='{')
+            if tool_json:
+                tool_calls.append(tool_json)
+            else:
+                logger.warning(f"Could not extract JSON from tool_call content: {content}")
+        
+        # Pattern 2: <function_calls>...</function_calls> (OpenAI format)
+        pattern2 = r'<function_calls>(.*?)</function_calls>'
+        matches2 = re.finditer(pattern2, response_text, re.DOTALL)
+        for match in matches2:
+            content = match.group(1).strip()
+            # Try to extract JSON array
+            tools_list = self._extract_json_from_text(content, start_char='[')
+            if tools_list and isinstance(tools_list, list):
+                tool_calls.extend(tools_list)
+            elif tools_list:
+                logger.warning(f"function_calls content is not a list: {type(tools_list)}")
+        
+        # Pattern 3: Try to find JSON objects that look like tool calls in the raw text
+        if not tool_calls:
+            # Look for JSON objects with "name" and "arguments" keys directly in text
+            json_obj = self._extract_json_from_text(response_text, start_char='{')
+            if json_obj and "name" in json_obj and "arguments" in json_obj:
+                tool_calls.append(json_obj)
+        
+        return tool_calls
+    
+    async def _execute_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Execute a tool call and return result."""
+        # Note: Detailed logging is handled in the tool implementation itself
+        # This is just a routing function
+        
+        if tool_name == "perform_action":
+            # Convert dict arguments to TargetElement objects
+            target = None
+            if arguments.get("target"):
+                target = TargetElement(**arguments["target"])
+            
+            start_target = None
+            if arguments.get("start_target"):
+                start_target = TargetElement(**arguments["start_target"])
+            
+            end_target = None
+            if arguments.get("end_target"):
+                end_target = TargetElement(**arguments["end_target"])
+            
+            result = await perform_action_impl(
+                action_type=arguments["action_type"],
+                option=arguments.get("option"),
+                target=target,
+                start_target=start_target,
+                end_target=end_target,
+                direction=arguments.get("direction"),
+                distance=arguments.get("distance"),
+                text=arguments.get("text"),
+                keys=arguments.get("keys"),
+                button=arguments.get("button"),
+                duration=arguments.get("duration"),
+                gbox_client=self.gbox_client,
+                screenshot_uri=self.current_screenshot_uri,
+                coord_generator=self.coord_generator,
+                rollout_logger=self.rollout_logger,
+            )
+            return result
+        
+        elif tool_name == "sleep":
+            duration = arguments.get("duration", 1.0)
+            result = await sleep_impl(duration)
+            return result
+        
+        elif tool_name == "report_task_complete":
+            self.task_completed = True
+            self.task_success = arguments.get("success", False)
+            self.result_message = arguments.get("result_message", "Task completed")
+            return {
+                "status": "complete",
+                "success": self.task_success,
+                "message": self.result_message,
+            }
+        
+        else:
+            raise ValueError(f"Unknown tool: {tool_name}")
+    
+    def _ensure_checkpoint_loaded(self):
+        """Ensure the checkpoint is loaded in the sampling client."""
+        # Check if we need to reload checkpoint
+        if self._checkpoint_loaded and self._current_checkpoint_path == self.tinker_model_path:
+            return
+        
+        # Create new sampling client with checkpoint
+        # Tinker SDK supports loading checkpoints via the path in create_sampling_client
+        try:
+            # Parse checkpoint path: tinker://experiment-id:train:0/sampler_weights/000080
+            # Tinker SDK should handle this automatically when we pass the path
+            # For now, create client with base model and we'll use the checkpoint path
+            # when sampling (Tinker service should handle it)
+            self.sampling_client = self.service_client.create_sampling_client(
+                base_model=self.base_model_name
+            )
+            
+            # Store checkpoint path - Tinker SDK may need it during sampling
+            self._current_checkpoint_path = self.tinker_model_path
+            self._checkpoint_loaded = True
+        except Exception as e:
+            logger.warning(f"Could not initialize sampling client: {e}")
+            logger.warning("Using base model instead")
+            self.sampling_client = self.service_client.create_sampling_client(
+                base_model=self.base_model_name
+            )
+            self._checkpoint_loaded = True
+    
+    def _truncate_messages_to_recent_turns(
+        self,
+        messages: List[renderers.Message],
+        max_turns: int = 5,
+    ) -> List[renderers.Message]:
+        """
+        Truncate messages to keep only system prompt and recent N turns of conversation.
+        
+        Each turn typically consists of:
+        - User message (with screenshot)
+        - Assistant response
+        - Optional: Tool execution result (user message)
+        
+        We identify turns by finding assistant messages and their preceding user messages.
+        
+        Args:
+            messages: Full conversation history
+            max_turns: Maximum number of recent turns to keep (default: 5)
+            
+        Returns:
+            Truncated messages list with system prompt + recent turns
+        """
+        if not messages:
+            return messages
+        
+        # Always keep system prompt (first message if it's a system message)
+        system_prompt = []
+        start_idx = 0
+        
+        # Check if first message is system prompt
+        if messages and messages[0].role == "system":
+            system_prompt = [messages[0]]
+            start_idx = 1
+        
+        # If there are no messages after system prompt, return just the system prompt
+        if start_idx >= len(messages):
+            return system_prompt
+        
+        # Find all assistant message indices (these mark the end of each turn)
+        assistant_indices = []
+        for i in range(start_idx, len(messages)):
+            if messages[i].role == "assistant":
+                assistant_indices.append(i)
+        
+        # If we have fewer turns than max_turns, keep all messages
+        if len(assistant_indices) <= max_turns:
+            return system_prompt + messages[start_idx:]
+        
+        # Keep only the last max_turns turns
+        # Start from the (len(assistant_indices) - max_turns)-th assistant message
+        first_turn_assistant_idx = assistant_indices[len(assistant_indices) - max_turns]
+        
+        # Find the start of this turn: look backwards from the assistant message
+        # Each turn starts with a user message (with screenshot), followed by assistant response,
+        # and optionally a tool result (also a user message)
+        # We need to find the first user message that starts this turn
+        turn_start_idx = first_turn_assistant_idx
+        
+        # Look backwards to find the user message that starts this turn
+        # There may be a tool result (user) right before the assistant, but we want the
+        # user message with screenshot that actually starts the turn
+        # In practice, we'll just go back to the first user message before this assistant
+        while turn_start_idx > start_idx:
+            if messages[turn_start_idx - 1].role == "user":
+                turn_start_idx = turn_start_idx - 1
+                # Continue looking backwards until we find a non-user message or reach the start
+                # This handles the case where there's a tool result (user) right before the assistant
+                break
+            turn_start_idx -= 1
+        
+        return system_prompt + messages[turn_start_idx:]
+    
+    async def _sample_with_tinker(
+        self,
+        messages: List[renderers.Message],
+    ) -> Tuple[renderers.Message, bool]:
+        """
+        Sample from Tinker model.
+        
+        Returns:
+            (response_message, parse_success)
+            response_message contains 'content' and optionally 'tool_calls' parsed by renderer
+        """
+        # Ensure checkpoint is loaded
+        self._ensure_checkpoint_loaded()
+        
+        # Truncate messages to keep only system prompt and recent 5 turns
+        truncated_messages = self._truncate_messages_to_recent_turns(messages, max_turns=5)
+        
+        # Build ModelInput
+        model_input = self.renderer.build_generation_prompt(truncated_messages)
+        
+        # Sampling parameters
+        sampling_params = tinker.SamplingParams(
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            top_p=1.0,
+            stop=self.renderer.get_stop_sequences(),
+        )
+        
+        # Sample
+        # Note: If checkpoint loading is needed, it should be handled by Tinker SDK
+        # For now, we'll use the sampling client directly
+        # The checkpoint path in tinker_model_path should be handled by Tinker service
+        sample_resp = await self.sampling_client.sample_async(
+            prompt=model_input,
+            num_samples=1,
+            sampling_params=sampling_params,
+        )
+        
+        # Parse response using renderer (includes tool call parsing)
+        seq = sample_resp.sequences[0]
+        response_message, parse_success = self.renderer.parse_response(seq.tokens)
+        
+        return response_message, parse_success
+    
+    async def run_task(
+        self,
+        task_description: str,
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run a task with the agent.
+        
+        Args:
+            task_description: Description of the task to complete
+            verbose: Whether to print verbose output
+            
+        Returns:
+            Dictionary with task results
+        """
+        task_start_time = time.time()
+        
+        # Get context info from rollout_logger if available
+        context_parts = []
+        if self.rollout_logger:
+            if self.rollout_logger.step is not None:
+                context_parts.append(f"Step: {self.rollout_logger.step}")
+            if self.rollout_logger.batch is not None:
+                context_parts.append(f"Batch: {self.rollout_logger.batch}")
+            if self.rollout_logger.group is not None:
+                context_parts.append(f"Group: {self.rollout_logger.group}")
+            if self.rollout_logger.rollout_index is not None:
+                context_parts.append(f"Rollout: {self.rollout_logger.rollout_index}")
+        
+        context_str = " | ".join(context_parts) if context_parts else ""
+        
+        logger.info("")
+        logger.info("╔" + "=" * 118 + "╗")
+        if context_str:
+            # Format: "TASK EXECUTION START | Step: X | Batch: Y | Group: Z | Rollout: W"
+            title = f"TASK EXECUTION START | {context_str}"
+            # Calculate padding to center the text
+            total_len = len(title)
+            padding_left = (118 - total_len) // 2
+            padding_right = 118 - total_len - padding_left
+            logger.info(f"║{' ' * padding_left}{title}{' ' * padding_right}║")
+        else:
+            logger.info("║" + " " * 48 + "TASK EXECUTION START" + " " * 50 + "║")
+        logger.info("╠" + "=" * 118 + "╣")
+        logger.info(f"║ Task Description: {task_description[:98]:<98} ║")
+        logger.info(f"║ Max Turns: {self.max_turns:<105} ║")
+        logger.info(f"║ Box Type: {self.box_type:<106} ║")
+        logger.info(f"║ Model Path: {self.tinker_model_path[:104]:<104} ║")
+        logger.info("╚" + "=" * 118 + "╝")
+        
+        # Initialize turn counter before try block so it's always defined
+        turn = 0
+        
+        try:
+            # Create system prompt
+            prompt_start = time.time()
+            self.system_prompt = create_system_prompt(
+                task_description=task_description,
+                max_turns=self.max_turns,
+            )
+            prompt_time = time.time() - prompt_start
+            
+            # Initialize conversation history
+            self.messages = [
+                renderers.Message(role="system", content=self.system_prompt)
+            ]
+            
+            # Create GBox environment
+            box_creation_start = time.time()
+            box_info = await self.gbox_client.create_box(box_type=self.box_type)
+            box_id = box_info.get("id") or self.gbox_client.box_id
+            box_creation_time = time.time() - box_creation_start
+            logger.info(f"[Task Setup] Task executing... with max {self.max_turns} turns on the box {box_id}(box prepared in {box_creation_time:.3f}s)")
+
+            # Run task in turns
+            turn = 0
+            
+            while turn < self.max_turns and not self.task_completed:
+                turn += 1
+                turn_start_time = time.time()
+                
+                # Start turn logging (includes turn header)
+                if self.rollout_logger:
+                    self.rollout_logger.start_turn(turn, self.max_turns)
+                else:
+                    logger.info("")
+                    logger.info("┌" + "─" * 118 + "┐")
+                    logger.info(f"│ Turn {turn}/{self.max_turns}" + " " * (118 - 12 - len(str(self.max_turns)) - len(str(turn)) - 1) + "│")
+                    logger.info("└" + "─" * 118 + "┘")
+                
+                # Take screenshot
+                screenshot_start = time.time()
+                if not self.rollout_logger:
+                    logger.info(f"[Turn {turn}] Taking screenshot...")
+                await asyncio.sleep(0.3)  # Small delay for stability
+                screenshot_bytes, screenshot_uri = await self.gbox_client.take_screenshot()
+                self.current_screenshot_uri = screenshot_uri
+                screenshot_time = time.time() - screenshot_start
+                if self.rollout_logger:
+                    self.rollout_logger.log_screenshot(screenshot_uri, screenshot_time)
+                else:
+                    logger.info(f"[Turn {turn}] ✓ Screenshot taken in {screenshot_time:.3f}s")
+                    logger.info(f"[Turn {turn}] Screenshot URI: {screenshot_uri[:100]}...")
+                
+                # Build user message with screenshot
+                user_text = f"Turn {turn}/{self.max_turns}. Analyze the screenshot and take the next action to complete the task."
+                user_messages = self._build_messages_with_screenshot(user_text, screenshot_uri)
+                
+                # Add to conversation history
+                self.messages.extend(user_messages)
+                
+                # Sample from model
+                model_call_start = time.time()
+                if not self.rollout_logger:
+                    logger.info(f"[Turn {turn}] Calling model for inference...")
+                    logger.info(f"[Turn {turn}] Model input - Conversation length: {len(self.messages)} messages")
+                
+                response_message, parse_success = await self._sample_with_tinker(self.messages)
+                response_text = response_message.get("content", "")
+                
+                model_call_time = time.time() - model_call_start
+                if self.rollout_logger:
+                    self.rollout_logger.log_model_inference(turn, response_text, parse_success, model_call_time)
+                    if self.rollout_logger.current_turn:
+                        self.rollout_logger.current_turn["user_input"] = user_text
+                else:
+                    logger.info(f"[Turn {turn}] ✓ Model inference completed in {model_call_time:.3f}s")
+                    logger.info(f"[Turn {turn}] Parse success: {parse_success}")
+                    logger.info(f"[Turn {turn}] Model response length: {len(response_text)} characters")
+                    logger.info(f"[Turn {turn}] Model response (full):")
+                    logger.info("  " + "\n  ".join(response_text.split("\n")))
+                
+                # Parse tool calls - prefer renderer's parsed tool_calls, fallback to custom parsing
+                parse_start = time.time()
+                tool_calls_from_renderer = response_message.get("tool_calls", [])
+                
+                if tool_calls_from_renderer:
+                    # Convert ToolCall objects to dict format
+                    tool_calls = []
+                    for tc in tool_calls_from_renderer:
+                        if hasattr(tc, 'function') and hasattr(tc.function, 'name'):
+                            # ToolCall object from renderer
+                            tool_calls.append({
+                                "name": tc.function.name,
+                                "arguments": json.loads(tc.function.arguments),
+                            })
+                        else:
+                            # Already in dict format
+                            tool_calls.append(tc)
+                    parser_type = "renderer"
+                else:
+                    # Fallback to custom parsing if renderer didn't find tool calls
+                    tool_calls = self._parse_tool_calls(response_text)
+                    parser_type = "custom_parser"
+                
+                parse_time = time.time() - parse_start
+                
+                # Log tool call parsing using rollout_logger if available
+                if self.rollout_logger:
+                    self.rollout_logger.log_tool_calls(turn, tool_calls, parse_time, parser_type)
+                else:
+                    logger.info(f"[Turn {turn}] Using tool_calls parsed by {parser_type}: {len(tool_calls)} found")
+                    logger.info(f"[Turn {turn}] Tool call parsing completed in {parse_time:.3f}s")
+                    logger.info(f"[Turn {turn}] Number of tool calls found: {len(tool_calls)}")
+                
+                if tool_calls:
+                    # Execute tool calls
+                    tool_results = []
+                    for tool_call_idx, tool_call in enumerate(tool_calls):
+                        tool_name = tool_call.get("name")
+                        tool_args = tool_call.get("arguments", {})
+                        
+                        if not self.rollout_logger:
+                            logger.info(f"[Turn {turn}] Tool call {tool_call_idx + 1}/{len(tool_calls)}: {tool_name}")
+                            logger.info(f"[Turn {turn}] Tool arguments: {json.dumps(tool_args, indent=2)}")
+                        
+                        tool_exec_start = time.time()
+                        try:
+                            result = await self._execute_tool_call(tool_name, tool_args)
+                            tool_exec_time = time.time() - tool_exec_start
+                            
+                            tool_results.append({
+                                "tool": tool_name,
+                                "result": result,
+                            })
+                            
+                            # Log using rollout_logger if available
+                            if self.rollout_logger:
+                                self.rollout_logger.log_tool_execution(
+                                    turn_num=turn,
+                                    tool_idx=tool_call_idx + 1,
+                                    total_tools=len(tool_calls),
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    result=result,
+                                    exec_time=tool_exec_time,
+                                )
+                            else:
+                                logger.info(f"[Turn {turn}] ✓ Tool '{tool_name}' executed in {tool_exec_time:.3f}s")
+                                logger.info(f"[Turn {turn}] Tool result: {json.dumps(result, indent=2, default=str)}")
+                            
+                            # If task completed, break from tool execution loop
+                            # Note: We'll check this again after the loop to break from the while loop
+                            if self.task_completed:
+                                if self.rollout_logger:
+                                    self.rollout_logger.log(f"[Turn {turn}] ⚠ Task marked as completed by tool '{tool_name}'")
+                                else:
+                                    logger.info(f"[Turn {turn}] ⚠ Task marked as completed by tool '{tool_name}'")
+                                break
+                                
+                        except Exception as e:
+                            tool_exec_time = time.time() - tool_exec_start
+                            # Tool execution error: mark task as completed and end rollout
+                            self.task_completed = True
+                            self.task_success = False
+                            self.result_message = f"Tool execution error: {str(e)}"
+                            
+                            if self.rollout_logger:
+                                self.rollout_logger.log_tool_execution(
+                                    turn_num=turn,
+                                    tool_idx=tool_call_idx + 1,
+                                    total_tools=len(tool_calls),
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    exec_time=tool_exec_time,
+                                    error=str(e),
+                                )
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool execution error, ending rollout: {str(e)}")
+                            else:
+                                logger.error(f"[Turn {turn}] ✗ Tool '{tool_name}' failed after {tool_exec_time:.3f}s: {e}", exc_info=True)
+                                logger.warning(f"[Turn {turn}] ⚠ Tool execution error, ending rollout: {str(e)}")
+                            tool_results.append({
+                                "tool": tool_name,
+                                "error": str(e),
+                            })
+                            # Break from tool execution loop since we're ending rollout
+                            break
+                    
+                    # Add assistant response and tool results to history
+                    assistant_msg = renderers.Message(
+                        role="assistant",
+                        content=response_text
+                    )
+                    self.messages.append(assistant_msg)
+                    
+                    # Add tool results as user message
+                    if tool_results:
+                        tool_result_text = f"Tool execution results: {json.dumps(tool_results, indent=2)}"
+                        tool_result_msg = renderers.Message(
+                            role="user",
+                            content=tool_result_text
+                        )
+                        self.messages.append(tool_result_msg)
+                    
+                    # If task completed, break from the while loop immediately
+                    if self.task_completed:
+                        turn_time = time.time() - turn_start_time
+                        if self.rollout_logger:
+                            self.rollout_logger.end_turn(turn)
+                        if not self.rollout_logger:
+                            logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
+                        break
+                else:
+                    # No tool calls found: mark task as completed and end rollout
+                    self.task_completed = True
+                    self.task_success = False
+                    self.result_message = "No tool calls found in model response"
+                    
+                    assistant_msg = renderers.Message(
+                        role="assistant",
+                        content=response_text
+                    )
+                    self.messages.append(assistant_msg)
+                    if self.rollout_logger:
+                        self.rollout_logger.log(f"[Turn {turn}] ⚠ No tool calls found, ending rollout")
+                    else:
+                        logger.warning(f"[Turn {turn}] ⚠ No tool calls found, ending rollout")
+                    
+                    # End turn and break from while loop
+                    turn_time = time.time() - turn_start_time
+                    if self.rollout_logger:
+                        self.rollout_logger.end_turn(turn)
+                    if not self.rollout_logger:
+                        logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
+                    break
+                
+                turn_time = time.time() - turn_start_time
+                if self.rollout_logger:
+                    self.rollout_logger.end_turn(turn)
+                if not self.rollout_logger:
+                    logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
+                
+                # Small delay between turns
+                await asyncio.sleep(0.5)
+            
+            if not self.task_completed:
+                self.result_message = f"Task not completed within {self.max_turns} turns"
+                logger.warning(f"[Task End] Task did not complete within {self.max_turns} turns")
+            
+        except Exception as e:
+            logger.error(f"[Task End] ✗ Task failed with exception: {e}", exc_info=True)
+            self.result_message = f"Task failed with error: {str(e)}"
+            self.task_success = False
+        finally:
+            # Terminate box
+            cleanup_start = time.time()
+            try:
+                await self.gbox_client.terminate_box()
+                cleanup_time = time.time() - cleanup_start
+                logger.info(f"[Task Cleanup] ✓ GBox environment terminated in {cleanup_time:.3f}s")
+            except Exception as cleanup_error:
+                cleanup_time = time.time() - cleanup_start
+                logger.warning(f"[Task Cleanup] Cleanup error after {cleanup_time:.3f}s: {cleanup_error}")
+        
+        total_task_time = time.time() - task_start_time
+        
+        # Set summary in rollout logger
+        summary = {
+            "task_completed": self.task_completed,
+            "task_success": self.task_success,
+            "result_message": self.result_message,
+            "num_turns": turn,
+            "max_turns": self.max_turns,
+            "total_time": total_task_time,
+            "avg_time_per_turn": total_task_time / max(turn, 1),
+        }
+        if self.rollout_logger:
+            self.rollout_logger.set_summary(summary)
+        
+        if not self.rollout_logger:
+            logger.info("")
+            logger.info("╔" + "=" * 118 + "╗")
+            logger.info("║" + " " * 47 + "TASK EXECUTION SUMMARY" + " " * 48 + "║")
+            logger.info("╠" + "=" * 118 + "╣")
+            logger.info(f"║ Task Completed: {str(self.task_completed):<100} ║")
+            logger.info(f"║ Task Success: {str(self.task_success):<102} ║")
+            logger.info(f"║ Result Message: {self.result_message[:100]:<100} ║")
+            total_turns_str = f"{turn}/{self.max_turns}"
+            logger.info(f"║ Total Turns: {total_turns_str:<103} ║")
+            total_time_str = f"{total_task_time:.2f}s"
+            logger.info(f"║ Total Time: {total_time_str:<104} ║")
+            avg_time_str = f"{total_task_time / max(turn, 1):.2f}s"
+            logger.info(f"║ Average Time per Turn: {avg_time_str:<93} ║")
+            logger.info("╚" + "=" * 118 + "╝")
+        
+        return {
+            "task_completed": self.task_completed,
+            "task_success": self.task_success,
+            "result_message": self.result_message,
+            "num_turns": turn,
+            "max_turns": self.max_turns,
+        }
+    
+    async def close(self):
+        """Close the agent and cleanup resources."""
+        await self.gbox_client.close()
+

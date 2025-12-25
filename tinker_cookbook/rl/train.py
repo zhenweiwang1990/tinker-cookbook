@@ -278,13 +278,41 @@ async def run_single_evaluation(evaluator, cfg, i_batch, sampling_client):
 
 
 @scope
+async def run_single_baseline_evaluation(evaluator, cfg, sampling_client):
+    """Run a single baseline evaluation (before training starts)."""
+    ev_name = _get_evaluator_name(evaluator)
+    with _get_logtree_scope(
+        log_path=cfg.log_path,
+        num_groups_to_log=cfg.num_groups_to_log,
+        f_name=f"eval_{ev_name}_baseline",
+        scope_name=f"Running baseline evaluation {ev_name}",
+    ):
+        eval_metrics = await evaluator(sampling_client)
+        return eval_metrics
+
+
+@scope
 async def run_evaluations_parallel(
     evaluators: list[SamplingClientEvaluator],
     sampling_client: tinker.SamplingClient,
     cfg: Config,
     i_batch: int,
+    model_path: str | None = None,
 ) -> dict[str, Any]:
     """Run all evaluators in parallel and return aggregated metrics."""
+
+    # Early return if no evaluators
+    if len(evaluators) == 0:
+        return {}
+    
+    # Set model_path for evaluation rollouts (for CUA custom rollout function)
+    if model_path is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(model_path)
+        except ImportError:
+            # Not using CUA RL, skip
+            pass
 
     # Create tasks for all evaluators with names for better traceability
     tasks = []
@@ -293,6 +321,39 @@ async def run_evaluations_parallel(
         task = asyncio.create_task(
             run_single_evaluation(evaluator, cfg, i_batch, sampling_client),
             name=f"eval_{ev_name or i}_iteration_{i_batch:06d}",
+        )
+        tasks.append(task)
+
+    # Wait for all to complete
+    results = await asyncio.gather(*tasks)
+
+    # Merge all metrics
+    metrics = {}
+    for result in results:
+        metrics.update(result)
+
+    return metrics
+
+
+@scope
+async def run_baseline_evaluations_parallel(
+    evaluators: list[SamplingClientEvaluator],
+    sampling_client: tinker.SamplingClient,
+    cfg: Config,
+) -> dict[str, Any]:
+    """Run all evaluators in parallel for baseline evaluation (before training starts)."""
+
+    # Early return if no evaluators
+    if len(evaluators) == 0:
+        return {}
+
+    # Create tasks for all evaluators with names for better traceability
+    tasks = []
+    for i, evaluator in enumerate(evaluators):
+        ev_name = _get_evaluator_name(evaluator)
+        task = asyncio.create_task(
+            run_single_baseline_evaluation(evaluator, cfg, sampling_client),
+            name=f"eval_{ev_name or i}_baseline",
         )
         tasks.append(task)
 
@@ -642,11 +703,25 @@ async def do_async_training(
             sampling_client_eval_step = sampling_client_step
             sampling_client_eval = sampling_client
             if cfg.eval_every > 0 and sampling_client_eval_step % cfg.eval_every == 0:
+                logger.info("")
+                logger.info("╔" + "=" * 78 + "╗")
+                logger.info(f"║ EVALUATION - Step {sampling_client_eval_step}" + " " * (78 - len(f"EVALUATION - Step {sampling_client_eval_step}")) + "║")
+                logger.info("╠" + "=" * 78 + "╣")
+                logger.info(f"║ Running {len(evaluators)} evaluator(s)..." + " " * (78 - len(f"Running {len(evaluators)} evaluator(s)...")) + "║")
                 with timed("run_evals", metrics):
-                    for evaluator in evaluators:
+                    for eval_idx, evaluator in enumerate(evaluators):
+                        eval_name = _get_evaluator_name(evaluator) or f"Evaluator {eval_idx + 1}"
+                        logger.info(f"║   Running {eval_name}..." + " " * (78 - len(f"  Running {eval_name}...")) + "║")
+                        eval_start = time.time()
                         eval_metrics = await evaluator(sampling_client_eval)
+                        eval_time = time.time() - eval_start
+                        logger.info(f"║   ✓ {eval_name} completed in {eval_time:.2f}s" + " " * (78 - len(f"  ✓ {eval_name} completed in {eval_time:.2f}s")) + "║")
+                        for key, value in eval_metrics.items():
+                            logger.info(f"║     {key}: {value}" + " " * (78 - len(f"    {key}: {value}")) + "║")
                         metrics.update({f"test/{k}": v for k, v in eval_metrics.items()})
                 metrics["time/evaluation_loop/total"] = time.time() - t_start
+                logger.info(f"║ Total evaluation time: {time.time() - t_start:.2f}s" + " " * (78 - len(f"Total evaluation time: {time.time() - t_start:.2f}s")) + "║")
+                logger.info("╚" + "=" * 78 + "╝")
                 ml_logger.log_metrics(metrics, step=sampling_client_eval_step)
 
     await asyncio.gather(
@@ -671,18 +746,21 @@ async def do_group_rollout_and_filter_constant_reward(
     do_remove_constant_reward_groups: bool,
     enable_logging: bool = True,
     model_path: str | None = None,
+    group: int | None = None,
 ) -> TrajectoryGroup | None:
     policy = TinkerTokenCompleter(sampling_client, max_tokens=max_tokens, temperature=temperature)
 
     with logtree.optional_enable_logging(enable_logging):
-        # Pass model_path to do_group_rollout if it accepts the parameter
-        # Check if the function signature includes model_path parameter
+        # Pass model_path and group to do_group_rollout if it accepts the parameters
+        # Check if the function signature includes these parameters
         import inspect
         sig = inspect.signature(do_group_rollout)
+        kwargs = {}
         if 'model_path' in sig.parameters:
-            trajectory_group = await do_group_rollout(env_group_builder, policy, model_path=model_path)
-        else:
-            trajectory_group = await do_group_rollout(env_group_builder, policy)
+            kwargs['model_path'] = model_path
+        if 'group' in sig.parameters:
+            kwargs['group'] = group
+        trajectory_group = await do_group_rollout(env_group_builder, policy, **kwargs)
 
     # Remove if all trajectories have the same reward
     if do_remove_constant_reward_groups and all_same(trajectory_group.get_total_rewards()):
@@ -991,12 +1069,35 @@ async def do_sync_training(
     tokenizer: Tokenizer,
 ):
     """Implements fully synchronous on-policy training"""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING START")
+    logger.info("=" * 80)
+    logger.info(f"Start batch: {start_batch}")
+    logger.info(f"End batch: {end_batch}")
+    logger.info(f"Total batches: {num_batches}")
+    logger.info(f"Learning rate: {cfg.learning_rate}")
+    logger.info(f"Eval every: {cfg.eval_every}")
+    logger.info(f"Save every: {cfg.save_every}")
+    logger.info("=" * 80)
+    
     # Initial sampling client
+    logger.info(f"[Training Setup] Creating initial sampling client...")
+    init_start = time.time()
     sampling_client, model_path, _ = await save_checkpoint_and_get_sampling_client(
         training_client, start_batch, cfg.log_path, cfg.save_every, start_batch
     )
+    init_time = time.time() - init_start
+    logger.info(f"[Training Setup] ✓ Initial sampling client created in {init_time:.3f}s")
+    logger.info(f"[Training Setup] Initial model path: {model_path}")
 
     for i_batch in range(start_batch, end_batch):
+        batch_start_time = time.time()
+        logger.info("")
+        logger.info("╔" + "=" * 78 + "╗")
+        logger.info(f"║ Training Step {i_batch}/{num_batches - 1} ({(i_batch + 1) / num_batches * 100:.1f}% complete)" + " " * (78 - len(f"Training Step {i_batch}/{num_batches - 1} ({(i_batch + 1) / num_batches * 100:.1f}% complete)")) + "║")
+        logger.info("╠" + "=" * 78 + "╣")
+        
         metrics = {
             "progress/batch": i_batch,
             "optim/lr": cfg.learning_rate,
@@ -1006,16 +1107,46 @@ async def do_sync_training(
 
         # Run evaluations
         if cfg.eval_every > 0 and i_batch % cfg.eval_every == 0:
-            with timed("run_evals", metrics):
-                eval_metrics = await run_evaluations_parallel(
-                    evaluators, sampling_client, cfg, i_batch
-                )
-                metrics.update(eval_metrics)
+            if len(evaluators) == 0:
+                warning_text1 = "⚠ WARNING: No evaluators configured. Skipping evaluation. "
+                logger.warning(f"║ {warning_text1}" + " " * (78 - len(warning_text1)) + "║")
+                warning_text2 = "  To enable evaluations, configure eval_tasks in dataset builder. "
+                logger.warning(f"║ {warning_text2}" + " " * (78 - len(warning_text2)) + "║")
+            else:
+                eval_text = f"Running evaluations (every {cfg.eval_every} steps)..."
+                logger.info(f"║ {eval_text}" + " " * (78 - len(eval_text)) + "║")
+                eval_start = time.time()
+                with timed("run_evals", metrics):
+                    eval_metrics = await run_evaluations_parallel(
+                        evaluators, sampling_client, cfg, i_batch
+                    )
+                    metrics.update(eval_metrics)
+                eval_time = time.time() - eval_start
+                logger.info(f"║ ✓ Evaluations completed in {eval_time:.2f}s" + " " * (78 - len(f"✓ Evaluations completed in {eval_time:.2f}s")) + "║")
+                for key, value in eval_metrics.items():
+                    logger.info(f"║   {key}: {value}" + " " * (78 - len(f"  {key}: {value}")) + "║")
 
         # Get batch and sample trajectories
+        batch_text = f"Getting batch {i_batch} from dataset..."
+        logger.info(f"║ {batch_text}" + " " * (78 - len(batch_text)) + "║")
+        batch_get_start = time.time()
         env_group_builders_P = dataset.get_batch(i_batch)
+        batch_get_time = time.time() - batch_get_start
+        logger.info(f"║ ✓ Retrieved {len(env_group_builders_P)} environment group builder(s) in {batch_get_time:.3f}s" + " " * (78 - len(f"✓ Retrieved {len(env_group_builders_P)} environment group builder(s) in {batch_get_time:.3f}s")) + "║")
 
         # Initialize logtree trace for this iteration if logging is enabled
+        logger.info(f"║ Starting rollouts for {len(env_group_builders_P)} environment group(s)..." + " " * (78 - len(f"Starting rollouts for {len(env_group_builders_P)} environment group(s)...")) + "║")
+        rollout_start = time.time()
+        
+        # Set rollout context if available (for CUA and other custom rollouts that support it)
+        # This allows custom rollout functions to access current step/batch information
+        try:
+            from tinker_cookbook.recipes.cua_rl.rollout import set_rollout_context
+            set_rollout_context(step=i_batch, batch=i_batch)
+        except (ImportError, AttributeError):
+            # set_rollout_context not available (not using CUA rollout), skip silently
+            pass
+        
         with _get_logtree_scope(
             log_path=cfg.log_path,
             num_groups_to_log=cfg.num_groups_to_log,
@@ -1035,17 +1166,29 @@ async def do_sync_training(
                             do_remove_constant_reward_groups=False,
                             enable_logging=i < cfg.num_groups_to_log,
                             model_path=model_path,
+                            group=i,  # Pass group index
                         ),
                         name=f"sample_task_{i}",
                     )
                     for i, builder in enumerate(env_group_builders_P)
                 ],
             )
+        rollout_time = time.time() - rollout_start
+        logger.info(f"║ ✓ Rollouts completed in {rollout_time:.2f}s" + " " * (78 - len(f"✓ Rollouts completed in {rollout_time:.2f}s")) + "║")
+        logger.info(f"║   Collected {len(trajectory_groups_P)} trajectory group(s)" + " " * (78 - len(f"  Collected {len(trajectory_groups_P)} trajectory group(s)")) + "║")
 
         if cfg.remove_constant_reward_groups:
+            filter_start = time.time()
+            filter_text = "Filtering constant reward groups..."
+            logger.info(f"║ {filter_text}" + " " * (78 - len(filter_text)) + "║")
             trajectory_groups_P = remove_constant_reward_groups(trajectory_groups_P)
+            filter_time = time.time() - filter_start
+            logger.info(f"║ ✓ Filtering completed in {filter_time:.3f}s, {len(trajectory_groups_P)} groups remaining" + " " * (78 - len(f"✓ Filtering completed in {filter_time:.3f}s, {len(trajectory_groups_P)} groups remaining")) + "║")
 
         # Train step
+        train_step_text = "Starting training step..."
+        logger.info(f"║ {train_step_text}" + " " * (78 - len(train_step_text)) + "║")
+        train_start = time.time()
         sampling_client, model_path, train_step_metrics = await do_train_step_and_get_sampling_client(
             cfg,
             i_batch,
@@ -1055,10 +1198,22 @@ async def do_sync_training(
             env_group_builders_P,
             trajectory_groups_P,
         )
+        train_time = time.time() - train_start
+        logger.info(f"║ ✓ Training step completed in {train_time:.2f}s" + " " * (78 - len(f"✓ Training step completed in {train_time:.2f}s")) + "║")
+        logger.info(f"║   Updated model path: {model_path}" + " " * (78 - len(f"  Updated model path: {model_path}")) + "║")
+        
+        # Log key training metrics
+        for key, value in train_step_metrics.items():
+            if key.startswith("trajectory/") or key.startswith("train/"):
+                logger.info(f"║   {key}: {value:.4f}" + " " * (78 - len(f"  {key}: {value:.4f}")) + "║")
 
         # Log metrics
         metrics.update(train_step_metrics)
         metrics["time/total"] = time.time() - t_start
+        batch_total_time = time.time() - batch_start_time
+        logger.info(f"║ Total batch time: {batch_total_time:.2f}s" + " " * (78 - len(f"Total batch time: {batch_total_time:.2f}s")) + "║")
+        logger.info("╚" + "=" * 78 + "╝")
+        
         ml_logger.log_metrics(metrics, step=i_batch)
 
 
@@ -1067,6 +1222,17 @@ async def main(
     cfg: Config,
 ):
     """Main training loop for MDP RL."""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING INITIALIZATION")
+    logger.info("=" * 80)
+    logger.info(f"Model: {cfg.model_name}")
+    logger.info(f"LoRA rank: {cfg.lora_rank}")
+    logger.info(f"Learning rate: {cfg.learning_rate}")
+    logger.info(f"Max tokens: {cfg.max_tokens}")
+    logger.info(f"Temperature: {cfg.temperature}")
+    logger.info(f"Log path: {cfg.log_path}")
+    
     ml_logger = ml_log.setup_logging(
         log_dir=cfg.log_path,
         wandb_project=cfg.wandb_project,
@@ -1088,13 +1254,23 @@ async def main(
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("pylatexenc").setLevel(logging.WARNING)
 
+    logger.info(f"[Init] Checking for existing checkpoints...")
     resume_info = checkpoint_utils.get_last_checkpoint(cfg.log_path)
     if resume_info:
         start_batch = resume_info["batch"]
+        logger.info(f"[Init] ✓ Found checkpoint, resuming from batch {start_batch}")
     else:
         start_batch = 0
+        logger.info(f"[Init] ✓ No checkpoint found, starting from batch 0")
 
+    logger.info(f"[Init] Creating Tinker service client...")
+    service_start = time.time()
     service_client = tinker.ServiceClient(base_url=cfg.base_url)
+    service_time = time.time() - service_start
+    logger.info(f"[Init] ✓ Service client created in {service_time:.3f}s")
+    
+    logger.info(f"[Init] Creating training client...")
+    train_client_start = time.time()
     if resume_info:
         # Resuming interrupted training - load optimizer state for proper continuation
         training_client = (
@@ -1102,29 +1278,100 @@ async def main(
                 resume_info["state_path"]
             )
         )
-        logger.info(f"Resumed training from {resume_info['state_path']}")
+        logger.info(f"[Init] ✓ Resumed training from {resume_info['state_path']}")
     elif cfg.load_checkpoint_path:
         # Starting fresh from a checkpoint - load weights only (fresh optimizer)
         training_client = await service_client.create_training_client_from_state_async(
             cfg.load_checkpoint_path
         )
-        logger.info(f"Loaded weights from {cfg.load_checkpoint_path}")
+        logger.info(f"[Init] ✓ Loaded weights from {cfg.load_checkpoint_path}")
     else:
         training_client = await service_client.create_lora_training_client_async(
             cfg.model_name, rank=cfg.lora_rank
         )
+        logger.info(f"[Init] ✓ Created new LoRA training client (rank={cfg.lora_rank})")
+    train_client_time = time.time() - train_client_start
+    logger.info(f"[Init] Training client setup completed in {train_client_time:.3f}s")
 
     # Get tokenizer from training client
+    logger.info(f"[Init] Getting tokenizer...")
     tokenizer = training_client.get_tokenizer()
+    logger.info(f"[Init] ✓ Tokenizer ready")
 
     # Create dataset from thunk
+    logger.info(f"[Init] Building dataset...")
+    dataset_start = time.time()
     dataset, maybe_test_dataset = await cfg.dataset_builder()
+    dataset_time = time.time() - dataset_start
+    logger.info(f"[Init] ✓ Dataset built in {dataset_time:.3f}s")
+    
+    logger.info(f"[Init] Setting up evaluators...")
     evaluators = [evaluator() for evaluator in cfg.evaluator_builders]
     if maybe_test_dataset is not None:
         evaluators.append(RLTestSetEvaluator(maybe_test_dataset, max_tokens=cfg.max_tokens))
+        logger.info(f"[Init] ✓ Added test set evaluator")
+    logger.info(f"[Init] ✓ Total evaluators: {len(evaluators)}")
+    
+    # Warn if eval_every is set but no evaluators are configured
+    if cfg.eval_every > 0 and len(evaluators) == 0:
+        logger.warning(
+            f"[Init] ⚠ WARNING: eval_every={cfg.eval_every} is set, but no evaluators are configured. "
+            "Evaluations will be skipped. To enable evaluations, configure eval_tasks in your dataset builder "
+            "or add evaluators via evaluator_builders."
+        )
 
     num_batches = len(dataset)
-    logger.info(f"Will train on {num_batches} batches")
+    logger.info(f"[Init] Will train on {num_batches} batches")
+    logger.info("=" * 80)
+
+    # Run baseline evaluation before training starts (if starting from batch 0 and evaluators are configured)
+    if start_batch == 0 and len(evaluators) > 0:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("BASELINE EVALUATION (Before Training)")
+        logger.info("=" * 80)
+        logger.info("Running baseline evaluation to establish initial model performance...")
+        
+        # Get sampling client for baseline evaluation
+        baseline_sampling_client, baseline_model_path, _ = await save_checkpoint_and_get_sampling_client(
+            training_client, start_batch, cfg.log_path, cfg.save_every, start_batch
+        )
+        logger.info(f"[Baseline] Using model: {baseline_model_path}")
+        
+        # Set model_path for evaluation rollouts (for CUA custom rollout function)
+        # Try to import set_eval_model_path from cua_rl.train if available
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(baseline_model_path)
+        except ImportError:
+            # Not using CUA RL, skip
+            pass
+        
+        # Run baseline evaluation
+        baseline_start = time.time()
+        baseline_metrics = await run_baseline_evaluations_parallel(
+            evaluators, baseline_sampling_client, cfg
+        )
+        
+        # Clear model_path after evaluation
+        try:
+            from tinker_cookbook.recipes.cua_rl.train import set_eval_model_path
+            set_eval_model_path(None)
+        except ImportError:
+            pass
+        baseline_time = time.time() - baseline_start
+        
+        # Log baseline metrics
+        logger.info(f"[Baseline] ✓ Baseline evaluation completed in {baseline_time:.2f}s")
+        for key, value in baseline_metrics.items():
+            logger.info(f"[Baseline] {key}: {value}")
+        
+        # Log to ML logger with step -1 to indicate baseline
+        baseline_metrics_with_prefix = {f"baseline/{k}": v for k, v in baseline_metrics.items()}
+        ml_logger.log_metrics(baseline_metrics_with_prefix, step=-1)
+        
+        logger.info("=" * 80)
+        logger.info("")
 
     # Training loop
     if cfg.async_config is not None:
@@ -1147,7 +1394,13 @@ async def main(
     )
 
     # Save final checkpoint
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING COMPLETION")
+    logger.info("=" * 80)
     if start_batch < num_batches:
+        logger.info(f"[Final] Saving final checkpoint...")
+        final_start = time.time()
         _ = await checkpoint_utils.save_checkpoint_async(
             training_client=training_client,
             name="final",
@@ -1155,9 +1408,14 @@ async def main(
             kind="both",
             loop_state={"batch": num_batches},
         )
+        final_time = time.time() - final_start
+        logger.info(f"[Final] ✓ Final checkpoint saved in {final_time:.3f}s")
     else:
-        logger.info("Training was already complete; nothing to do")
+        logger.info("[Final] Training was already complete; nothing to do")
 
     # Cleanup
+    logger.info(f"[Final] Cleaning up...")
     ml_logger.close()
+    logger.info("=" * 80)
     logger.info("Training completed successfully")
+    logger.info("=" * 80)
