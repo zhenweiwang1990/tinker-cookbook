@@ -2,7 +2,7 @@
 Custom rollout function for CUA RL training.
 
 This module provides a custom rollout function that integrates GBoxAgent
-with the Tinker RL training framework. It uses TinkerAsyncOpenAIClient to
+with the Tinker RL training framework. It uses TinkerCuaAgent to
 allow GBoxAgent to use the current training model for rollout (on-policy RL).
 """
 
@@ -13,7 +13,6 @@ import time
 from typing import Any, Dict, List, Optional, cast
 
 import tinker
-from gbox_agent.agent import GBoxAgent
 
 from tinker_cookbook.completers import TinkerTokenCompleter, TokenCompleter, TokensWithLogprobs
 from tinker_cookbook.rl.types import EnvGroupBuilder, Trajectory, TrajectoryGroup, Transition
