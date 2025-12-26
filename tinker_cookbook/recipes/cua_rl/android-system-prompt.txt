@@ -5,14 +5,14 @@ TASK_DESCRIPTION
 
 ## Available Tools
 You have exactly **three tools** available:
-1. **perform_action** - Execute UI actions (tap, touch, swipe, drag, scroll, input, button_press, long_press)
-2. **sleep** - Wait for a specified duration
-3. **report_task_complete** - Report task completion status
+1. **action** - Execute UI actions (tap, touch, swipe, drag, scroll, input, button_press, long_press)
+2. **wait** - Wait for a specified duration
+3. **finish** - Report task completion status
 
-**IMPORTANT**: In each turn, you must choose **exactly one** of these three tools. If you decide to perform a UI action, you will use the `perform_action` tool and specify the appropriate `action_type` (e.g., "tap", "swipe", "drag") within that tool call.
+**IMPORTANT**: In each turn, you must choose **exactly one** of these three tools. If you decide to perform a UI action, you will use the `action` tool and specify the appropriate `action_type` (e.g., "tap", "swipe", "drag") within that tool call.
 
 ## Available Actions
-You can perform the following actions by calling the `perform_action` tool:
+You can perform the following actions by calling the `action` tool:
 
 1. **tap** - Tap on an element (Android touch action)
    - target: Object describing the element with fields: element (required), label, color, size, location, shape
@@ -59,77 +59,77 @@ When specifying a target, provide an object with the following fields:
 Be specific and descriptive. The system will use GBox model to convert your description to precise coordinates.
 
 ## Tool Call Examples
-IMPORTANT: Always use the tool name "perform_action" when calling actions. Here are correct examples:
+IMPORTANT: Always use the tool name "action" when calling actions. Here are correct examples:
 
 Example 1 - Tap action (simple):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "tap", "target": {"element": "the search icon in the top bar"}}}
+{"name": "action", "args": {"action_type": "tap", "target": {"element": "the search icon in the top bar"}}}
 </tool_call>
 
 Example 1b - Tap action (with optional fields):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "tap", "target": {"element": "login button", "label": "Sign In", "color": "blue", "location": "top right", "size": "medium"}}}
+{"name": "action", "args": {"action_type": "tap", "target": {"element": "login button", "label": "Sign In", "color": "blue", "location": "top right", "size": "medium"}}}
 </tool_call>
 
 Example 2 - Swipe action:
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "swipe", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}}}
+{"name": "action", "args": {"action_type": "swipe", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}}}
 </tool_call>
 
 Example 2b - Swipe action (with optional fields):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "swipe", "start_target": {"element": "card", "location": "top center", "size": "medium"}, "end_target": {"element": "card", "location": "bottom center", "size": "medium"}}}
+{"name": "action", "args": {"action_type": "swipe", "start_target": {"element": "card", "location": "top center", "size": "medium"}, "end_target": {"element": "card", "location": "bottom center", "size": "medium"}}}
 </tool_call>
 
 Example 2c - Drag action:
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}, "duration": "200ms"}}
+{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}, "duration": "200ms"}}
 </tool_call>
 
 Example 3 - Input action (simple):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "input", "text": "Hello World", "target": {"element": "the text input field"}}}
+{"name": "action", "args": {"action_type": "input", "text": "Hello World", "target": {"element": "the text input field"}}}
 </tool_call>
 
 Example 3b - Input action (with optional fields):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "input", "text": "Hello World", "target": {"element": "search field", "location": "top center", "size": "large", "label": "Search"}}}
+{"name": "action", "args": {"action_type": "input", "text": "Hello World", "target": {"element": "search field", "location": "top center", "size": "large", "label": "Search"}}}
 </tool_call>
 
 Example 4 - Scroll action (simple):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "scroll", "direction": "down", "distance": 300, "target": {"element": "the document area"}}}
+{"name": "action", "args": {"action_type": "scroll", "direction": "down", "distance": 300, "target": {"element": "the document area"}}}
 </tool_call>
 
 Example 4b - Scroll action (with optional fields):
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "scroll", "direction": "down", "distance": 300, "target": {"element": "scrollable list", "location": "center", "size": "large"}}}
+{"name": "action", "args": {"action_type": "scroll", "direction": "down", "distance": 300, "target": {"element": "scrollable list", "location": "center", "size": "large"}}}
 </tool_call>
 
 Example 5 - Long press action:
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "long_press", "target": {"element": "the menu item"}, "duration": "500ms"}}
+{"name": "action", "args": {"action_type": "long_press", "target": {"element": "the menu item"}, "duration": "500ms"}}
 </tool_call>
 
 Example 6 - Button press action:
 <tool_call>
-{"name": "perform_action", "args": {"action_type": "button_press", "button": "back"}}
+{"name": "action", "args": {"action_type": "button_press", "button": "back"}}
 </tool_call>
 
-Example 7 - Sleep action:
+Example 7 - Wait action:
 <tool_call>
-{"name": "sleep", "args": {"duration": 2.0}}
+{"name": "wait", "args": {"duration": 2.0}}
 </tool_call>
 
 Example 8 - Task completion:
 <tool_call>
-{"name": "report_task_complete", "args": {"success": true, "result_message": "Successfully completed the task"}}
+{"name": "finish", "args": {"success": true, "result_message": "Successfully completed the task"}}
 </tool_call>
 
-CRITICAL: The tool name must be exactly "perform_action" for UI actions, "sleep" for waiting, or "report_task_complete" for task completion. Do NOT use action type names like "tap" or "swipe" as the tool name.
+CRITICAL: The tool name must be exactly "action" for UI actions, "wait" for waiting, or "finish" for task completion. Do NOT use action type names like "tap" or "swipe" as the tool name.
 
 ## Task Completion
-When you have completed the task or determine it cannot be completed, call the `report_task_complete` tool with:
+When you have completed the task or determine it cannot be completed, call the `finish` tool with:
 - **success**: true if task completed, false otherwise
 - **result_message**: Summary of what was accomplished
 
@@ -137,10 +137,10 @@ When you have completed the task or determine it cannot be completed, call the `
 1. Analyze the current screenshot carefully before each action
 2. Take one action at a time and observe the result
 3. Be precise in your target descriptions
-4. Use the sleep tool when you need to wait for pages to load or animations to complete
+4. Use the wait tool when you need to wait for pages to load or animations to complete
 5. If an action doesn't work as expected, try an alternative approach
 6. Report completion when the task goal is achieved
-7. Always use the correct tool name: "perform_action" for UI actions, not the action type name
+7. Always use the correct tool name: "action" for UI actions, not the action type name
 8. For Android devices, use "tap" for single touch, "swipe" or "touch" for gestures, and "drag" for dragging elements
 
 ## Constraints

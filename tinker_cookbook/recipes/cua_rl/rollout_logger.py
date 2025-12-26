@@ -12,7 +12,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import base64
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,18 @@ class RolloutLogger:
     BLUE = "\033[94m"
     CYAN = "\033[96m"
     RESET = "\033[0m"
+    
+    # Table formatting constants
+    TABLE_WIDTH = 118  # Total width including border characters
+    CONTENT_WIDTH = 116  # Width of content inside borders (TABLE_WIDTH - 2)
+    BORDER_HORIZONTAL = "─"
+    BORDER_CORNER_TOP_LEFT = "┌"
+    BORDER_CORNER_TOP_RIGHT = "┐"
+    BORDER_CORNER_BOTTOM_LEFT = "└"
+    BORDER_CORNER_BOTTOM_RIGHT = "┘"
+    BORDER_VERTICAL = "│"
+    BORDER_SEPARATOR_LEFT = "├"
+    BORDER_SEPARATOR_RIGHT = "┤"
     
     def __init__(
         self, 
@@ -86,6 +98,77 @@ class RolloutLogger:
             return text
         color_code = getattr(self, color.upper(), "")
         return f"{color_code}{text}{self.RESET}" if color_code else text
+    
+    def _strip_ansi_codes(self, text: str) -> str:
+        """Strip ANSI color codes from text for length calculation."""
+        return re.sub(r'\033\[[0-9;]*m', '', text)
+    
+    def _table_row(self, content: str, prefix: str = "│ ", suffix: str = " │") -> str:
+        """Format a table row with proper padding.
+        
+        Args:
+            content: Content to put in the row (may contain ANSI color codes)
+            prefix: Prefix for the row (default: "│ ")
+            suffix: Suffix for the row (default: " │")
+        
+        Returns:
+            Formatted row string
+        """
+        # Calculate actual content width (strip ANSI codes for length calculation)
+        content_stripped = self._strip_ansi_codes(content)
+        available_width = self.CONTENT_WIDTH - len(prefix) - len(suffix)
+        padding = max(0, available_width - len(content_stripped))
+        return f"{prefix}{content}{' ' * padding}{suffix}"
+    
+    def _table_top(self) -> str:
+        """Create top border of a table."""
+        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        return f"{self.BORDER_CORNER_TOP_LEFT}{border}{self.BORDER_CORNER_TOP_RIGHT}"
+    
+    def _table_bottom(self) -> str:
+        """Create bottom border of a table."""
+        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        return f"{self.BORDER_CORNER_BOTTOM_LEFT}{border}{self.BORDER_CORNER_BOTTOM_RIGHT}"
+    
+    def _table_separator(self) -> str:
+        """Create separator line of a table."""
+        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        return f"{self.BORDER_SEPARATOR_LEFT}{border}{self.BORDER_SEPARATOR_RIGHT}"
+    
+    def _wrap_text_for_table(self, text: str, max_width: Optional[int] = None) -> List[str]:
+        """Wrap text to fit within table content width.
+        
+        Args:
+            text: Text to wrap
+            max_width: Maximum width per line (defaults to CONTENT_WIDTH - len("│ ") - len(" │"))
+        
+        Returns:
+            List of wrapped lines
+        """
+        if max_width is None:
+            # Account for "│ " prefix and " │" suffix in _table_row
+            max_width = self.CONTENT_WIDTH - len("│ ") - len(" │")
+        
+        if len(text) <= max_width:
+            return [text]
+        
+        lines = []
+        text_lines = text.split("\n")
+        
+        for line in text_lines:
+            if not line:
+                lines.append("")
+                continue
+            
+            # Wrap long lines
+            while len(line) > max_width:
+                chunk = line[:max_width]
+                lines.append(chunk)
+                line = line[max_width:]
+            if line:
+                lines.append(line)
+        
+        return lines
     
     def _wrap_long_line(self, message: str, max_message_width: int = 150) -> List[str]:
         """
@@ -214,11 +297,11 @@ class RolloutLogger:
             "turn_header_logged": False,  # Track if turn header has been logged
             "total_tool_coord_time": 0.0,  # Total time for getting coordinates
             "total_tool_exec_time": 0.0,  # Total time for tool execution
-            "total_tool_time": 0.0,  # Total time for all tools (non-perform_action)
+            "total_tool_time": 0.0,  # Total time for all tools (non-action)
         }
-        # Don't log turn header here, will be logged together with screenshot/model inference
+        # Don't log turn header here, will be logged together with screenshot/model inference in end_turn()
         self.log("")
-        self.log("┌" + "─" * 118 + "┐")
+        self.log(self._table_top())
     
     def log_screenshot(self, screenshot_uri: str, time_taken: float):
         """Log screenshot capture (stored, will be combined with model inference in one line)."""
@@ -376,11 +459,11 @@ class RolloutLogger:
     ):
         """Log tool execution (combined format: 2 lines - summary and details).
         
-        Note: For perform_action, details are logged separately via log_action in cua_tools.py,
-        so this method only logs the summary line for perform_action.
+        Note: For action, details are logged separately via log_action in cua_tools.py,
+        so this method only logs the summary line for action.
         """
-        # Accumulate tool execution time for non-perform_action tools
-        if self.current_turn and tool_name != "perform_action" and exec_time is not None:
+        # Accumulate tool execution time for non-action tools
+        if self.current_turn and tool_name != "action" and exec_time is not None:
             self.current_turn["total_tool_time"] += exec_time
         
         # Store tool execution info for later logging
@@ -404,8 +487,8 @@ class RolloutLogger:
             summary = f"[Turn {turn_num}] Tool {tool_idx}/{total_tools}: {tool_name} {status} in {exec_time_str}"
             self.log(summary)
             
-            # For perform_action, details are already logged via log_action
-            if tool_name == "perform_action":
+            # For action, details are already logged via log_action
+            if tool_name == "action":
                 return
             
             # For other tools, show details on second line
@@ -422,204 +505,145 @@ class RolloutLogger:
                 details += f" | error={error}"
             self.log(details)
     
+    def _format_turn_header(self) -> str:
+        """Format the turn header line with timing information.
+        
+        Returns:
+            Formatted header string
+        """
+        turn_info = f"Turn {self.current_turn['turn_num']}/{self.current_turn['max_turns']}"
+        
+        # Turn total time
+        turn_total_time = self.current_turn["duration"]
+        turn_total_info = f" | Total: {turn_total_time:.3f}s"
+        
+        # Screenshot time
+        screenshot_info = ""
+        if self.current_turn.get("screenshot_time") is not None:
+            screenshot_time = self.current_turn["screenshot_time"]
+            screenshot_info = f" | Screenshot: {screenshot_time:.3f}s"
+        
+        # Model inference time
+        model_info = ""
+        if self.current_turn.get("model_inference_time") is not None:
+            inference_time = self.current_turn["model_inference_time"]
+            parse_success = self.current_turn.get("parse_success", False)
+            response_text = self.current_turn.get("model_response", "")
+            model_info = f" | Model inference: {len(response_text)} chars, parse={'✓' if parse_success else '✗'}, time={inference_time:.3f}s"
+        
+        # Tool execution time (with coord_time and exec_time breakdown)
+        tool_info = ""
+        total_tool_exec_time = (
+            self.current_turn.get("total_tool_coord_time", 0.0) +
+            self.current_turn.get("total_tool_exec_time", 0.0) +
+            self.current_turn.get("total_tool_time", 0.0)
+        )
+        if total_tool_exec_time > 0:
+            coord_time = self.current_turn.get("total_tool_coord_time", 0.0)
+            exec_time = self.current_turn.get("total_tool_exec_time", 0.0) + self.current_turn.get("total_tool_time", 0.0)
+            tool_info = f" | Tool execution: coord={coord_time:.3f}s, exec={exec_time:.3f}s, total={total_tool_exec_time:.3f}s"
+        
+        return f"{turn_info}{turn_total_info}{screenshot_info}{model_info}{tool_info}"
+    
+    def _format_action_details(self, action_info: Dict[str, Any]) -> Tuple[str, str]:
+        """Format action execution details.
+        
+        Returns:
+            Tuple of (line1, line2) for the action details
+        """
+        action_type = action_info["action_type"]
+        target_desc = action_info.get("target")
+        start_target = action_info.get("start_target")
+        end_target = action_info.get("end_target")
+        coordinates = action_info.get("coordinates")
+        coord_time = action_info.get("coord_time")
+        exec_time = action_info.get("exec_time")
+        total_time = action_info.get("total_time")
+        
+        # Format time strings
+        coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
+        exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
+        total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
+        
+        colored_action_type = self._color(action_type, "CYAN")
+        
+        if action_type == "swipe":
+            line1 = (
+                f"Action: {colored_action_type} | "
+                f"start={start_target or 'N/A'} | "
+                f"end={end_target or 'N/A'}"
+            )
+            if coordinates:
+                start_coords = coordinates.get("start", {})
+                end_coords = coordinates.get("end", {})
+                colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
+                colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                line2 = (
+                    f"  ↳ Coords: start={colored_start_coords} | "
+                    f"end={colored_end_coords} | "
+                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                )
+            else:
+                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+        else:
+            line1 = f"Action: {colored_action_type}"
+            if target_desc:
+                line1 += f" | target={target_desc}"
+            if coordinates:
+                colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                line2 = (
+                    f"  ↳ Coords: {colored_coords} | "
+                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+                )
+            else:
+                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
+        
+        return line1, line2
+    
     def end_turn(self, turn_num: int):
-        """End logging for current turn."""
-        if self.current_turn:
-            self.current_turn["end_time"] = time.time()
-            self.current_turn["duration"] = (
-                self.current_turn["end_time"] - self.current_turn["start_time"]
-            )
-            
-            # Calculate total tool execution time (coord_time + exec_time for actions + exec_time for other tools)
-            total_tool_exec_time = (
-                self.current_turn.get("total_tool_coord_time", 0.0) +
-                self.current_turn.get("total_tool_exec_time", 0.0) +
-                self.current_turn.get("total_tool_time", 0.0)
-            )
-            
-            # Build and log the complete turn summary line with all timing info
-            turn_info = f"Turn {self.current_turn['turn_num']}/{self.current_turn['max_turns']}"
-            
-            # Turn total time
-            turn_total_time = self.current_turn["duration"]
-            turn_total_info = f" | Total: {turn_total_time:.3f}s"
-            
-            # Screenshot time
-            screenshot_info = ""
-            if self.current_turn.get("screenshot_time") is not None:
-                screenshot_time = self.current_turn["screenshot_time"]
-                screenshot_info = f" | Screenshot: {screenshot_time:.3f}s"
-            
-            # Model inference time
-            model_info = ""
-            if self.current_turn.get("model_inference_time") is not None:
-                inference_time = self.current_turn["model_inference_time"]
-                parse_success = self.current_turn.get("parse_success", False)
-                response_text = self.current_turn.get("model_response", "")
-                model_info = f" | Model inference: {len(response_text)} chars, parse={'✓' if parse_success else '✗'}, time={inference_time:.3f}s"
-            
-            # Tool execution time (with coord_time and exec_time breakdown)
-            tool_info = ""
-            if total_tool_exec_time > 0:
-                coord_time = self.current_turn.get("total_tool_coord_time", 0.0)
-                exec_time = self.current_turn.get("total_tool_exec_time", 0.0) + self.current_turn.get("total_tool_time", 0.0)
-                tool_info = f" | Tool execution: coord={coord_time:.3f}s, exec={exec_time:.3f}s, total={total_tool_exec_time:.3f}s"
-            
-            msg = f"{turn_info}{turn_total_info}{screenshot_info}{model_info}{tool_info}"
-            padding = max(0, 116 - len(msg))
-            self.log(f"│ {msg}" + " " * padding + "│")
-            
-            # Close the turn block
-            self.log("└" + "─" * 118 + "┘")
-            
-            # Log Model Response in a new box
-            if self.current_turn.get("model_response"):
-                response_text = self.current_turn["model_response"]
-                # Create a new box for response text
-                self.log("")
-                self.log("┌" + "─" * 118 + "┐")
-                self.log("│ Model Response:" + " " * 102 + "│")
-                self.log("├" + "─" * 118 + "┤")
-                # Process response text line by line
-                max_line_length = 116  # Account for "│ " prefix and " │" suffix (2 + 2 = 4, 118 - 4 = 114, but we use 116 for consistency)
-                lines = response_text.split("\n")
-                for line in lines:
-                    # Handle empty lines
-                    if not line:
-                        self.log("│" + " " * 116 + "│")
-                    else:
-                        # If line is too long, wrap it
-                        while len(line) > max_line_length:
-                            chunk = line[:max_line_length]
-                            padding = max(0, 116 - len(chunk))
-                            self.log(f"│ {chunk}" + " " * padding + "│")
-                            line = line[max_line_length:]
-                        # Log the remaining part (or the whole line if it fits)
-                        padding = max(0, 116 - len(line))
-                        self.log(f"│ {line}" + " " * padding + "│")
-                self.log("└" + "─" * 118 + "┘")
-            
-            # Log tool parsing and execution details
-            if self.current_turn.get("tool_calls") or self.current_turn.get("action_results") or self.current_turn.get("tool_executions"):
-                self.log("")
-                self.log("┌" + "─" * 118 + "┐")
-                
-                # Log tool call parsing info
-                if self.current_turn.get("tool_calls"):
-                    tool_calls = self.current_turn["tool_calls"]
-                    parse_time = self.current_turn.get("tool_call_parse_time", 0.0)
-                    parser_type = self.current_turn.get("tool_call_parser_type", "renderer")
-                    num_tools = len(tool_calls)
-                    msg = f"[Turn {turn_num}] Tool calls: {num_tools} found via {parser_type}, parse_time={parse_time:.3f}s"
-                    padding = max(0, 116 - len(msg))
-                    self.log(f"│ {msg}" + " " * padding + "│")
-                    self.log("├" + "─" * 118 + "┤")
-                
-                # Log action execution details
-                if self.current_turn.get("action_results"):
-                    for action_info in self.current_turn["action_results"]:
-                        action_type = action_info["action_type"]
-                        target_desc = action_info.get("target")
-                        start_target = action_info.get("start_target")
-                        end_target = action_info.get("end_target")
-                        coordinates = action_info.get("coordinates")
-                        coord_time = action_info.get("coord_time")
-                        exec_time = action_info.get("exec_time")
-                        total_time = action_info.get("total_time")
-                        
-                        colored_action_type = self._color(action_type, "CYAN")
-                        if action_type == "swipe":
-                            line1 = (
-                                f"Action: {colored_action_type} | "
-                                f"start={start_target or 'N/A'} | "
-                                f"end={end_target or 'N/A'}"
-                            )
-                            if coordinates:
-                                start_coords = coordinates.get("start", {})
-                                end_coords = coordinates.get("end", {})
-                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                                colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
-                                colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
-                                line2 = (
-                                    f"  ↳ Coords: start={colored_start_coords} | "
-                                    f"end={colored_end_coords} | "
-                                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-                                )
-                            else:
-                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-                        else:
-                            line1 = f"Action: {colored_action_type}"
-                            if target_desc:
-                                line1 += f" | target={target_desc}"
-                            if coordinates:
-                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                                colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
-                                line2 = (
-                                    f"  ↳ Coords: {colored_coords} | "
-                                    f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-                                )
-                            else:
-                                coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
-                                exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                                total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                                line2 = f"  ↳ coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
-                        
-                        # Calculate padding (accounting for ANSI color codes)
-                        line1_stripped = re.sub(r'\033\[[0-9;]*m', '', line1)
-                        padding1 = max(0, 116 - len(line1_stripped))
-                        self.log(f"│ {line1}" + " " * padding1 + "│")
-                        
-                        line2_stripped = re.sub(r'\033\[[0-9;]*m', '', line2)
-                        padding2 = max(0, 116 - len(line2_stripped))
-                        self.log(f"│ {line2}" + " " * padding2 + "│")
-                
-                # Log tool execution details (non-perform_action tools)
-                if self.current_turn.get("tool_executions"):
-                    for tool_exec in self.current_turn["tool_executions"]:
-                        tool_idx = tool_exec["tool_idx"]
-                        total_tools = tool_exec["total_tools"]
-                        tool_name = tool_exec["tool_name"]
-                        tool_args = tool_exec["tool_args"]
-                        result = tool_exec.get("result")
-                        exec_time = tool_exec.get("exec_time")
-                        error = tool_exec.get("error")
-                        
-                        # Skip perform_action as it's already logged above
-                        if tool_name == "perform_action":
-                            continue
-                        
-                        status = "✓" if error is None else "✗"
-                        exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
-                        summary = f"[Turn {turn_num}] Tool {tool_idx}/{total_tools}: {tool_name} {status} in {exec_time_str}"
-                        padding = max(0, 116 - len(summary))
-                        self.log(f"│ {summary}" + " " * padding + "│")
-                        
-                        # Show details on second line
-                        args_summary = json.dumps(tool_args, separators=(',', ':'))[:100]
-                        if len(args_summary) >= 100:
-                            args_summary += "..."
-                        details = f"  ↳ args={args_summary}"
-                        if result:
-                            result_summary = json.dumps(result, default=str, separators=(',', ':'))[:100]
-                            if len(result_summary) >= 100:
-                                result_summary += "..."
-                            details += f" | result={result_summary}"
-                        if error:
-                            details += f" | error={error}"
-                        padding = max(0, 116 - len(details))
-                        self.log(f"│ {details}" + " " * padding + "│")
-                
-                self.log("└" + "─" * 118 + "┘")
-            
-            self.trajectory_data["turns"].append(self.current_turn)
-            self.current_turn = None
+        """End logging for current turn with new unified table format."""
+        if not self.current_turn:
+            return
+        
+        self.current_turn["end_time"] = time.time()
+        self.current_turn["duration"] = (
+            self.current_turn["end_time"] - self.current_turn["start_time"]
+        )
+        
+        # Build turn header line (first row of table)
+        header_line = self._format_turn_header()
+        self.log(self._table_row(header_line))
+        
+        # Add separator
+        self.log(self._table_separator())
+        
+        # Log model response (second row of table, without "Model Response:" title)
+        if self.current_turn.get("model_response"):
+            response_text = self.current_turn["model_response"]
+            wrapped_lines = self._wrap_text_for_table(response_text)
+            for line in wrapped_lines:
+                self.log(self._table_row(line))
+        else:
+            # Empty line if no response
+            self.log(self._table_row(""))
+        
+        # Add separator before action details
+        if self.current_turn.get("action_results"):
+            self.log(self._table_separator())
+        
+        # Log action execution details (third row of table)
+        if self.current_turn.get("action_results"):
+            for action_info in self.current_turn["action_results"]:
+                line1, line2 = self._format_action_details(action_info)
+                self.log(self._table_row(line1))
+                self.log(self._table_row(line2))
+        
+        # Close the table
+        self.log(self._table_bottom())
+        
+        # Save turn data
+        self.trajectory_data["turns"].append(self.current_turn)
+        self.current_turn = None
     
     def set_summary(self, summary: Dict[str, Any]):
         """Set rollout summary."""

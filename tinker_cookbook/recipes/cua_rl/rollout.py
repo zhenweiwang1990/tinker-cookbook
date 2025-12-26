@@ -455,26 +455,26 @@ async def do_cua_group_rollout(
                     BOLD = "\033[1m"
                     RESET = "\033[0m"
                     if enable_color:
-                    warning_msg = (
-                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
-                        f"{YELLOW}{BOLD}⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️{RESET}\n"
-                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
-                        f"{YELLOW}All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}{RESET}\n"
-                        f"{YELLOW}This means there is no learning signal for policy gradient updates.{RESET}\n"
-                        f"{YELLOW}Consider: increasing group_size, using different tasks, or adjusting the reward structure.{RESET}\n"
-                        f"{YELLOW}{BOLD}{'=' * 80}{RESET}"
-                    )
-                else:
-                    warning_msg = (
-                        f"{'=' * 80}\n"
-                        f"⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️\n"
-                        f"{'=' * 80}\n"
-                        f"All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}\n"
-                        f"This means there is no learning signal for policy gradient updates.\n"
-                        f"Consider: increasing group_size, using different tasks, or adjusting the reward structure.\n"
-                        f"{'=' * 80}"
-                    )
-                logger.warning(warning_msg)
+                        warning_msg = (
+                            f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
+                            f"{YELLOW}{BOLD}⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️{RESET}\n"
+                            f"{YELLOW}{BOLD}{'=' * 80}{RESET}\n"
+                            f"{YELLOW}All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}{RESET}\n"
+                            f"{YELLOW}This means there is no learning signal for policy gradient updates.{RESET}\n"
+                            f"{YELLOW}Consider: increasing group_size, using different tasks, or adjusting the reward structure.{RESET}\n"
+                            f"{YELLOW}{BOLD}{'=' * 80}{RESET}"
+                        )
+                    else:
+                        warning_msg = (
+                            f"{'=' * 80}\n"
+                            f"⚠️  WARNING: NO LEARNING SIGNAL IN THIS GROUP ⚠️\n"
+                            f"{'=' * 80}\n"
+                            f"All {len(trajectories)} environments in this group have the same reward: {reward_value:.1f}\n"
+                            f"This means there is no learning signal for policy gradient updates.\n"
+                            f"Consider: increasing group_size, using different tasks, or adjusting the reward structure.\n"
+                            f"{'=' * 80}"
+                        )
+                    logger.warning(warning_msg)
     
     return TrajectoryGroup(
         trajectories_G=trajectories,

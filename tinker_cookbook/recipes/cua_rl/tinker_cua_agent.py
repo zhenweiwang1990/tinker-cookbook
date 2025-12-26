@@ -227,7 +227,7 @@ class TinkerCuaAgent:
         # Note: Detailed logging is handled in the tool implementation itself
         # This is just a routing function
         
-        if tool_name == "perform_action":
+        if tool_name == "action":
             # Convert dict arguments to TargetElement objects
             target = None
             if arguments.get("target"):
@@ -260,12 +260,12 @@ class TinkerCuaAgent:
             )
             return result
         
-        elif tool_name == "sleep":
+        elif tool_name == "wait":
             duration = arguments.get("duration", 1.0)
             result = await sleep_impl(duration)
             return result
         
-        elif tool_name == "report_task_complete":
+        elif tool_name == "finish":
             self.task_completed = True
             self.task_success = arguments.get("success", False)
             self.result_message = arguments.get("result_message", "Task completed")
@@ -603,6 +603,33 @@ class TinkerCuaAgent:
                         tool_name = tool_call.get("name")
                         tool_args = tool_call.get("arguments", {})
                         
+                        # Validate tool call format
+                        if not tool_name:
+                            error_msg = f"Tool call {tool_call_idx + 1} is missing 'name' field. Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            if self.rollout_logger:
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            else:
+                                logger.warning(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            tool_results.append({
+                                "tool": "unknown",
+                                "error": error_msg,
+                                "status": "parse_error",
+                            })
+                            continue
+                        
+                        if not isinstance(tool_args, dict):
+                            error_msg = f"Tool call {tool_call_idx + 1} has invalid 'arguments' field (expected dict, got {type(tool_args)}). Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            if self.rollout_logger:
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            else:
+                                logger.warning(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            tool_results.append({
+                                "tool": tool_name,
+                                "error": error_msg,
+                                "status": "parse_error",
+                            })
+                            continue
+                        
                         if not self.rollout_logger:
                             logger.info(f"[Turn {turn}] Tool call {tool_call_idx + 1}/{len(tool_calls)}: {tool_name}")
                             logger.info(f"[Turn {turn}] Tool arguments: {json.dumps(tool_args, indent=2)}")
@@ -643,10 +670,8 @@ class TinkerCuaAgent:
                                 
                         except Exception as e:
                             tool_exec_time = time.time() - tool_exec_start
-                            # Tool execution error: mark task as completed and end rollout
-                            self.task_completed = True
-                            self.task_success = False
-                            self.result_message = f"Tool execution error: {str(e)}"
+                            # Tool execution error: return error as tool result, continue rollout
+                            error_msg = f"Tool execution error: {str(e)}"
                             
                             if self.rollout_logger:
                                 self.rollout_logger.log_tool_execution(
@@ -658,16 +683,16 @@ class TinkerCuaAgent:
                                     exec_time=tool_exec_time,
                                     error=str(e),
                                 )
-                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool execution error, ending rollout: {str(e)}")
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool execution error (continuing): {str(e)}")
                             else:
                                 logger.error(f"[Turn {turn}] ✗ Tool '{tool_name}' failed after {tool_exec_time:.3f}s: {e}", exc_info=True)
-                                logger.warning(f"[Turn {turn}] ⚠ Tool execution error, ending rollout: {str(e)}")
+                                logger.warning(f"[Turn {turn}] ⚠ Tool execution error (continuing rollout): {str(e)}")
                             tool_results.append({
                                 "tool": tool_name,
                                 "error": str(e),
+                                "status": "error",
                             })
-                            # Break from tool execution loop since we're ending rollout
-                            break
+                            # Continue to next tool call instead of breaking
                     
                     # Add assistant response and tool results to history
                     assistant_msg = renderers.Message(
@@ -694,28 +719,37 @@ class TinkerCuaAgent:
                             logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
                         break
                 else:
-                    # No tool calls found: mark task as completed and end rollout
-                    self.task_completed = True
-                    self.task_success = False
-                    self.result_message = "No tool calls found in model response"
+                    # No tool calls found: return error message and continue rollout
+                    error_msg = "No tool calls found in model response. Please use the available tools (action, wait, finish) to complete the task."
                     
                     assistant_msg = renderers.Message(
                         role="assistant",
                         content=response_text
                     )
                     self.messages.append(assistant_msg)
-                    if self.rollout_logger:
-                        self.rollout_logger.log(f"[Turn {turn}] ⚠ No tool calls found, ending rollout")
-                    else:
-                        logger.warning(f"[Turn {turn}] ⚠ No tool calls found, ending rollout")
                     
-                    # End turn and break from while loop
+                    # Add error message as user message so model can retry
+                    error_result_msg = renderers.Message(
+                        role="user",
+                        content=error_msg
+                    )
+                    self.messages.append(error_result_msg)
+                    
+                    if self.rollout_logger:
+                        self.rollout_logger.log(f"[Turn {turn}] ⚠ No tool calls found, continuing rollout with error message")
+                    else:
+                        logger.warning(f"[Turn {turn}] ⚠ No tool calls found, continuing rollout with error message")
+                    
+                    # Continue to next iteration instead of breaking
                     turn_time = time.time() - turn_start_time
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
                     if not self.rollout_logger:
                         logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
-                    break
+                    
+                    # Small delay before next turn
+                    await asyncio.sleep(0.5)
+                    continue
                 
                 turn_time = time.time() - turn_start_time
                 if self.rollout_logger:

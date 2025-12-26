@@ -726,20 +726,20 @@ async def perform_action_impl(
 
 async def sleep_impl(duration: float) -> Dict[str, Any]:
     """Wait for a specified amount of time."""
-    logger.info(f"[Tool: sleep] Sleeping for {duration} seconds")
+    logger.info(f"[Tool: wait] Waiting for {duration} seconds")
     sleep_start = time.time()
     await asyncio.sleep(duration)
     sleep_time = time.time() - sleep_start
-    logger.info(f"[Tool: sleep] ✓ Sleep completed in {sleep_time:.3f}s")
-    return {"status": "success", "action": "sleep", "duration": duration}
+    logger.info(f"[Tool: wait] ✓ Wait completed in {sleep_time:.3f}s")
+    return {"status": "success", "action": "wait", "duration": duration}
 
 
 # Tool function schemas for JSON schema generation
 TOOL_SCHEMAS = {
-    "perform_action": {
+    "action": {
         "type": "function",
         "function": {
-            "name": "perform_action",
+            "name": "action",
             "description": "Execute a UI action on the device screen. Use this tool to interact with UI elements.",
             "parameters": {
                 "type": "object",
@@ -799,10 +799,10 @@ TOOL_SCHEMAS = {
             }
         }
     },
-    "sleep": {
+    "wait": {
         "type": "function",
         "function": {
-            "name": "sleep",
+            "name": "wait",
             "description": "Wait for a specified amount of time before taking the next action.",
             "parameters": {
                 "type": "object",
@@ -818,10 +818,10 @@ TOOL_SCHEMAS = {
             }
         }
     },
-    "report_task_complete": {
+    "finish": {
         "type": "function",
         "function": {
-            "name": "report_task_complete",
+            "name": "finish",
             "description": "Report that the task has been completed or cannot be completed.",
             "parameters": {
                 "type": "object",

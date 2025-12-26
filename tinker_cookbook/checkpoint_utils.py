@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, Literal
 
 import tinker
@@ -70,13 +71,69 @@ async def save_checkpoint_async(
         Path to the saved checkpoint
     """
     futures = {}
-    if kind in ["state", "both"]:
-        futures["state"] = await training_client.save_state_async(name)
-    if kind in ["sampler", "both"]:
-        futures["sampler"] = await training_client.save_weights_for_sampler_async(name)
+    try:
+        if kind in ["state", "both"]:
+            futures["state"] = await training_client.save_state_async(name)
+        if kind in ["sampler", "both"]:
+            futures["sampler"] = await training_client.save_weights_for_sampler_async(name)
 
-    results = {k: await v.result_async() for k, v in futures.items()}
-    paths = {k + "_path": v.path for k, v in results.items()}
+        results = {k: await v.result_async() for k, v in futures.items()}
+        paths = {k + "_path": v.path for k, v in results.items()}
+    except tinker.ConflictError as e:
+        # Handle the case where checkpoint already exists (e.g., from a previous run)
+        # For temporary checkpoints (_tmp suffix), we can reuse the existing checkpoint
+        if name.endswith("_tmp"):
+            logger.warning(
+                f"Checkpoint '{name}' already exists. Attempting to reuse existing checkpoint paths."
+            )
+            
+            # First, check if we have a previous checkpoint with this name in checkpoints.jsonl
+            checkpoints = load_checkpoints_file(log_path)
+            existing_checkpoint = next((c for c in checkpoints if c.get("name") == name), None)
+            
+            if existing_checkpoint:
+                # Use the existing checkpoint paths
+                paths = {}
+                if kind in ["state", "both"] and "state_path" in existing_checkpoint:
+                    paths["state_path"] = existing_checkpoint["state_path"]
+                if kind in ["sampler", "both"] and "sampler_path" in existing_checkpoint:
+                    paths["sampler_path"] = existing_checkpoint["sampler_path"]
+                logger.info(f"Reusing existing checkpoint paths: {paths}")
+            else:
+                # Try to extract model identifier from error message and construct path
+                # Error format: "Checkpoint 'name' already exists for model {model_id} in {storage_type}."
+                error_str = str(e)
+                model_match = re.search(r"for model ([^\s]+)", error_str)
+                if model_match:
+                    model_id = model_match.group(1)
+                    paths = {}
+                    if kind in ["state", "both"]:
+                        paths["state_path"] = f"tinker://{model_id}/state/{name}"
+                    if kind in ["sampler", "both"]:
+                        paths["sampler_path"] = f"tinker://{model_id}/sampler_weights/{name}"
+                    logger.info(f"Constructed checkpoint paths from error message: {paths}")
+                else:
+                    # Couldn't extract model ID, re-raise the error
+                    logger.error(
+                        f"ConflictError for temporary checkpoint '{name}'. "
+                        f"Could not extract model identifier from error: {e}. "
+                        f"Please ensure the checkpoint name is unique or delete the existing checkpoint."
+                    )
+                    raise
+            
+            # For temporary checkpoints that already exist, skip writing to checkpoints.jsonl
+            # to avoid duplicate entries
+            if paths:
+                update_scope_context(paths)
+                logger.info(f"Reused existing checkpoints: {paths}")
+                return paths
+            else:
+                # If we couldn't construct paths, re-raise
+                raise
+        else:
+            # For non-temporary checkpoints, re-raise the error
+            raise
+    
     update_scope_context(paths)
     logger.info(f"Saved checkpoints: {paths}")
     full_dict = {"name": name, **loop_state, **paths}

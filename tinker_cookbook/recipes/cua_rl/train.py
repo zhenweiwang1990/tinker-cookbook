@@ -121,7 +121,7 @@ class CLIConfig:
     # Service configuration
     base_url: str | None = None
     
-    behavior_if_log_dir_exists: cli_utils.LogdirBehavior = "ask"
+    behavior_if_log_dir_exists: cli_utils.LogdirBehavior = "resume"
     
     # Async rollout configuration
     max_steps_off_policy: int | None = None
