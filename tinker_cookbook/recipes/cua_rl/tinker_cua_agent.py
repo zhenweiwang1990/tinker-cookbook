@@ -752,10 +752,6 @@ class TinkerCuaAgent:
                             # If task completed, break from tool execution loop
                             # Note: We'll check this again after the loop to break from the while loop
                             if self.task_completed:
-                                if self.rollout_logger:
-                                    self.rollout_logger.log(f"[Turn {turn}] ⚠ Task marked as completed by tool '{tool_name}'")
-                                else:
-                                    logger.info(f"[Turn {turn}] ⚠ Task marked as completed by tool '{tool_name}'")
                                 break
                                 
                         except ValueError as e:

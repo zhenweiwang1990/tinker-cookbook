@@ -62,7 +62,7 @@ class CUATask:
         }
 
 # =============================================================================
-# TRAINING TASKS (80 tasks)
+# TRAINING TASKS (48 tasks)
 # =============================================================================
 
 DEMO_TRAINING_TASKS = [
@@ -80,23 +80,9 @@ DEMO_TRAINING_TASKS = [
         tags=["app", "settings", "launch"],
     ),
 
-    # Task 2: Enable WiFi
+    # Task 2: Set screen brightness to maximum
     CUATask(
-        id="train_02_enable_wifi",
-        name="Enable WiFi",
-        description="Go to Settings and turn on WiFi if it's off.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="wifi_enabled",
-        expected_result=True,
-        tags=["settings", "wifi", "toggle"],
-    ),
-
-    # Task 3: Set screen brightness to maximum
-    CUATask(
-        id="train_03_max_brightness",
+        id="train_02_max_brightness",
         name="Maximum Brightness",
         description="Open Settings and set the screen brightness to maximum.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -108,23 +94,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "brightness"],
     ),
 
-    # Task 4: Open Chrome browser
+    # Task 3: Enable Airplane Mode
     CUATask(
-        id="train_04_open_chrome",
-        name="Open Chrome",
-        description="Open the Chrome browser app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=5,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.chrome",
-        tags=["app", "browser", "chrome"],
-    ),
-
-    # Task 5: Enable Airplane Mode
-    CUATask(
-        id="train_05_airplane_mode",
+        id="train_03_airplane_mode",
         name="Enable Airplane Mode",
         description="Go to Settings and turn on Airplane Mode.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -136,51 +108,23 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "network", "airplane"],
     ),
 
-    # Task 6: Check battery level (open Battery page)
+    # Task 4: Check brightness level
     CUATask(
-        id="train_06_check_battery",
-        name="Check Battery Level",
-        description="Open Settings and navigate to the Battery section to check the current battery level.",
+        id="train_04_check_brightness",
+        name="Check Brightness Level",
+        description="Open Settings and navigate to the Brightness section to check the current brightness level.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
         max_steps=8,
         validation_type="state",
-        validation_query="current_activity",
-        expected_result="battery",
+        validation_query="result_message_contains",
+        expected_result="83",
         tags=["settings", "battery", "info"],
     ),
 
-    # Task 7: Go to home screen
+    # Task 5: Disable WiFi
     CUATask(
-        id="train_07_go_home",
-        name="Go to Home Screen",
-        description="Press the home button to return to the home screen.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.NAVIGATION,
-        max_steps=3,
-        validation_type="state",
-        validation_query="is_home_screen",
-        expected_result=True,
-        tags=["navigation", "home"],
-    ),
-
-    # Task 8: Enable Bluetooth
-    CUATask(
-        id="train_08_enable_bluetooth",
-        name="Enable Bluetooth",
-        description="Go to Settings and turn on Bluetooth if it's off.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="bluetooth_enabled",
-        expected_result=True,
-        tags=["settings", "bluetooth", "toggle"],
-    ),
-
-    # Task 9: Disable WiFi
-    CUATask(
-        id="train_09_disable_wifi",
+        id="train_05_disable_wifi",
         name="Disable WiFi",
         description="Go to Settings and turn off WiFi if it's on.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -192,23 +136,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "wifi", "toggle", "off"],
     ),
 
-    # Task 10: Disable Bluetooth
+    # Task 6: Set screen brightness to minimum
     CUATask(
-        id="train_10_disable_bluetooth",
-        name="Disable Bluetooth",
-        description="Go to Settings and turn off Bluetooth if it's on.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="bluetooth_enabled",
-        expected_result=False,
-        tags=["settings", "bluetooth", "toggle", "off"],
-    ),
-
-    # Task 11: Set screen brightness to minimum
-    CUATask(
-        id="train_11_min_brightness",
+        id="train_06_min_brightness",
         name="Minimum Brightness",
         description="Open Settings and set the screen brightness to the minimum level.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -220,65 +150,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "brightness", "low"],
     ),
 
-    # Task 12: Open WiFi settings page
+    # Task 7: Increase media volume to maximum
     CUATask(
-        id="train_12_open_wifi_settings",
-        name="Open WiFi Settings",
-        description="Open Settings and navigate to the WiFi settings page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="wifi_settings",
-        tags=["settings", "wifi", "navigation"],
-    ),
-
-    # Task 13: Open Bluetooth settings page
-    CUATask(
-        id="train_13_open_bluetooth_settings",
-        name="Open Bluetooth Settings",
-        description="Open Settings and navigate to the Bluetooth settings page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="bluetooth_settings",
-        tags=["settings", "bluetooth", "navigation"],
-    ),
-
-    # Task 14: Open Display settings page
-    CUATask(
-        id="train_14_open_display_settings",
-        name="Open Display Settings",
-        description="Open Settings and navigate to the Display settings page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="display_settings",
-        tags=["settings", "display", "navigation"],
-    ),
-
-    # Task 15: Open Sound settings page
-    CUATask(
-        id="train_15_open_sound_settings",
-        name="Open Sound Settings",
-        description="Open Settings and navigate to the Sound settings page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=8,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="sound_settings",
-        tags=["settings", "sound", "navigation"],
-    ),
-
-    # Task 16: Increase media volume to maximum
-    CUATask(
-        id="train_16_max_media_volume",
+        id="train_07_max_media_volume",
         name="Max Media Volume",
         description="Open Settings or use volume controls to set the media volume to maximum.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -290,9 +164,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "sound", "volume", "media"],
     ),
 
-    # Task 17: Mute media volume
+    # Task 8: Mute media volume
     CUATask(
-        id="train_17_mute_media_volume",
+        id="train_08_mute_media_volume",
         name="Mute Media Volume",
         description="Open Settings or use volume controls to mute the media volume (set to 0).",
         difficulty=TaskDifficulty.MEDIUM,
@@ -304,233 +178,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "sound", "volume", "media", "mute"],
     ),
 
-    # Task 18: Enable auto-rotate
+    # Task 9: Clear all notifications
     CUATask(
-        id="train_18_enable_auto_rotate",
-        name="Enable Auto-Rotate",
-        description="Go to Display settings or quick settings and enable screen auto-rotate.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="auto_rotate_enabled",
-        expected_result=True,
-        tags=["settings", "display", "rotation"],
-    ),
-
-    # Task 19: Disable auto-rotate
-    CUATask(
-        id="train_19_disable_auto_rotate",
-        name="Disable Auto-Rotate",
-        description="Go to Display settings or quick settings and disable screen auto-rotate.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="auto_rotate_enabled",
-        expected_result=False,
-        tags=["settings", "display", "rotation", "off"],
-    ),
-
-    # Task 20: Open recent apps overview
-    CUATask(
-        id="train_20_open_recents",
-        name="Open Recent Apps",
-        description="Open the recent apps overview screen.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.NAVIGATION,
-        max_steps=4,
-        validation_type="state",
-        validation_query="is_recents_screen",
-        expected_result=True,
-        tags=["navigation", "recents"],
-    ),
-
-    # Task 21: Switch from one app back to Settings
-    CUATask(
-        id="train_21_switch_to_settings",
-        name="Switch to Settings from Recents",
-        description="From the recent apps overview, select and open the Settings app.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.NAVIGATION,
-        max_steps=7,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.settings",
-        tags=["navigation", "recents", "multitask"],
-    ),
-
-    # Task 22: Open Phone dialer
-    CUATask(
-        id="train_22_open_dialer",
-        name="Open Phone Dialer",
-        description="From the home screen, open the Phone dialer app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=5,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.dialer",
-        tags=["app", "phone", "dialer"],
-    ),
-
-    # Task 23: Open Messages app
-    CUATask(
-        id="train_23_open_messages",
-        name="Open Messages",
-        description="From the home screen, open the default Messages app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=5,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.messaging",
-        tags=["app", "messages", "sms"],
-    ),
-
-    # Task 24: Open Camera app
-    CUATask(
-        id="train_24_open_camera",
-        name="Open Camera",
-        description="From the home screen, open the Camera app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=5,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.camera",
-        tags=["app", "camera"],
-    ),
-
-    # Task 25: Open Gallery/Photos app
-    CUATask(
-        id="train_25_open_gallery",
-        name="Open Gallery",
-        description="From the home screen, open the Gallery or Photos app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=6,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.gallery",
-        tags=["app", "gallery", "photos"],
-    ),
-
-    # Task 26: Open app drawer and find Settings icon
-    CUATask(
-        id="train_26_find_settings_in_drawer",
-        name="Find Settings in App Drawer",
-        description="Open the app drawer and scroll if needed to locate the Settings app icon.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.NAVIGATION,
-        max_steps=8,
-        validation_type="state",
-        validation_query="found_icon",
-        expected_result="com.android.settings",
-        tags=["navigation", "launcher", "search"],
-    ),
-
-    # Task 27: Search app by name in launcher and open it
-    CUATask(
-        id="train_27_search_app_in_launcher",
-        name="Search App in Launcher",
-        description="Use the launcher search to search for the Chrome app by name and open it.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.NAVIGATION,
-        max_steps=9,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.chrome",
-        tags=["navigation", "launcher", "search", "chrome"],
-    ),
-
-    # Task 28: Open quick settings panel
-    CUATask(
-        id="train_28_open_quick_settings",
-        name="Open Quick Settings",
-        description="Swipe down from the top of the screen to open the quick settings panel.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.NAVIGATION,
-        max_steps=4,
-        validation_type="state",
-        validation_query="is_quick_settings_open",
-        expected_result=True,
-        tags=["navigation", "system", "quick_settings"],
-    ),
-
-    # Task 29: Toggle WiFi from quick settings
-    CUATask(
-        id="train_29_toggle_wifi_quick_settings",
-        name="Toggle WiFi from Quick Settings",
-        description="Use the quick settings panel to toggle the WiFi state (turn it on if off).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=7,
-        validation_type="state",
-        validation_query="wifi_enabled",
-        expected_result=True,
-        tags=["settings", "wifi", "quick_settings"],
-    ),
-
-    # Task 30: Toggle Bluetooth from quick settings
-    CUATask(
-        id="train_30_toggle_bluetooth_quick_settings",
-        name="Toggle Bluetooth from Quick Settings",
-        description="Use the quick settings panel to toggle the Bluetooth state (turn it on if off).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=7,
-        validation_type="state",
-        validation_query="bluetooth_enabled",
-        expected_result=True,
-        tags=["settings", "bluetooth", "quick_settings"],
-    ),
-
-    # Task 31: Enable Do Not Disturb from quick settings
-    CUATask(
-        id="train_31_enable_dnd_quick_settings",
-        name="Enable Do Not Disturb from Quick Settings",
-        description="Use the quick settings panel to enable Do Not Disturb mode.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=7,
-        validation_type="state",
-        validation_query="dnd_enabled",
-        expected_result=True,
-        tags=["settings", "notifications", "dnd", "quick_settings"],
-    ),
-
-    # Task 32: Disable Do Not Disturb from quick settings
-    CUATask(
-        id="train_32_disable_dnd_quick_settings",
-        name="Disable Do Not Disturb from Quick Settings",
-        description="Use the quick settings panel to disable Do Not Disturb mode.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=7,
-        validation_type="state",
-        validation_query="dnd_enabled",
-        expected_result=False,
-        tags=["settings", "notifications", "dnd", "quick_settings", "off"],
-    ),
-
-    # Task 33: Open Notifications shade only
-    CUATask(
-        id="train_33_open_notifications",
-        name="Open Notifications",
-        description="Swipe down from the top of the screen to open the notifications shade (not full quick settings).",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.NAVIGATION,
-        max_steps=4,
-        validation_type="state",
-        validation_query="is_notifications_open",
-        expected_result=True,
-        tags=["navigation", "notifications"],
-    ),
-
-    # Task 34: Clear all notifications
-    CUATask(
-        id="train_34_clear_notifications",
+        id="train_09_clear_notifications",
         name="Clear All Notifications",
         description="Open the notifications shade and clear all existing notifications.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -542,9 +192,9 @@ DEMO_TRAINING_TASKS = [
         tags=["system", "notifications", "clear"],
     ),
 
-    # Task 35: Change screen timeout to 30 seconds
+    # Task 10: Change screen timeout to 30 seconds
     CUATask(
-        id="train_35_timeout_30s",
+        id="train_10_timeout_30s",
         name="Change Screen Timeout to 30s",
         description="Open Settings, navigate to Display, and set the screen timeout to 30 seconds.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -556,9 +206,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "timeout"],
     ),
 
-    # Task 36: Change screen timeout to 1 minute
+    # Task 11: Change screen timeout to 1 minute
     CUATask(
-        id="train_36_timeout_1min",
+        id="train_11_timeout_1min",
         name="Change Screen Timeout to 1 Minute",
         description="Open Settings, navigate to Display, and set the screen timeout to 1 minute.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -570,9 +220,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "timeout"],
     ),
 
-    # Task 37: Change screen timeout to 2 minutes
+    # Task 12: Change screen timeout to 2 minutes
     CUATask(
-        id="train_37_timeout_2min",
+        id="train_12_timeout_2min",
         name="Change Screen Timeout to 2 Minutes",
         description="Open Settings, navigate to Display, and set the screen timeout to 2 minutes.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -584,51 +234,10 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "timeout"],
     ),
 
-    # Task 38: Open Language & Input settings
-    CUATask(
-        id="train_38_open_language_input",
-        name="Open Language & Input Settings",
-        description="Open Settings and navigate to the Language & Input (or System > Languages & input) page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="language_input_settings",
-        tags=["settings", "language", "input"],
-    ),
 
-    # Task 39: Open Date & Time settings
+    # Task 13: Disable automatic date & time
     CUATask(
-        id="train_39_open_date_time",
-        name="Open Date & Time Settings",
-        description="Open Settings and navigate to the Date & Time settings page.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="date_time_settings",
-        tags=["settings", "system", "time"],
-    ),
-
-    # Task 40: Enable automatic date & time
-    CUATask(
-        id="train_40_enable_auto_time",
-        name="Enable Automatic Date & Time",
-        description="In Date & Time settings, enable automatic date & time (network-provided time).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="auto_time_enabled",
-        expected_result=True,
-        tags=["settings", "system", "time", "auto"],
-    ),
-
-    # Task 41: Disable automatic date & time
-    CUATask(
-        id="train_41_disable_auto_time",
+        id="train_13_disable_auto_time",
         name="Disable Automatic Date & Time",
         description="In Date & Time settings, disable automatic date & time.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -640,9 +249,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "system", "time", "manual"],
     ),
 
-    # Task 42: Enable battery saver
+    # Task 14: Enable battery saver
     CUATask(
-        id="train_42_enable_battery_saver",
+        id="train_14_enable_battery_saver",
         name="Enable Battery Saver",
         description="Open Settings, go to Battery, and enable Battery Saver mode.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -654,65 +263,9 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "battery", "saver"],
     ),
 
-    # Task 43: Disable battery saver
+    # Task 15: Clear Chrome app cache only
     CUATask(
-        id="train_43_disable_battery_saver",
-        name="Disable Battery Saver",
-        description="Open Settings, go to Battery, and disable Battery Saver mode.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="battery_saver_enabled",
-        expected_result=False,
-        tags=["settings", "battery", "saver", "off"],
-    ),
-
-    # Task 44: Check storage usage
-    CUATask(
-        id="train_44_open_storage_settings",
-        name="Open Storage Settings",
-        description="Open Settings and navigate to the Storage settings page to view device storage usage.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="storage_settings",
-        tags=["settings", "storage", "info"],
-    ),
-
-    # Task 45: Open App Info for Chrome
-    CUATask(
-        id="train_45_open_chrome_app_info",
-        name="Open Chrome App Info",
-        description="From Settings > Apps (or long-press), open the App Info page for Chrome.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.APP,
-        max_steps=14,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="app_info_com.android.chrome",
-        tags=["settings", "apps", "chrome", "info"],
-    ),
-
-    # Task 46: Force stop Chrome from App Info
-    CUATask(
-        id="train_46_force_stop_chrome",
-        name="Force Stop Chrome",
-        description="Navigate to Chrome's App Info page and tap Force Stop to stop the app.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_running_com.android.chrome",
-        expected_result=False,
-        tags=["settings", "apps", "chrome", "force_stop"],
-    ),
-
-    # Task 47: Clear Chrome app cache only
-    CUATask(
-        id="train_47_clear_chrome_cache",
+        id="train_15_clear_chrome_cache",
         name="Clear Chrome App Cache",
         description="Navigate to Chrome's App Info > Storage and clear only the app cache (not data).",
         difficulty=TaskDifficulty.HARD,
@@ -724,191 +277,39 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "apps", "chrome", "cache"],
     ),
 
-    # Task 48: Go to primary home page
+
+    # Task 16: Clear Facebook app cache only
     CUATask(
-        id="train_48_go_to_primary_home_page",
-        name="Go to Primary Home Page",
-        description="From any secondary home screen page, navigate back to the primary (center) home screen.",
+        id="train_16_clear_facebook_cache",
+        name="Clear Facebook App Cache",
+        description="Navigate to Facebook's App Info > Storage and clear only the app cache (not data).",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=18,
+        validation_type="state",
+        validation_query="facebook_cache_cleared",
+        expected_result=True,
+        tags=["settings", "apps", "facebook", "cache"],
+    ),
+
+
+    # Task 17: Change system language
+    CUATask(
+        id="train_17_change_system_language",
+        name="Change System Language to Chinese",
+        description="Open Language & input settings and change the system language to Chinese.",
         difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.NAVIGATION,
-        max_steps=6,
-        validation_type="state",
-        validation_query="is_primary_home",
-        expected_result=True,
-        tags=["navigation", "launcher", "home"],
-    ),
-
-    # Task 49: Open a website in Chrome
-    CUATask(
-        id="train_49_open_website_chrome",
-        name="Open Website in Chrome",
-        description="Open Chrome, tap the address bar, input a URL (e.g., example.com), and navigate to it.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=18,
-        validation_type="state",
-        validation_query="current_url_domain",
-        expected_result="example.com",
-        tags=["browser", "chrome", "input", "url"],
-    ),
-
-    # Task 50: Search in Chrome using search bar
-    CUATask(
-        id="train_50_search_in_chrome",
-        name="Search in Chrome",
-        description="Open Chrome and perform a web search for the text 'Android test'.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=18,
-        validation_type="state",
-        validation_query="search_query",
-        expected_result="Android test",
-        tags=["browser", "chrome", "input", "search"],
-    ),
-
-    # Task 51: Compose a new SMS (no need to send)
-    CUATask(
-        id="train_51_compose_sms",
-        name="Compose SMS",
-        description="Open the Messages app, start composing a new message, and type some text in the message field.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=18,
-        validation_type="state",
-        validation_query="is_composing_message",
-        expected_result=True,
-        tags=["messages", "sms", "input"],
-    ),
-
-    # Task 52: Add a contact from Phone app
-    CUATask(
-        id="train_52_add_contact_from_phone",
-        name="Add Contact from Phone App",
-        description="Open the Phone app, go to Contacts or add a new contact with a name and phone number (dummy data).",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=20,
-        validation_type="state",
-        validation_query="last_created_contact",
-        expected_result="test_contact",
-        tags=["contacts", "phone", "input"],
-    ),
-
-    # Task 53: Open Contacts app
-    CUATask(
-        id="train_53_open_contacts",
-        name="Open Contacts",
-        description="From the home screen, open the Contacts app.",
-        difficulty=TaskDifficulty.EASY,
-        category=TaskCategory.APP,
-        max_steps=6,
-        validation_type="state",
-        validation_query="current_app",
-        expected_result="com.android.contacts",
-        tags=["app", "contacts"],
-    ),
-
-    # Task 54: Search a contact in Contacts app
-    CUATask(
-        id="train_54_search_contact",
-        name="Search Contact",
-        description="Open Contacts and use the search field to search for a contact name (e.g., 'test').",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=18,
-        validation_type="state",
-        validation_query="last_contact_search_query",
-        expected_result="test",
-        tags=["contacts", "search", "input"],
-    ),
-
-    # Task 55: Open Screen Lock settings
-    CUATask(
-        id="train_55_open_screen_lock_settings",
-        name="Open Screen Lock Settings",
-        description="Open Settings, go to Security (or Security & privacy), and open the Screen lock settings page.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=18,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="screen_lock_settings",
-        tags=["settings", "security", "lock"],
-    ),
-
-    # Task 56: Enable location/GPS
-    CUATask(
-        id="train_56_enable_location",
-        name="Enable Location",
-        description="Open Settings or quick settings and enable Location (GPS).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="location_enabled",
-        expected_result=True,
-        tags=["settings", "location", "gps"],
-    ),
-
-    # Task 57: Disable location/GPS
-    CUATask(
-        id="train_57_disable_location",
-        name="Disable Location",
-        description="Open Settings or quick settings and disable Location (GPS).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="location_enabled",
-        expected_result=False,
-        tags=["settings", "location", "gps", "off"],
-    ),
-
-    # Task 58: Connect to a known WiFi network
-    CUATask(
-        id="train_58_connect_known_wifi",
-        name="Connect to Known WiFi",
-        description="Open WiFi settings and connect to an already-saved WiFi network from the list.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="wifi_connected",
-        expected_result=True,
-        tags=["settings", "wifi", "connect"],
-    ),
-
-    # Task 59: Forget a saved WiFi network
-    CUATask(
-        id="train_59_forget_wifi_network",
-        name="Forget WiFi Network",
-        description="Open WiFi settings, open a saved network details, and forget/remove the network.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="wifi_network_forgotten",
-        expected_result=True,
-        tags=["settings", "wifi", "forget"],
-    ),
-
-    # Task 60: Change system language
-    CUATask(
-        id="train_60_change_system_language",
-        name="Change System Language",
-        description="Open Language & input settings and change the system language to another language (e.g., English if not already).",
-        difficulty=TaskDifficulty.HARD,
         category=TaskCategory.SETTINGS,
         max_steps=22,
         validation_type="state",
         validation_query="system_language",
-        expected_result="en",
+        expected_result="zh",
         tags=["settings", "language", "system"],
     ),
 
-    # Task 61: Enable dark theme
+    # Task 18: Enable dark theme
     CUATask(
-        id="train_61_enable_dark_theme",
+        id="train_18_enable_dark_theme",
         name="Enable Dark Theme",
         description="Open Display settings or quick settings and enable the system dark theme.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -920,275 +321,430 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "theme", "dark"],
     ),
 
-    # Task 62: Disable dark theme
+    # Task 19: Uninstall Instagram
     CUATask(
-        id="train_62_disable_dark_theme",
-        name="Disable Dark Theme",
-        description="Open Display settings or quick settings and disable the system dark theme (switch to light).",
+        id="train_19_uninstall_instagram",
+        name="Uninstall Instagram",
+        description="Uninstall the Instagram app from the device.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="state",
+        validation_query="app_installed",
+        expected_result={"package": "com.instagram.android", "installed": False},
+        tags=["system", "uninstall", "instagram"],
+    ),
+
+    # Task 20: Disable Facebook contacts permission
+    CUATask(
+        id="train_20_disable_facebook_contacts",
+        name="Disable Facebook Contacts Permission",
+        description="Go to Facebook app settings and disable the Contacts permission.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=16,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.facebook.katana", "permission": "android.permission.READ_CONTACTS", "granted": False},
+        tags=["settings", "apps", "facebook", "permissions", "contacts"],
+    ),
+
+    # Task 21: Create folder in Downloads
+    CUATask(
+        id="train_21_create_downloads_folder",
+        name="Create Folder in Downloads",
+        description="Create a new folder named 'abc' in the Downloads directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Download/abc", "exists": True},
+        tags=["system", "file", "folder", "downloads"],
+    ),
+
+    # Task 22: Download logo from gbox.ai
+    CUATask(
+        id="train_22_download_gbox_logo",
+        name="Download GBOX Logo",
+        description="Navigate to gbox.ai website and download the logo file. Verify the downloaded file is named logo.svg.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.INPUT,
+        max_steps=25,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Download/logo.svg", "exists": True},
+        tags=["browser", "download", "file", "gbox"],
+    ),
+
+    # Task 23: Check GBOX Keyboard storage size
+    CUATask(
+        id="train_23_check_gbox_keyboard_storage",
+        name="Check GBOX Keyboard Storage Size",
+        description="Check how much storage space the GBOX Keyboard app is using. You must report the exact storage size (e.g., '73.73KB') in your finish message. The correct answer is 73.73KB.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="api",
+        validation_query="finish_message_contains",
+        expected_result="73.73KB",
+        tags=["settings", "apps", "storage", "gbox"],
+    ),
+
+    # Task 24: Disable Instagram location permission
+    CUATask(
+        id="train_24_disable_instagram_location",
+        name="Disable Instagram Location Permission",
+        description="Go to Instagram app settings and disable the Location permission.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=16,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.instagram.android", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
+        tags=["settings", "apps", "instagram", "permissions", "location"],
+    ),
+
+    # Task 25: Create folder in Documents
+    CUATask(
+        id="train_25_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'test' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/test", "exists": True},
+        tags=["system", "file", "folder", "documents"],
+    ),
+
+    # Task 26: Check Chrome storage size
+    CUATask(
+        id="train_26_check_chrome_storage",
+        name="Check Chrome Storage Size",
+        description="Check how much storage space the Chrome app is using. You must report the exact storage size (include units like KB, MB, or GB) in your finish message.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="api",
+        validation_query="finish_message_contains_size",
+        expected_result="storage_size_reported",
+        tags=["settings", "apps", "storage", "chrome"],
+    ),
+
+    # Task 27: Enable Instagram camera permission
+    CUATask(
+        id="train_27_enable_instagram_camera",
+        name="Enable Instagram Camera Permission",
+        description="Go to Instagram app settings and enable the Camera permission if it's disabled.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=14,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.instagram.android", "permission": "android.permission.CAMERA", "granted": True},
+        tags=["settings", "apps", "instagram", "permissions", "camera"],
+    ),
+
+    # Task 28: Clear Instagram cache
+    CUATask(
+        id="train_28_clear_instagram_cache",
+        name="Clear Instagram App Cache",
+        description="Navigate to Instagram's App Info > Storage and clear only the app cache.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=18,
+        validation_type="state",
+        validation_query="instagram_cache_cleared",
+        expected_result=True,
+        tags=["settings", "apps", "instagram", "cache"],
+    ),
+
+    # Task 29: Create folder in Pictures
+    CUATask(
+        id="train_29_create_pictures_folder",
+        name="Create Folder in Pictures",
+        description="Create a new folder named 'screenshots' in the Pictures directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Pictures/screenshots", "exists": True},
+        tags=["system", "file", "folder", "pictures"],
+    ),
+
+    # Task 30: Uninstall Facebook
+    CUATask(
+        id="train_30_uninstall_facebook",
+        name="Uninstall Facebook",
+        description="Uninstall the Facebook app from the device.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="state",
+        validation_query="app_installed",
+        expected_result={"package": "com.facebook.katana", "installed": False},
+        tags=["system", "uninstall", "facebook"],
+    ),
+
+    # Task 31: Disable Chrome location permission
+    CUATask(
+        id="train_31_disable_chrome_location",
+        name="Disable Chrome Location Permission",
+        description="Go to Chrome app settings and disable the Location permission.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=16,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.android.chrome", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
+        tags=["settings", "apps", "chrome", "permissions", "location"],
+    ),
+
+    # Task 32: Check Instagram storage size
+    CUATask(
+        id="train_32_check_instagram_storage",
+        name="Check Instagram Storage Size",
+        description="Check how much storage space the Instagram app is using. You must report the exact storage size (include units like KB, MB, or GB) in your finish message.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="api",
+        validation_query="finish_message_contains_size",
+        expected_result="storage_size_reported",
+        tags=["settings", "apps", "storage", "instagram"],
+    ),
+
+    # Task 33: Create folder in Documents
+    CUATask(
+        id="train_33_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'new_folder' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/new_folder", "exists": True},
+        tags=["system", "file", "folder", "documents"],
+    ),
+
+    # Task 34: Change media volume to 50%
+    CUATask(
+        id="train_34_media_volume_50",
+        name="Set Media Volume to 50%",
+        description="Open Sound settings or use volume controls to set media volume to 50%.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SETTINGS,
+        max_steps=10,
+        validation_type="state",
+        validation_query="media_volume",
+        expected_result=50,
+        tags=["settings", "sound", "volume", "media"],
+    ),
+
+    # Task 35: Change screen timeout to 5 minutes
+    CUATask(
+        id="train_35_timeout_5min",
+        name="Change Screen Timeout to 5 Minutes",
+        description="Open Settings, navigate to Display, and set the screen timeout to 5 minutes.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
         max_steps=12,
         validation_type="state",
-        validation_query="dark_theme_enabled",
-        expected_result=False,
-        tags=["settings", "display", "theme", "light"],
+        validation_query="screen_timeout",
+        expected_result=300000,
+        tags=["settings", "display", "timeout"],
     ),
 
-    # Task 63: Take a screenshot
+    # Task 36: Change screen timeout to 10 minutes
     CUATask(
-        id="train_63_take_screenshot",
-        name="Take Screenshot",
-        description="Trigger a screenshot capture using the device controls or UI, and confirm that a new screenshot exists.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=15,
-        validation_type="state",
-        validation_query="last_screenshot_taken",
-        expected_result=True,
-        tags=["system", "screenshot"],
-    ),
-
-    # Task 64: Open recent screenshot in Gallery
-    CUATask(
-        id="train_64_open_last_screenshot",
-        name="Open Last Screenshot",
-        description="Open the Gallery/Photos app and open the most recent screenshot image.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.NAVIGATION,
-        max_steps=18,
-        validation_type="state",
-        validation_query="current_media_type",
-        expected_result="image_screenshot",
-        tags=["gallery", "photos", "screenshot"],
-    ),
-
-    # Task 65: Uninstall an app from home screen
-    CUATask(
-        id="train_65_uninstall_app_home",
-        name="Uninstall App from Home Screen",
-        description="From the home screen, long-press an app icon (e.g., a test app) and uninstall it.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=20,
-        validation_type="state",
-        validation_query="app_installed_test_app",
-        expected_result=False,
-        tags=["system", "apps", "uninstall"],
-    ),
-
-    # Task 66: Pin an app to the home screen
-    CUATask(
-        id="train_66_pin_app_to_home",
-        name="Pin App to Home Screen",
-        description="Open the app drawer, long-press an app icon, and place it on the home screen.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.NAVIGATION,
-        max_steps=18,
-        validation_type="state",
-        validation_query="icon_on_home",
-        expected_result="test_app",
-        tags=["launcher", "apps", "home"],
-    ),
-
-    # Task 67: Move an app icon between home screen pages
-    CUATask(
-        id="train_67_move_icon_between_pages",
-        name="Move Icon Between Home Pages",
-        description="Drag an app icon from one home screen page to another page.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.NAVIGATION,
-        max_steps=18,
-        validation_type="state",
-        validation_query="icon_page_index",
-        expected_result=1,
-        tags=["launcher", "apps", "home", "drag"],
-    ),
-
-    # Task 68: Create an app folder on home screen
-    CUATask(
-        id="train_68_create_app_folder",
-        name="Create App Folder",
-        description="On the home screen, drag one app icon onto another to create a folder containing both apps.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.NAVIGATION,
-        max_steps=20,
-        validation_type="state",
-        validation_query="folder_created",
-        expected_result=True,
-        tags=["launcher", "folder", "home"],
-    ),
-
-    # Task 69: Rename an app folder on home screen
-    CUATask(
-        id="train_69_rename_folder",
-        name="Rename App Folder",
-        description="Open an existing app folder on the home screen and rename it to 'Tools'.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=18,
-        validation_type="state",
-        validation_query="folder_name",
-        expected_result="Tools",
-        tags=["launcher", "folder", "home", "rename"],
-    ),
-
-    # Task 70: Change wallpaper from Settings
-    CUATask(
-        id="train_70_change_wallpaper_settings",
-        name="Change Wallpaper from Settings",
-        description="Open Settings, go to Display or Wallpaper, and change the home screen wallpaper.",
-        difficulty=TaskDifficulty.HARD,
+        id="train_36_timeout_10min",
+        name="Change Screen Timeout to 10 Minutes",
+        description="Open Settings, navigate to Display, and set the screen timeout to 10 minutes.",
+        difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
-        max_steps=22,
+        max_steps=12,
         validation_type="state",
-        validation_query="wallpaper_changed",
-        expected_result=True,
-        tags=["settings", "display", "wallpaper"],
+        validation_query="screen_timeout",
+        expected_result=600000,
+        tags=["settings", "display", "timeout"],
     ),
 
-    # Task 71: Change wallpaper via long-press on home screen
+    # Task 37: Create folder in Documents
     CUATask(
-        id="train_71_change_wallpaper_home",
-        name="Change Wallpaper from Home Screen",
-        description="Long-press on the home screen, open wallpaper picker, and apply a new wallpaper.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.NAVIGATION,
-        max_steps=22,
+        id="train_37_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'project_folder' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
         validation_type="state",
-        validation_query="wallpaper_changed",
-        expected_result=True,
-        tags=["launcher", "wallpaper", "home"],
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/project_folder", "exists": True},
+        tags=["system", "file", "folder", "documents"],
     ),
 
-    # Task 72: Enable airplane mode from quick settings
+    # Task 38: Create folder in Documents
     CUATask(
-        id="train_72_enable_airplane_quick",
-        name="Enable Airplane Mode from Quick Settings",
-        description="Use quick settings to enable airplane mode.",
+        id="train_38_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'work_folder' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/work_folder", "exists": True},
+        tags=["system", "file", "folder", "documents"],
+    ),
+
+    # Task 39: Create folder in Documents
+    CUATask(
+        id="train_39_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'custom' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/custom", "exists": True},
+        tags=["system", "file", "folder", "documents"],
+    ),
+
+    # Task 40: Enable Facebook location permission
+    CUATask(
+        id="train_40_enable_facebook_location",
+        name="Enable Facebook Location Permission",
+        description="Go to Facebook app settings and enable the Location permission if it's disabled.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=14,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.facebook.katana", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": True},
+        tags=["settings", "apps", "facebook", "permissions", "location"],
+    ),
+
+    # Task 41: Change screen timeout to 15 minutes
+    CUATask(
+        id="train_41_timeout_15min",
+        name="Change Screen Timeout to 15 Minutes",
+        description="Open Settings, navigate to Display, and set the screen timeout to 15 minutes.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SETTINGS,
+        max_steps=12,
+        validation_type="state",
+        validation_query="screen_timeout",
+        expected_result=900000,
+        tags=["settings", "display", "timeout"],
+    ),
+
+    # Task 42: Change media volume to 80%
+    CUATask(
+        id="train_42_media_volume_80",
+        name="Set Media Volume to 80%",
+        description="Open Sound settings or use volume controls to set media volume to 80%.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
         max_steps=10,
         validation_type="state",
-        validation_query="airplane_mode",
-        expected_result=True,
-        tags=["settings", "network", "airplane", "quick_settings"],
+        validation_query="media_volume",
+        expected_result=80,
+        tags=["settings", "sound", "volume", "media"],
     ),
 
-    # Task 73: Disable airplane mode from quick settings
+    # Task 43: Clear all app notifications
     CUATask(
-        id="train_73_disable_airplane_quick",
-        name="Disable Airplane Mode from Quick Settings",
-        description="Use quick settings to disable airplane mode.",
+        id="train_43_clear_all_notifications",
+        name="Clear All Notifications",
+        description="Open the notifications shade and clear all existing notifications.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=8,
+        validation_type="state",
+        validation_query="notification_count",
+        expected_result=0,
+        tags=["system", "notifications", "clear"],
+    ),
+
+    # Task 44: Enable Chrome microphone permission
+    CUATask(
+        id="train_44_enable_chrome_mic",
+        name="Enable Chrome Microphone Permission",
+        description="Go to Chrome app settings and enable the Microphone permission if it's disabled.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=14,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.android.chrome", "permission": "android.permission.RECORD_AUDIO", "granted": True},
+        tags=["settings", "apps", "chrome", "permissions", "microphone"],
+    ),
+
+    # Task 45: Enable Chrome camera permission
+    CUATask(
+        id="train_45_enable_chrome_camera",
+        name="Enable Chrome Camera Permission",
+        description="Go to Chrome app settings and enable the Camera permission if it's disabled.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=14,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.android.chrome", "permission": "android.permission.CAMERA", "granted": True},
+        tags=["settings", "apps", "chrome", "permissions", "camera"],
+    ),
+
+    # Task 46: Change media volume to 30%
+    CUATask(
+        id="train_46_media_volume_30",
+        name="Set Media Volume to 30%",
+        description="Open Sound settings or use volume controls to set media volume to 30%.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
         max_steps=10,
         validation_type="state",
-        validation_query="airplane_mode",
-        expected_result=False,
-        tags=["settings", "network", "airplane", "quick_settings", "off"],
+        validation_query="media_volume",
+        expected_result=30,
+        tags=["settings", "sound", "volume", "media"],
     ),
 
-    # Task 74: Open Developer Options
+    # Task 47: Change media volume to 60%
     CUATask(
-        id="train_74_open_developer_options",
-        name="Open Developer Options",
-        description="Open Settings, navigate to System > Developer options page (assuming it is already enabled).",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="developer_options_settings",
-        tags=["settings", "system", "developer"],
-    ),
-
-    # Task 75: Enable USB debugging in Developer Options
-    CUATask(
-        id="train_75_enable_usb_debugging",
-        name="Enable USB Debugging",
-        description="In Developer options, enable USB debugging.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=22,
-        validation_type="state",
-        validation_query="usb_debugging_enabled",
-        expected_result=True,
-        tags=["settings", "developer", "usb_debugging"],
-    ),
-
-    # Task 76: Disable USB debugging in Developer Options
-    CUATask(
-        id="train_76_disable_usb_debugging",
-        name="Disable USB Debugging",
-        description="In Developer options, disable USB debugging.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=22,
-        validation_type="state",
-        validation_query="usb_debugging_enabled",
-        expected_result=False,
-        tags=["settings", "developer", "usb_debugging", "off"],
-    ),
-
-    # Task 77: Enable app notifications for a specific app
-    CUATask(
-        id="train_77_enable_app_notifications",
-        name="Enable App Notifications",
-        description="Open Settings > Apps > [Test App] > Notifications and enable notifications for this app.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="test_app_notifications_enabled",
-        expected_result=True,
-        tags=["settings", "apps", "notifications"],
-    ),
-
-    # Task 78: Disable app notifications for a specific app
-    CUATask(
-        id="train_78_disable_app_notifications",
-        name="Disable App Notifications",
-        description="Open Settings > Apps > [Test App] > Notifications and disable notifications for this app.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="test_app_notifications_enabled",
-        expected_result=False,
-        tags=["settings", "apps", "notifications", "off"],
-    ),
-
-    # Task 79: Enable vibration for incoming calls
-    CUATask(
-        id="train_79_enable_call_vibration",
-        name="Enable Call Vibration",
-        description="Open Sound settings and enable vibration for incoming calls.",
+        id="train_47_media_volume_60",
+        name="Set Media Volume to 60%",
+        description="Open Sound settings or use volume controls to set media volume to 60%.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
-        max_steps=14,
+        max_steps=10,
         validation_type="state",
-        validation_query="call_vibration_enabled",
-        expected_result=True,
-        tags=["settings", "sound", "vibration"],
+        validation_query="media_volume",
+        expected_result=60,
+        tags=["settings", "sound", "volume", "media"],
     ),
 
-    # Task 80: Disable vibration for incoming calls
+    # Task 48: Change screen timeout to 30 minutes
     CUATask(
-        id="train_80_disable_call_vibration",
-        name="Disable Call Vibration",
-        description="Open Sound settings and disable vibration for incoming calls.",
+        id="train_48_timeout_30min",
+        name="Change Screen Timeout to 30 Minutes",
+        description="Open Settings, navigate to Display, and set the screen timeout to 30 minutes.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
-        max_steps=14,
+        max_steps=12,
         validation_type="state",
-        validation_query="call_vibration_enabled",
-        expected_result=False,
-        tags=["settings", "sound", "vibration", "off"],
+        validation_query="screen_timeout",
+        expected_result=1800000,
+        tags=["settings", "display", "timeout"],
     ),
+
 ]
 
 # =============================================================================
-# EVALUATION TASKS (20 tasks)
+# EVALUATION TASKS (16 tasks)
 # =============================================================================
 
 DEMO_EVAL_TASKS = [
@@ -1220,26 +776,12 @@ DEMO_EVAL_TASKS = [
         tags=["settings", "notifications", "dnd"],
     ),
 
-    # Eval Task 3: Disable Do Not Disturb
+    # Eval Task 3: Change system language
     CUATask(
-        id="eval_03_dnd_mode_disable",
-        name="Disable Do Not Disturb",
-        description="Disable Do Not Disturb mode from quick settings or the Settings app.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="dnd_enabled",
-        expected_result=False,
-        tags=["settings", "notifications", "dnd", "off"],
-    ),
-
-    # Eval Task 4: Change system language
-    CUATask(
-        id="eval_04_change_language",
-        name="Change System Language",
+        id="eval_03_change_language",
+        name="Change System Language to Spanish",
         description="Open Language & input settings and change the system language to Spanish.",
-        difficulty=TaskDifficulty.HARD,
+        difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SETTINGS,
         max_steps=24,
         validation_type="state",
@@ -1248,9 +790,9 @@ DEMO_EVAL_TASKS = [
         tags=["settings", "language", "system"],
     ),
 
-    # Eval Task 5: Enable dark theme
+    # Eval Task 4: Enable dark theme
     CUATask(
-        id="eval_05_enable_dark_theme",
+        id="eval_04_enable_dark_theme",
         name="Enable Dark Theme",
         description="Enable the system dark theme from Display settings or quick settings.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -1262,23 +804,10 @@ DEMO_EVAL_TASKS = [
         tags=["settings", "display", "theme", "dark"],
     ),
 
-    # Eval Task 6: Disable dark theme
-    CUATask(
-        id="eval_06_disable_dark_theme",
-        name="Disable Dark Theme",
-        description="Disable the system dark theme and switch to light theme.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="dark_theme_enabled",
-        expected_result=False,
-        tags=["settings", "display", "theme", "light"],
-    ),
 
-    # Eval Task 7: Enable battery saver
+    # Eval Task 5: Enable battery saver
     CUATask(
-        id="eval_07_enable_battery_saver",
+        id="eval_05_enable_battery_saver",
         name="Enable Battery Saver",
         description="Open Battery settings and enable Battery Saver mode.",
         difficulty=TaskDifficulty.MEDIUM,
@@ -1290,187 +819,160 @@ DEMO_EVAL_TASKS = [
         tags=["settings", "battery", "saver"],
     ),
 
-    # Eval Task 8: Disable battery saver
+    # Eval Task 6: Uninstall Instagram
     CUATask(
-        id="eval_08_disable_battery_saver",
-        name="Disable Battery Saver",
-        description="Open Battery settings and disable Battery Saver mode.",
+        id="eval_06_uninstall_instagram",
+        name="Uninstall Instagram",
+        description="Uninstall the Instagram app from the device.",
         difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=14,
-        validation_type="state",
-        validation_query="battery_saver_enabled",
-        expected_result=False,
-        tags=["settings", "battery", "saver", "off"],
-    ),
-
-    # Eval Task 9: Connect to known WiFi network
-    CUATask(
-        id="eval_09_connect_known_wifi",
-        name="Connect to Known WiFi Network",
-        description="Open WiFi settings and connect to a known WiFi network from the list.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="wifi_connected",
-        expected_result=True,
-        tags=["settings", "wifi", "connect"],
-    ),
-
-    # Eval Task 10: Forget saved WiFi network
-    CUATask(
-        id="eval_10_forget_wifi",
-        name="Forget WiFi Network",
-        description="In WiFi settings, open a saved network and forget/remove it.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="wifi_network_forgotten",
-        expected_result=True,
-        tags=["settings", "wifi", "forget"],
-    ),
-
-    # Eval Task 11: Change wallpaper
-    CUATask(
-        id="eval_11_change_wallpaper",
-        name="Change Wallpaper",
-        description="Change the home screen wallpaper via Settings or by long-pressing the home screen.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=22,
-        validation_type="state",
-        validation_query="wallpaper_changed",
-        expected_result=True,
-        tags=["settings", "display", "wallpaper"],
-    ),
-
-    # Eval Task 12: Open Developer Options
-    CUATask(
-        id="eval_12_open_developer_options",
-        name="Open Developer Options",
-        description="Open the Developer options page from Settings.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="current_activity",
-        expected_result="developer_options_settings",
-        tags=["settings", "system", "developer"],
-    ),
-
-    # Eval Task 13: Enable USB debugging
-    CUATask(
-        id="eval_13_enable_usb_debugging",
-        name="Enable USB Debugging",
-        description="In Developer options, enable USB debugging.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=22,
-        validation_type="state",
-        validation_query="usb_debugging_enabled",
-        expected_result=True,
-        tags=["settings", "developer", "usb_debugging"],
-    ),
-
-    # Eval Task 14: Disable USB debugging
-    CUATask(
-        id="eval_14_disable_usb_debugging",
-        name="Disable USB Debugging",
-        description="In Developer options, disable USB debugging.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=22,
-        validation_type="state",
-        validation_query="usb_debugging_enabled",
-        expected_result=False,
-        tags=["settings", "developer", "usb_debugging", "off"],
-    ),
-
-    # Eval Task 15: Enable app notifications
-    CUATask(
-        id="eval_15_enable_app_notifications",
-        name="Enable App Notifications",
-        description="Open Settings > Apps > [Test App] > Notifications and enable notifications.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="test_app_notifications_enabled",
-        expected_result=True,
-        tags=["settings", "apps", "notifications"],
-    ),
-
-    # Eval Task 16: Disable app notifications
-    CUATask(
-        id="eval_16_disable_app_notifications",
-        name="Disable App Notifications",
-        description="Open Settings > Apps > [Test App] > Notifications and disable notifications.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="test_app_notifications_enabled",
-        expected_result=False,
-        tags=["settings", "apps", "notifications", "off"],
-    ),
-
-    # Eval Task 17: Take and open a screenshot
-    CUATask(
-        id="eval_17_take_and_open_screenshot",
-        name="Take and Open Screenshot",
-        description="Capture a screenshot and then open it in the Gallery/Photos app.",
-        difficulty=TaskDifficulty.HARD,
         category=TaskCategory.SYSTEM,
-        max_steps=24,
-        validation_type="state",
-        validation_query="current_media_type",
-        expected_result="image_screenshot",
-        tags=["system", "screenshot", "gallery"],
-    ),
-
-    # Eval Task 18: Compose SMS and save as draft
-    CUATask(
-        id="eval_18_compose_sms_draft",
-        name="Compose SMS Draft",
-        description="Open Messages, compose a new SMS with some text, and leave it as a draft.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.INPUT,
-        max_steps=22,
-        validation_type="state",
-        validation_query="has_message_draft",
-        expected_result=True,
-        tags=["messages", "sms", "draft"],
-    ),
-
-    # Eval Task 19: Change media volume
-    CUATask(
-        id="eval_19_change_media_volume",
-        name="Change Media Volume",
-        description="Open Sound settings or use volume controls to set media volume to a specific non-zero level (e.g., 50%).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=14,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=50,
-        tags=["settings", "sound", "volume", "media"],
-    ),
-
-    # Eval Task 20: Enable auto-rotate
-    CUATask(
-        id="eval_20_enable_auto_rotate",
-        name="Enable Auto-Rotate",
-        description="Enable screen auto-rotate from Display or quick settings.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
         max_steps=12,
         validation_type="state",
-        validation_query="auto_rotate_enabled",
-        expected_result=True,
-        tags=["settings", "display", "rotation"],
+        validation_query="app_installed",
+        expected_result={"package": "com.instagram.android", "installed": False},
+        tags=["system", "uninstall", "instagram"],
     ),
+
+    # Eval Task 7: Disable Facebook contacts permission
+    CUATask(
+        id="eval_07_disable_facebook_contacts",
+        name="Disable Facebook Contacts Permission",
+        description="Go to Facebook app settings and disable the Contacts permission.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=16,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.facebook.katana", "permission": "android.permission.READ_CONTACTS", "granted": False},
+        tags=["settings", "apps", "facebook", "permissions", "contacts"],
+    ),
+
+    # Eval Task 8: Clear Facebook cache
+    CUATask(
+        id="eval_08_clear_facebook_cache",
+        name="Clear Facebook App Cache",
+        description="Navigate to Facebook's App Info > Storage and clear only the app cache (not data).",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=18,
+        validation_type="state",
+        validation_query="facebook_cache_cleared",
+        expected_result=True,
+        tags=["settings", "apps", "facebook", "cache"],
+    ),
+
+    # Eval Task 9: Create folder in Downloads
+    CUATask(
+        id="eval_09_create_downloads_folder",
+        name="Create Folder in Downloads",
+        description="Create a new folder named 'abc' in the Downloads directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Download/abc", "exists": True},
+        tags=["system", "file", "folder", "downloads"],
+    ),
+
+    # Eval Task 10: Download logo from gbox.ai
+    CUATask(
+        id="eval_10_download_gbox_logo",
+        name="Download GBOX Logo",
+        description="Navigate to gbox.ai website and download the logo file. Verify the downloaded file is named logo.svg.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.INPUT,
+        max_steps=25,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Download/logo.svg", "exists": True},
+        tags=["browser", "download", "file", "gbox"],
+    ),
+
+    # Eval Task 11: Check GBOX Keyboard storage size
+    CUATask(
+        id="eval_11_check_gbox_keyboard_storage",
+        name="Check GBOX Keyboard Storage Size",
+        description="Check how much storage space the GBOX Keyboard app is using. You must report the exact storage size (e.g., '20MB') in your finish message.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="api",
+        validation_query="finish_message_contains",
+        expected_result="73.73KB",
+        tags=["settings", "apps", "storage", "gbox"],
+    ),
+
+    # Eval Task 12: Check Chrome storage size
+    CUATask(
+        id="eval_12_check_chrome_storage",
+        name="Check Chrome Storage Size",
+        description="Check how much storage space the Chrome app is using. You must report the exact storage size (e.g., '20MB') in your finish message.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=12,
+        validation_type="api",
+        validation_query="finish_message_contains",
+        expected_result="51.54MB",
+        tags=["settings", "apps", "storage", "chrome"],
+    ),
+
+    # Eval Task 13: Clear Instagram cache
+    CUATask(
+        id="eval_13_clear_instagram_cache",
+        name="Clear Instagram App Cache",
+        description="Navigate to Instagram's App Info > Storage and clear only the app cache.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=18,
+        validation_type="state",
+        validation_query="instagram_cache_cleared",
+        expected_result=True,
+        tags=["settings", "apps", "instagram", "cache"],
+    ),
+
+    # Eval Task 14: Disable Instagram location permission
+    CUATask(
+        id="eval_14_disable_instagram_location",
+        name="Disable Instagram Location Permission",
+        description="Go to Instagram app settings and disable the Location permission.",
+        difficulty=TaskDifficulty.HARD,
+        category=TaskCategory.SYSTEM,
+        max_steps=16,
+        validation_type="state",
+        validation_query="app_permission",
+        expected_result={"package": "com.instagram.android", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
+        tags=["settings", "apps", "instagram", "permissions", "location"],
+    ),
+
+    # Eval Task 15: Create folder in Documents
+    CUATask(
+        id="eval_15_create_documents_folder",
+        name="Create Folder in Documents",
+        description="Create a new folder named 'test_folder' in the Documents directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Documents/test_folder", "exists": True},
+        tags=["system", "file", "folder", "documents"],
+    ),
+
+    # Eval Task 16: Create folder in Downloads with different name
+    CUATask(
+        id="eval_16_create_downloads_folder_xyz",
+        name="Create Folder in Downloads",
+        description="Create a new folder named 'xyz' in the Downloads directory.",
+        difficulty=TaskDifficulty.MEDIUM,
+        category=TaskCategory.SYSTEM,
+        max_steps=10,
+        validation_type="state",
+        validation_query="file_exists",
+        expected_result={"path": "/storage/emulated/0/Download/xyz", "exists": True},
+        tags=["system", "file", "folder", "downloads"],
+    ),
+
 ]
 
 # =============================================================================

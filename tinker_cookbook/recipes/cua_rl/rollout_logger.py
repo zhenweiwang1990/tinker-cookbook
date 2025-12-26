@@ -43,7 +43,7 @@ class RolloutLogger:
     
     # Table formatting constants
     TABLE_WIDTH = 118  # Total width including border characters
-    CONTENT_WIDTH = 116  # Width of content inside borders (TABLE_WIDTH - 2)
+    CONTENT_WIDTH = 118  # Width of content inside borders 
     BORDER_HORIZONTAL = "─"
     BORDER_CORNER_TOP_LEFT = "┌"
     BORDER_CORNER_TOP_RIGHT = "┐"
@@ -505,11 +505,11 @@ class RolloutLogger:
                 details += f" | error={error}"
             self.log(details)
     
-    def _format_turn_header(self) -> str:
-        """Format the turn header line with timing information.
+    def _format_turn_header(self) -> List[str]:
+        """Format the turn header line(s) with timing information.
         
         Returns:
-            Formatted header string
+            List of formatted header strings (may be multiple lines if too long)
         """
         turn_info = f"Turn {self.current_turn['turn_num']}/{self.current_turn['max_turns']}"
         
@@ -543,7 +543,34 @@ class RolloutLogger:
             exec_time = self.current_turn.get("total_tool_exec_time", 0.0) + self.current_turn.get("total_tool_time", 0.0)
             tool_info = f" | Tool execution: coord={coord_time:.3f}s, exec={exec_time:.3f}s, total={total_tool_exec_time:.3f}s"
         
-        return f"{turn_info}{turn_total_info}{screenshot_info}{model_info}{tool_info}"
+        # Combine all parts
+        full_header = f"{turn_info}{turn_total_info}{screenshot_info}{model_info}{tool_info}"
+        
+        # Check if header fits in one line (accounting for table borders)
+        max_width = self.CONTENT_WIDTH - len("│ ") - len(" │")
+        if len(self._strip_ansi_codes(full_header)) <= max_width:
+            return [full_header]
+        
+        # If too long, split into multiple lines
+        lines = []
+        # First line: turn info and total time
+        first_line = f"{turn_info}{turn_total_info}"
+        lines.append(first_line)
+        
+        # Second line: screenshot and model inference
+        second_line_parts = []
+        if screenshot_info:
+            second_line_parts.append(screenshot_info.strip(" |"))
+        if model_info:
+            second_line_parts.append(model_info.strip(" |"))
+        if second_line_parts:
+            lines.append(" | ".join(second_line_parts))
+        
+        # Third line: tool execution
+        if tool_info:
+            lines.append(tool_info.strip(" |"))
+        
+        return lines
     
     def _format_action_details(self, action_info: Dict[str, Any]) -> Tuple[str, str]:
         """Format action execution details.
@@ -610,9 +637,10 @@ class RolloutLogger:
             self.current_turn["end_time"] - self.current_turn["start_time"]
         )
         
-        # Build turn header line (first row of table)
-        header_line = self._format_turn_header()
-        self.log(self._table_row(header_line))
+        # Build turn header line(s) (first row(s) of table)
+        header_lines = self._format_turn_header()
+        for header_line in header_lines:
+            self.log(self._table_row(header_line))
         
         # Add separator
         self.log(self._table_separator())
@@ -693,27 +721,67 @@ class RolloutLogger:
         
         lines = []
         
-        # Format command line
+        # Format command line (wrap if too long)
         command_line = f"ADB Command: {command}"
-        lines.append(command_line)
+        max_width = self.CONTENT_WIDTH - len("│ ") - len(" │")
+        if len(command_line) > max_width:
+            # Split command into multiple lines
+            lines.append("ADB Command:")
+            # Wrap command itself
+            wrapped_cmd = self._wrap_text_for_table(command, max_width=max_width - 2)
+            for cmd_line in wrapped_cmd:
+                lines.append(f"  {cmd_line}")
+        else:
+            lines.append(command_line)
         
         # Format expected result
-        expected_line = f"Expected: {expected}"
-        lines.append(expected_line)
+        expected_str = str(expected)
+        expected_line = f"Expected Result: {expected_str}"
+        if len(expected_line) > max_width:
+            lines.append("Expected Result:")
+            wrapped_expected = self._wrap_text_for_table(expected_str, max_width=max_width - 2)
+            for exp_line in wrapped_expected:
+                lines.append(f"  {exp_line}")
+        else:
+            lines.append(expected_line)
         
-        # Format actual result (may be long, wrap if needed)
-        actual_preview = actual[:80] + "..." if len(actual) > 80 else actual
+        # Format actual result (show full result, not just preview)
+        actual_str = str(actual)
         actual_status = "✓" if success else "✗"
         actual_status_colored = self._color(actual_status, "GREEN" if success else "RED")
-        actual_line = f"Actual: {actual_status_colored} {actual_preview}"
-        lines.append(actual_line)
+        actual_line = f"Actual Result: {actual_status_colored} {actual_str}"
+        if len(self._strip_ansi_codes(actual_line)) > max_width:
+            lines.append(f"Actual Result: {actual_status_colored}")
+            wrapped_actual = self._wrap_text_for_table(actual_str, max_width=max_width - 2)
+            for act_line in wrapped_actual:
+                lines.append(f"  {act_line}")
+        else:
+            lines.append(actual_line)
+        
+        # Format comparison
+        if success:
+            comparison_line = self._color("✓ Match: Actual result matches expected", "GREEN")
+        else:
+            comparison_line = self._color(f"✗ Mismatch: Expected '{expected_str}' but got '{actual_str}'", "RED")
+        if len(self._strip_ansi_codes(comparison_line)) > max_width:
+            # Wrap comparison
+            if success:
+                lines.append(self._color("✓ Match: Actual result matches expected", "GREEN"))
+            else:
+                lines.append(self._color("✗ Mismatch:", "RED"))
+                mismatch_detail = f"Expected '{expected_str}' but got '{actual_str}'"
+                wrapped_mismatch = self._wrap_text_for_table(mismatch_detail, max_width=max_width - 2)
+                for mm_line in wrapped_mismatch:
+                    lines.append(f"  {mm_line}")
+        else:
+            lines.append(comparison_line)
         
         # Format execution time and success status
         status_text = "PASSED" if success else "FAILED"
         status_colored = self._color(status_text, "GREEN" if success else "RED")
-        summary_line = f"Result: {status_colored} | Execution time: {exec_time:.3f}s"
+        summary_line = f"Validation Status: {status_colored} | Execution time: {exec_time:.3f}s"
         if query_type:
-            summary_line += f" | Query: {query_type}"
+            summary_line += f" | Query type: {query_type}"
         lines.append(summary_line)
         
         return lines

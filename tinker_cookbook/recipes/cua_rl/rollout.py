@@ -101,38 +101,23 @@ async def _run_single_env_rollout(
     task_success = rollout_result.get("task_success", False)
     task_completed = rollout_result.get("task_completed", False)
     num_turns = rollout_result.get("num_turns", 0)
+    max_turns = rollout_result.get("max_turns", 15)
+    errors = rollout_result.get("errors", [])
     
-    # Perform ADB validation if task and agent are available (before agent is closed)
-    if hasattr(env, 'task') and env.task and env.task.validation_query:
-        if hasattr(env, '_agent') and env._agent and hasattr(env._agent, 'gbox_client'):
-            try:
-                from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
-                
-                validation_result = await validate_task_completion_with_details(
-                    task=env.task,
-                    gbox_client=env._agent.gbox_client,
-                )
-                
-                if validation_result:
-                    rollout_logger.log_adb_validation(
-                        command=validation_result.command,
-                        expected_result=validation_result.expected_result,
-                        actual_result=validation_result.actual_result,
-                        success=validation_result.success,
-                        execution_time=validation_result.execution_time,
-                        validation_query=validation_result.validation_query,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to perform ADB validation: {e}")
-    
-    # Set summary in rollout logger
-    rollout_logger.set_summary({
-        "task_success": task_success,
-        "task_completed": task_completed,
-        "num_turns": num_turns,
-        "rollout_time": env_rollout_time,
-        "reward": 1.0 if task_success else 0.0,
-    })
+    # Get ADB validation result from rollout_logger if available
+    # (validation is performed in cua_env.py before agent is closed)
+    adb_validation_result = None
+    if hasattr(rollout_logger, 'trajectory_data') and "adb_validation" in rollout_logger.trajectory_data:
+        validation_data = rollout_logger.trajectory_data["adb_validation"]
+        from tinker_cookbook.recipes.cua_rl.reward import ADBValidationResult
+        adb_validation_result = ADBValidationResult(
+            command=validation_data.get("command", ""),
+            expected_result=validation_data.get("expected_result", ""),
+            actual_result=validation_data.get("actual_result", ""),
+            success=validation_data.get("success", False),
+            execution_time=validation_data.get("execution_time", 0.0),
+            validation_query=validation_data.get("validation_query", ""),
+        )
     
     # Log rollout results to buffer
     rollout_logger.log(f"Rollout Results:")
@@ -142,23 +127,59 @@ async def _run_single_env_rollout(
     rollout_logger.log(f"  Total rollout time: {env_rollout_time:.2f}s")
     rollout_logger.log(f"  Average time per turn: {env_rollout_time / max(num_turns, 1):.2f}s")
     
-    # Validate task and compute reward
+    # Compute reward using comprehensive_reward_function
     validation_start = time.time()
-    validation_method = "binary_reward"  # Simple binary reward based on task_success
-    rollout_logger.log(f"[Validation] Method: {validation_method} (1.0 if task_success=True, 0.0 otherwise)")
+    from tinker_cookbook.recipes.cua_rl.reward import (
+        comprehensive_reward_function,
+        create_rollout_result_from_dict,
+        CUARolloutResult,
+    )
     
-    # Reward is 1.0 if task succeeded, 0.0 otherwise
-    reward = 1.0 if task_success else 0.0
+    # Create CUARolloutResult from rollout_result
+    # Add validation info if available
+    rollout_result_with_validation = rollout_result.copy()
+    if adb_validation_result:
+        rollout_result_with_validation["validation_passed"] = adb_validation_result.success
+        rollout_result_with_validation["validation_details"] = {
+            "command": adb_validation_result.command,
+            "expected_result": adb_validation_result.expected_result,
+            "actual_result": adb_validation_result.actual_result,
+            "execution_time": adb_validation_result.execution_time,
+            "validation_query": adb_validation_result.validation_query,
+        }
+    else:
+        rollout_result_with_validation["validation_passed"] = False
+        rollout_result_with_validation["validation_details"] = None
+    
+    # Get task_id from env if available
+    task_id = getattr(env.task, 'id', 'unknown') if hasattr(env, 'task') and env.task else 'unknown'
+    
+    # Create CUARolloutResult
+    cua_result = create_rollout_result_from_dict(
+        rollout_result_with_validation,
+        task_id=task_id,
+    )
+    
+    # Compute reward using comprehensive_reward_function
+    reward = comprehensive_reward_function(cua_result, task=env.task if hasattr(env, 'task') else None)
     
     validation_time = time.time() - validation_start
-    validation_result = "success" if task_success else "failed"
-    result_color = "GREEN" if task_success else "RED"
+    validation_method = "comprehensive_reward_function"
+    rollout_logger.log(f"[Validation] Method: {validation_method}")
     rollout_logger.log(
-        f"[Validation] Result: {validation_result} | reward={reward:.1f} | "
-        f"task_success={task_success} | task_completed={task_completed} | "
-        f"validation_time={validation_time:.3f}s",
-        color=result_color,
+        f"[Validation] Reward: {reward:.4f} | task_success={task_success} | "
+        f"task_completed={task_completed} | validation_time={validation_time:.3f}s",
+        color="GREEN" if reward > 0 else "RED",
     )
+    
+    # Set summary in rollout logger (after reward calculation)
+    rollout_logger.set_summary({
+        "task_success": task_success,
+        "task_completed": task_completed,
+        "num_turns": num_turns,
+        "rollout_time": env_rollout_time,
+        "reward": reward,
+    })
     
     # Get temperature from policy if available
     temperature = None
@@ -181,7 +202,7 @@ async def _run_single_env_rollout(
     
     rollout_logger.log("-" * 120)
     
-    # Log ADB validation in table format (if available)
+    # Log ADB validation in table format (if available) - after reward calculation
     rollout_logger.log_rollout_completion()
     
     # Save trajectory BEFORE flush (so logs are still in buffer)

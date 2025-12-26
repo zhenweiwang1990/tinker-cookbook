@@ -186,9 +186,13 @@ class CUAEnv(ProblemEnv):
                 try:
                     from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
                     
+                    # Get result_message for validation if needed
+                    result_message = result.get("result_message", "") if isinstance(result, dict) else ""
+                    
                     validation_result = await validate_task_completion_with_details(
                         task=self.task,
                         gbox_client=self._agent.gbox_client,
+                        result_message=result_message,
                     )
                     
                     if validation_result:

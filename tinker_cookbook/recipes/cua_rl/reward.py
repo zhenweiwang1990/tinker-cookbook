@@ -365,7 +365,7 @@ def comprehensive_reward_function(
     # - Task succeeded
     # - No consecutive repeated actions (wasteful)
     # - No errors of any kind (parse, tool_name, tool_arg, runtime)
-    # - Efficient: used <= 40% of max_turns (e.g., <= 6 turns if max_turns=15, <= 8 if max_turns=20)
+    # - Efficient: used <= 20% of max_turns (e.g., <= 3 turns if max_turns=15, <= 4 if max_turns=20)
     is_perfect = (
         result.task_success and
         result.consecutive_repeated_actions == 0 and
@@ -373,7 +373,7 @@ def comprehensive_reward_function(
         result.parse_errors == 0 and
         result.tool_name_errors == 0 and
         result.tool_arg_errors == 0 and
-        result.num_turns <= max_turns * 0.4  # Efficient: used <= 40% of max turns
+        result.num_turns <= max_turns * 0.2  # Efficient: used <= 20% of max turns
     )
     
     if is_perfect:
@@ -446,6 +446,7 @@ class RewardTracker:
 async def validate_task_completion(
     task: CUATask,
     gbox_client,
+    result_message: Optional[str] = None,
 ) -> bool:
     """Validate task completion using ADB/shell commands via GBox.
 
@@ -453,6 +454,11 @@ async def validate_task_completion(
       1. Execute Android shell commands inside the box (via GBox Command API).
       2. Parse the output to determine whether the target system state matches
          the expected result (e.g., WiFi on/off, current app, screen timeout).
+    
+    Args:
+        task: The task to validate
+        gbox_client: GBox client for executing shell commands
+        result_message: Optional result message from rollout (for result_message_contains validation)
     """
 
     async def _run_shell(cmd: str) -> str:
@@ -580,6 +586,15 @@ async def validate_task_completion(
                 return False
             return bool(val) == bool(expected)
 
+        # 10) Result message contains check
+        if q == "result_message_contains":
+            if result_message is None:
+                logger.warning(f"result_message_contains validation requires result_message parameter (task {task.id})")
+                return False
+            if isinstance(expected, str):
+                return expected in result_message
+            return str(expected) in result_message
+
         logger.warning(f"No shell-based validator implemented for query '{q}' (task {task.id})")
         return False
 
@@ -602,8 +617,14 @@ class ADBValidationResult:
 async def validate_task_completion_with_details(
     task: CUATask,
     gbox_client,
+    result_message: Optional[str] = None,
 ) -> Optional[ADBValidationResult]:
     """Validate task completion using ADB/shell commands via GBox, returning detailed information.
+    
+    Args:
+        task: The task to validate
+        gbox_client: GBox client for executing shell commands
+        result_message: Optional result message from rollout (for result_message_contains validation)
     
     Returns:
         ADBValidationResult with command, expected result, actual result, success, and execution time.
@@ -744,6 +765,18 @@ async def validate_task_completion_with_details(
                 success = bool(val) == bool(expected)
             except ValueError:
                 success = False
+
+        # 10) Result message contains check
+        elif q == "result_message_contains":
+            if result_message is None:
+                logger.warning(f"result_message_contains validation requires result_message parameter (task {task.id})")
+                return None
+            command = "result_message_validation"
+            actual_output = result_message
+            if isinstance(expected, str):
+                success = expected in result_message
+            else:
+                success = str(expected) in result_message
 
         else:
             logger.warning(f"No shell-based validator implemented for query '{q}' (task {task.id})")
