@@ -1,7 +1,34 @@
 """Reward functions for CUA Agent GRPO training.
 
-This module provides simple reward functions that can be extended
-to more sophisticated reward shaping.
+This module provides reward functions for CUA Agent training, ranging from
+simple binary rewards to comprehensive reward shaping inspired by Link Search Agent.
+
+**Quick Start:**
+- `simple_reward_function`: Binary 0/1 reward (baseline)
+- `completion_reward_function`: Partial credit for attempts
+- `efficiency_reward_function`: Considers steps and errors
+- `comprehensive_reward_function`: Full reward shaping with strategy rewards
+
+**Using Comprehensive Rewards:**
+
+The `comprehensive_reward_function` provides detailed reward shaping based on:
+- Base score (0-1.5 for success)
+- Strategy rewards (good behavior patterns)
+- Penalties (inefficiency, errors)
+- Efficiency bonus (fewer turns)
+- Perfect execution bonus (3.0)
+
+To use it effectively, you need to collect extended metrics during rollout:
+- Tool call quality (repeated/invalid actions)
+- Error classification (parse/tool name/tool arg/runtime errors)
+- Strategy quality (navigation, backtracking, exploration)
+
+See `CUARolloutResult` for all available metrics. Use `create_rollout_result_from_dict`
+to convert rollout results, then pass to `comprehensive_reward_function`.
+
+**Example:**
+    result = create_rollout_result_from_dict(rollout_dict, task_id="task_1")
+    reward = comprehensive_reward_function(result)
 """
 
 import os
@@ -17,8 +44,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CUARolloutResult:
-    """Result of a CUA rollout."""
+    """Result of a CUA rollout.
     
+    This class tracks comprehensive metrics for reward calculation,
+    similar to LinkSearchRubric in the Link Search Agent.
+    """
+    
+    # Core results
     task_id: str
     task_completed: bool
     task_success: bool
@@ -33,6 +65,24 @@ class CUARolloutResult:
     # Timing
     total_time: float = 0.0
     
+    # Tool call quality (to be collected from rollout)
+    num_total_actions: int = 0  # Total tool calls made
+    consecutive_repeated_actions: int = 0  # Number of consecutive repeated actions (same tool + same args)
+    
+    # Error classification (to be collected from rollout)
+    parse_errors: int = 0  # Tool call parsing errors (missing name/args)
+    tool_name_errors: int = 0  # Invalid tool names
+    tool_arg_errors: int = 0  # Invalid tool arguments
+    runtime_errors: int = 0  # Runtime errors during tool execution
+    
+    # Turn tracking
+    ran_out_of_turns: bool = False  # Did we run out of turns?
+    attempted_completion: bool = False  # Did agent call finish tool?
+    
+    # Timing milestones
+    turn_first_success: int = -1  # Turn when first successful action occurred
+    turn_task_completed: int = -1  # Turn when task was completed
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -45,6 +95,17 @@ class CUARolloutResult:
             "validation_passed": self.validation_passed,
             "validation_details": self.validation_details,
             "total_time": self.total_time,
+            # Extended metrics
+            "num_total_actions": self.num_total_actions,
+            "consecutive_repeated_actions": self.consecutive_repeated_actions,
+            "parse_errors": self.parse_errors,
+            "tool_name_errors": self.tool_name_errors,
+            "tool_arg_errors": self.tool_arg_errors,
+            "runtime_errors": self.runtime_errors,
+            "ran_out_of_turns": self.ran_out_of_turns,
+            "attempted_completion": self.attempted_completion,
+            "turn_first_success": self.turn_first_success,
+            "turn_task_completed": self.turn_task_completed,
         }
 
 
@@ -161,6 +222,181 @@ def shaped_reward_function(
     
     # Normalize to [0, 1]
     return min(1.0, base_reward)
+
+
+def create_rollout_result_from_dict(
+    rollout_dict: Dict[str, Any],
+    task_id: str = "unknown",
+) -> CUARolloutResult:
+    """Create CUARolloutResult from rollout dictionary.
+    
+    This is a helper function to convert rollout results to CUARolloutResult.
+    Currently, most extended metrics default to 0/False since they need to be
+    collected during rollout. To use comprehensive_reward_function effectively,
+    you should extend the rollout code to collect these metrics.
+    
+    Args:
+        rollout_dict: Dictionary from rollout (e.g., from TinkerCuaAgent.run_task)
+        task_id: Task identifier
+        
+    Returns:
+        CUARolloutResult instance
+    """
+    # Extract basic fields
+    task_completed = rollout_dict.get("task_completed", False)
+    task_success = rollout_dict.get("task_success", False)
+    num_turns = rollout_dict.get("num_turns", 0)
+    max_turns = rollout_dict.get("max_turns", 15)
+    errors = rollout_dict.get("errors", [])
+    total_time = rollout_dict.get("total_time", 0.0)
+    
+    # Check if ran out of turns
+    ran_out_of_turns = not task_completed and num_turns >= max_turns
+    
+    # Extract extended metrics if available (default to 0/False)
+    return CUARolloutResult(
+        task_id=task_id,
+        task_completed=task_completed,
+        task_success=task_success,
+        num_turns=num_turns,
+        max_turns=max_turns,
+        errors=errors,
+        validation_passed=rollout_dict.get("validation_passed", False),
+        validation_details=rollout_dict.get("validation_details"),
+        total_time=total_time,
+        # Extended metrics (to be collected during rollout)
+        num_total_actions=rollout_dict.get("num_total_actions", 0),
+        consecutive_repeated_actions=rollout_dict.get("consecutive_repeated_actions", 0),
+        parse_errors=rollout_dict.get("parse_errors", 0),
+        tool_name_errors=rollout_dict.get("tool_name_errors", 0),
+        tool_arg_errors=rollout_dict.get("tool_arg_errors", 0),
+        runtime_errors=rollout_dict.get("runtime_errors", 0),
+        ran_out_of_turns=ran_out_of_turns,
+        attempted_completion=rollout_dict.get("attempted_completion", task_completed),
+        turn_first_success=rollout_dict.get("turn_first_success", -1),
+        turn_task_completed=rollout_dict.get("turn_task_completed", num_turns if task_completed else -1),
+    )
+
+
+def comprehensive_reward_function(
+    result: CUARolloutResult,
+    task: Optional[CUATask] = None,
+    max_turns: Optional[int] = None,
+) -> float:
+    """Comprehensive reward function inspired by Link Search Agent.
+    
+    This reward function provides detailed reward shaping based on:
+    - Base score for task success (0-1.5)
+    - Early success bonus (earlier completion is better)
+    - Penalties for consecutive repeated actions and runtime errors
+    - Efficiency bonus for fewer turns
+    - Perfect execution bonus (3.0)
+    
+    The reward range is [-2.0, +3.0] to provide strong learning signals.
+    
+    Args:
+        result: Rollout result with comprehensive metrics
+        task: Original task (optional, for additional context)
+        max_turns: Maximum turns (uses result.max_turns if not provided)
+        
+    Returns:
+        Reward value between -2.0 and +3.0
+    """
+    max_turns = max_turns or result.max_turns
+    
+    # ========== BASE SCORE ==========
+    if result.task_success:
+        base_reward = 1.5
+    elif result.task_completed:
+        base_reward = 0.3  # Attempted but failed
+    elif result.ran_out_of_turns:
+        base_reward = 0.0
+    else:
+        base_reward = -0.5  # Gave up early
+    
+    # ========== PARTIAL CREDIT ==========
+    partial_rewards = 0.0
+    
+    # Early success reward (earlier is better)
+    if result.turn_first_success > 0:
+        timing_bonus = 0.15 * (1 - result.turn_first_success / max_turns)
+        partial_rewards += max(0.05, timing_bonus)
+    
+    # ========== PENALTIES ==========
+    penalties = 0.0
+    
+    # Consecutive repeated actions are wasteful (same tool + same args)
+    if result.consecutive_repeated_actions > 0:
+        # Penalty increases with number of consecutive repeats
+        penalties += 0.15 * min(result.consecutive_repeated_actions, 5)  # Cap at 5
+    
+    # Runtime errors
+    if result.runtime_errors > 0:
+        penalties += 0.08 * min(result.runtime_errors, 5)  # Cap at 5
+    
+    # ========== SEVERE ERRORS ==========
+    # Parse errors (most severe - can't even parse tool calls)
+    if result.parse_errors > 0:
+        return -2.0 + partial_rewards - penalties
+    
+    # Tool name errors (severe - calling non-existent tools)
+    if result.tool_name_errors > 0:
+        return -1.8 + partial_rewards - penalties
+    
+    # Tool argument errors (moderate - wrong arguments)
+    if result.tool_arg_errors > 0:
+        return -1.5 + partial_rewards - penalties
+    
+    # ========== NO COMPLETION CASE ==========
+    if not result.task_completed:
+        if result.ran_out_of_turns:
+            # Ran out of turns but made effort
+            effort_bonus = 0.0
+            if result.num_total_actions >= 3:
+                effort_bonus += 0.10
+            return -0.5 + partial_rewards + effort_bonus - penalties
+        else:
+            # Gave up early without completing
+            return -1.0 + partial_rewards - penalties
+    
+    # ========== COMPLETED CASE ==========
+    # Perfect execution bonus
+    # Perfect execution requires:
+    # - Task succeeded
+    # - No consecutive repeated actions (wasteful)
+    # - No errors of any kind (parse, tool_name, tool_arg, runtime)
+    # - Efficient: used <= 40% of max_turns (e.g., <= 6 turns if max_turns=15, <= 8 if max_turns=20)
+    is_perfect = (
+        result.task_success and
+        result.consecutive_repeated_actions == 0 and
+        result.runtime_errors == 0 and
+        result.parse_errors == 0 and
+        result.tool_name_errors == 0 and
+        result.tool_arg_errors == 0 and
+        result.num_turns <= max_turns * 0.4  # Efficient: used <= 40% of max turns
+    )
+    
+    if is_perfect:
+        logger.info(
+            f"Perfect execution: success={result.task_success}, "
+            f"turns={result.num_turns}, task_id={result.task_id}"
+        )
+        return 3.0
+    
+    # Normal case: combine everything
+    reward = base_reward + partial_rewards - penalties
+    
+    # Efficiency bonus (fewer turns is better)
+    if result.num_turns < max_turns:
+        efficiency = 0.20 * (1 - result.num_turns / max_turns)
+        reward += efficiency
+    
+    # Validation bonus (if validation passed)
+    if result.validation_passed:
+        reward += 0.3
+    
+    # Cap at 2.8 (perfect is 3.0)
+    return min(max(reward, -2.0), 2.8)
 
 
 class RewardTracker:
@@ -350,6 +586,183 @@ async def validate_task_completion(
     except Exception as e:
         logger.error(f"Validation failed for task {task.id}: {e}", exc_info=True)
         return False
+
+
+@dataclass
+class ADBValidationResult:
+    """Result of ADB validation with detailed information."""
+    command: str  # ADB/shell command executed
+    expected_result: Any  # Expected result
+    actual_result: str  # Actual output from command
+    success: bool  # Whether validation passed
+    execution_time: float  # Time taken to execute (seconds)
+    validation_query: str  # Type of validation query (e.g., "wifi_enabled")
+
+
+async def validate_task_completion_with_details(
+    task: CUATask,
+    gbox_client,
+) -> Optional[ADBValidationResult]:
+    """Validate task completion using ADB/shell commands via GBox, returning detailed information.
+    
+    Returns:
+        ADBValidationResult with command, expected result, actual result, success, and execution time.
+        Returns None if validation_query is not set or not supported.
+    """
+    import time
+    
+    if not task.validation_query:
+        return None
+    
+    async def _run_shell(cmd: str) -> str:
+        """Run a shell command inside the box via GBox SDK and return stdout."""
+        sdk = getattr(gbox_client, "_sdk", None)
+        box_id = getattr(gbox_client, "box_id", None)
+        if sdk is None or not box_id:
+            raise RuntimeError("gbox_client must provide `_sdk` and `box_id` for command execution")
+
+        try:
+            # Use SDK's get() method to get the box object, then use box.command()
+            box = sdk.get(box_id)
+            result = box.command(command=cmd)
+            # result should have stdout, stderr, and exitCode attributes
+            if hasattr(result, 'stdout'):
+                return str(result.stdout) if result.stdout else ""
+            # Fallback for dict-like responses
+            if isinstance(result, dict):
+                return str(result.get("stdout") or result.get("output") or "")
+            return str(result)
+        except Exception as e:
+            logger.error(f"Failed to run shell command '{cmd}': {e}")
+            return ""
+
+    try:
+        q = (task.validation_query or "").lower()
+        expected = task.expected_result
+        start_time = time.time()
+        
+        # Determine command based on query type
+        command = ""
+        actual_output = ""
+        success = False
+        
+        # 1) 当前前台 App (Settings / Chrome 等)
+        if q == "current_app":
+            command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
+            actual_output = await _run_shell(command)
+            if not actual_output:
+                success = False
+            elif isinstance(expected, str) and expected:
+                success = expected in actual_output
+            else:
+                success = "mCurrentFocus" in actual_output or "mResumedActivity" in actual_output
+
+        # 2) WiFi 开关
+        elif q == "wifi_enabled":
+            command = "settings get global wifi_on"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = bool(val) == bool(expected)
+            except ValueError:
+                success = False
+
+        # 3) 飞行模式
+        elif q == "airplane_mode":
+            command = "settings get global airplane_mode_on"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = bool(val) == bool(expected)
+            except ValueError:
+                success = False
+
+        # 4) 亮度
+        elif q == "brightness_level":
+            command = "settings get system screen_brightness"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = val == int(expected) if isinstance(expected, int) else False
+            except ValueError:
+                success = False
+
+        # 5) 当前 Activity（比如电池页）
+        elif q == "current_activity":
+            command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
+            actual_output = await _run_shell(command)
+            if not actual_output:
+                success = False
+            elif isinstance(expected, str) and expected:
+                success = expected.lower() in actual_output.lower()
+            else:
+                success = False
+
+        # 6) 是否在桌面
+        elif q == "is_home_screen":
+            command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
+            actual_output = await _run_shell(command)
+            if not actual_output:
+                success = False
+            else:
+                lowered = actual_output.lower()
+                is_home = (
+                    "launcher" in lowered
+                    or "home" in lowered
+                    or "com.android.launcher" in lowered
+                    or "launcher3" in lowered
+                )
+                success = is_home == bool(expected)
+
+        # 7) 屏幕熄屏时间 (ms)
+        elif q == "screen_timeout":
+            command = "settings get system screen_off_timeout"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = val == int(expected) if isinstance(expected, int) else False
+            except ValueError:
+                success = False
+
+        # 8) 勿扰模式 (DND / zen_mode)
+        elif q == "dnd_enabled":
+            command = "settings get global zen_mode"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                is_enabled = val > 0
+                success = is_enabled == bool(expected)
+            except ValueError:
+                success = False
+
+        # 9) 蓝牙开关
+        elif q == "bluetooth_enabled":
+            command = "settings get global bluetooth_on || settings get secure bluetooth_on"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = bool(val) == bool(expected)
+            except ValueError:
+                success = False
+
+        else:
+            logger.warning(f"No shell-based validator implemented for query '{q}' (task {task.id})")
+            return None
+        
+        execution_time = time.time() - start_time
+        
+        return ADBValidationResult(
+            command=command,
+            expected_result=expected,
+            actual_result=actual_output.strip() if actual_output else "",
+            success=success,
+            execution_time=execution_time,
+            validation_query=q,
+        )
+
+    except Exception as e:
+        logger.error(f"Validation failed for task {task.id}: {e}", exc_info=True)
+        return None
         
 def calculate_grpo_advantages(
     rewards: List[float],
@@ -394,8 +807,12 @@ __all__ = [
     "completion_reward_function",
     "efficiency_reward_function",
     "shaped_reward_function",
+    "comprehensive_reward_function",
+    "create_rollout_result_from_dict",
     "RewardTracker",
     "validate_task_completion",
+    "validate_task_completion_with_details",
+    "ADBValidationResult",
     "calculate_grpo_advantages",
     "cua_reward_fn",
 ]

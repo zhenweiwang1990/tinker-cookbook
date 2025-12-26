@@ -115,6 +115,21 @@ class TinkerCuaAgent:
         # Conversation history
         self.messages: List[renderers.Message] = []
         self.system_prompt: Optional[str] = None
+        
+        # Metrics tracking for reward calculation
+        self.num_total_actions: int = 0
+        self.consecutive_repeated_actions: int = 0
+        self.parse_errors: int = 0
+        self.tool_name_errors: int = 0
+        self.tool_arg_errors: int = 0
+        self.runtime_errors: int = 0
+        self.turn_first_success: int = -1
+        self.turn_task_completed: int = -1
+        self.attempted_completion: bool = False
+        
+        # Track last action for detecting consecutive repeats
+        self._last_action_signature: Optional[str] = None
+        self._current_repeat_count: int = 0
     
     def _data_uri_to_pil(self, data_uri: str) -> Image.Image:
         """Convert data URI to PIL Image."""
@@ -144,6 +159,21 @@ class TinkerCuaAgent:
         )
         
         return [message]
+    
+    def _create_action_signature(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Create a signature for an action to detect consecutive repeats.
+        
+        Args:
+            tool_name: Name of the tool
+            arguments: Tool arguments
+            
+        Returns:
+            String signature (normalized JSON of tool name + sorted arguments)
+        """
+        import json
+        # Create normalized signature: sort keys and convert to JSON string
+        normalized_args = json.dumps(arguments, sort_keys=True)
+        return f"{tool_name}:{normalized_args}"
     
     def _extract_json_from_text(self, text: str, start_char: str = '{') -> Optional[Any]:
         """
@@ -269,6 +299,7 @@ class TinkerCuaAgent:
             self.task_completed = True
             self.task_success = arguments.get("success", False)
             self.result_message = arguments.get("result_message", "Task completed")
+            self.attempted_completion = True
             return {
                 "status": "complete",
                 "success": self.task_success,
@@ -276,6 +307,8 @@ class TinkerCuaAgent:
             }
         
         else:
+            # Unknown tool name - this is a tool_name_error
+            self.tool_name_errors += 1
             raise ValueError(f"Unknown tool: {tool_name}")
     
     def _ensure_checkpoint_loaded(self):
@@ -484,6 +517,19 @@ class TinkerCuaAgent:
         # Initialize turn counter before try block so it's always defined
         turn = 0
         
+        # Reset metrics for this rollout
+        self.num_total_actions = 0
+        self.consecutive_repeated_actions = 0
+        self.parse_errors = 0
+        self.tool_name_errors = 0
+        self.tool_arg_errors = 0
+        self.runtime_errors = 0
+        self.turn_first_success = -1
+        self.turn_task_completed = -1
+        self.attempted_completion = False
+        self._last_action_signature = None
+        self._current_repeat_count = 0
+        
         try:
             # Create system prompt
             prompt_start = time.time()
@@ -606,6 +652,7 @@ class TinkerCuaAgent:
                         # Validate tool call format
                         if not tool_name:
                             error_msg = f"Tool call {tool_call_idx + 1} is missing 'name' field. Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
                             else:
@@ -619,6 +666,7 @@ class TinkerCuaAgent:
                         
                         if not isinstance(tool_args, dict):
                             error_msg = f"Tool call {tool_call_idx + 1} has invalid 'arguments' field (expected dict, got {type(tool_args)}). Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
                             else:
@@ -630,14 +678,52 @@ class TinkerCuaAgent:
                             })
                             continue
                         
+                        # Validate tool arguments (basic check for required fields)
+                        if tool_name == "action" and "action_type" not in tool_args:
+                            self.tool_arg_errors += 1
+                        elif tool_name == "wait" and "duration" not in tool_args:
+                            # duration is optional for wait, so this is not an error
+                            pass
+                        elif tool_name == "finish":
+                            # finish doesn't require specific args
+                            pass
+                        
                         if not self.rollout_logger:
                             logger.info(f"[Turn {turn}] Tool call {tool_call_idx + 1}/{len(tool_calls)}: {tool_name}")
                             logger.info(f"[Turn {turn}] Tool arguments: {json.dumps(tool_args, indent=2)}")
                         
                         tool_exec_start = time.time()
                         try:
+                            # Track action for consecutive repeat detection (only for action and wait tools)
+                            action_signature = None
+                            if tool_name in ["action", "wait"]:
+                                action_signature = self._create_action_signature(tool_name, tool_args)
+                                
+                                # Check for consecutive repeat
+                                if action_signature == self._last_action_signature:
+                                    self._current_repeat_count += 1
+                                    # Only count as consecutive repeat if it's the 2nd or more repeat
+                                    if self._current_repeat_count >= 2:
+                                        self.consecutive_repeated_actions = max(
+                                            self.consecutive_repeated_actions,
+                                            self._current_repeat_count - 1  # -1 because first repeat doesn't count
+                                        )
+                                else:
+                                    # Different action, reset repeat count
+                                    self._current_repeat_count = 0
+                                    self._last_action_signature = action_signature
+                            
                             result = await self._execute_tool_call(tool_name, tool_args)
                             tool_exec_time = time.time() - tool_exec_start
+                            
+                            # Track successful action (all tools count, including finish)
+                            self.num_total_actions += 1
+                            
+                            # Track first success (for action/wait tools that succeed)
+                            if tool_name in ["action", "wait"] and self.turn_first_success < 0:
+                                # Check if result indicates success (no error status)
+                                if isinstance(result, dict) and result.get("status") != "error":
+                                    self.turn_first_success = turn
                             
                             tool_results.append({
                                 "tool": tool_name,
@@ -659,6 +745,10 @@ class TinkerCuaAgent:
                                 logger.info(f"[Turn {turn}] ✓ Tool '{tool_name}' executed in {tool_exec_time:.3f}s")
                                 logger.info(f"[Turn {turn}] Tool result: {json.dumps(result, indent=2, default=str)}")
                             
+                            # If task completed, track completion turn
+                            if self.task_completed and self.turn_task_completed < 0:
+                                self.turn_task_completed = turn
+                            
                             # If task completed, break from tool execution loop
                             # Note: We'll check this again after the loop to break from the while loop
                             if self.task_completed:
@@ -668,9 +758,38 @@ class TinkerCuaAgent:
                                     logger.info(f"[Turn {turn}] ⚠ Task marked as completed by tool '{tool_name}'")
                                 break
                                 
+                        except ValueError as e:
+                            # ValueError from _execute_tool_call usually means tool_name_error
+                            tool_exec_time = time.time() - tool_exec_start
+                            error_msg = f"Tool execution error: {str(e)}"
+                            
+                            # Note: tool_name_errors is already incremented in _execute_tool_call
+                            
+                            if self.rollout_logger:
+                                self.rollout_logger.log_tool_execution(
+                                    turn_num=turn,
+                                    tool_idx=tool_call_idx + 1,
+                                    total_tools=len(tool_calls),
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    exec_time=tool_exec_time,
+                                    error=str(e),
+                                )
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool execution error (continuing): {str(e)}")
+                            else:
+                                logger.error(f"[Turn {turn}] ✗ Tool '{tool_name}' failed after {tool_exec_time:.3f}s: {e}", exc_info=True)
+                                logger.warning(f"[Turn {turn}] ⚠ Tool execution error (continuing rollout): {str(e)}")
+                            tool_results.append({
+                                "tool": tool_name,
+                                "error": str(e),
+                                "status": "error",
+                            })
+                            # Continue to next tool call instead of breaking
+                            
                         except Exception as e:
                             tool_exec_time = time.time() - tool_exec_start
-                            # Tool execution error: return error as tool result, continue rollout
+                            # Runtime error during tool execution
+                            self.runtime_errors += 1
                             error_msg = f"Tool execution error: {str(e)}"
                             
                             if self.rollout_logger:
@@ -816,6 +935,16 @@ class TinkerCuaAgent:
             "result_message": self.result_message,
             "num_turns": turn,
             "max_turns": self.max_turns,
+            # Metrics for reward calculation
+            "num_total_actions": self.num_total_actions,
+            "consecutive_repeated_actions": self.consecutive_repeated_actions,
+            "parse_errors": self.parse_errors,
+            "tool_name_errors": self.tool_name_errors,
+            "tool_arg_errors": self.tool_arg_errors,
+            "runtime_errors": self.runtime_errors,
+            "turn_first_success": self.turn_first_success,
+            "turn_task_completed": self.turn_task_completed,
+            "attempted_completion": self.attempted_completion,
         }
     
     async def close(self):

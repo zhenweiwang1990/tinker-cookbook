@@ -102,6 +102,29 @@ async def _run_single_env_rollout(
     task_completed = rollout_result.get("task_completed", False)
     num_turns = rollout_result.get("num_turns", 0)
     
+    # Perform ADB validation if task and agent are available (before agent is closed)
+    if hasattr(env, 'task') and env.task and env.task.validation_query:
+        if hasattr(env, '_agent') and env._agent and hasattr(env._agent, 'gbox_client'):
+            try:
+                from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                
+                validation_result = await validate_task_completion_with_details(
+                    task=env.task,
+                    gbox_client=env._agent.gbox_client,
+                )
+                
+                if validation_result:
+                    rollout_logger.log_adb_validation(
+                        command=validation_result.command,
+                        expected_result=validation_result.expected_result,
+                        actual_result=validation_result.actual_result,
+                        success=validation_result.success,
+                        execution_time=validation_result.execution_time,
+                        validation_query=validation_result.validation_query,
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to perform ADB validation: {e}")
+    
     # Set summary in rollout logger
     rollout_logger.set_summary({
         "task_success": task_success,
@@ -157,6 +180,9 @@ async def _run_single_env_rollout(
     }
     
     rollout_logger.log("-" * 120)
+    
+    # Log ADB validation in table format (if available)
+    rollout_logger.log_rollout_completion()
     
     # Save trajectory BEFORE flush (so logs are still in buffer)
     if output_dir:

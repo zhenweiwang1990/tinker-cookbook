@@ -12,7 +12,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import base64
 
 logger = logging.getLogger(__name__)
@@ -644,6 +644,99 @@ class RolloutLogger:
         # Save turn data
         self.trajectory_data["turns"].append(self.current_turn)
         self.current_turn = None
+    
+    def log_adb_validation(
+        self,
+        command: str,
+        expected_result: Any,
+        actual_result: str,
+        success: bool,
+        execution_time: float,
+        validation_query: str = "",
+    ):
+        """Log ADB validation information.
+        
+        Args:
+            command: ADB/shell command executed
+            expected_result: Expected result
+            actual_result: Actual output from command
+            success: Whether validation passed
+            execution_time: Time taken to execute (seconds)
+            validation_query: Type of validation query (e.g., "wifi_enabled")
+        """
+        # Store ADB validation info for later logging
+        self.trajectory_data.setdefault("adb_validation", {
+            "command": command,
+            "expected_result": str(expected_result),
+            "actual_result": actual_result,
+            "success": success,
+            "execution_time": execution_time,
+            "validation_query": validation_query,
+        })
+    
+    def _format_adb_validation_details(self) -> List[str]:
+        """Format ADB validation details for table display.
+        
+        Returns:
+            List of formatted lines for the ADB validation section
+        """
+        if "adb_validation" not in self.trajectory_data:
+            return []
+        
+        validation = self.trajectory_data["adb_validation"]
+        command = validation.get("command", "N/A")
+        expected = validation.get("expected_result", "N/A")
+        actual = validation.get("actual_result", "N/A")
+        success = validation.get("success", False)
+        exec_time = validation.get("execution_time", 0.0)
+        query_type = validation.get("validation_query", "")
+        
+        lines = []
+        
+        # Format command line
+        command_line = f"ADB Command: {command}"
+        lines.append(command_line)
+        
+        # Format expected result
+        expected_line = f"Expected: {expected}"
+        lines.append(expected_line)
+        
+        # Format actual result (may be long, wrap if needed)
+        actual_preview = actual[:80] + "..." if len(actual) > 80 else actual
+        actual_status = "✓" if success else "✗"
+        actual_status_colored = self._color(actual_status, "GREEN" if success else "RED")
+        actual_line = f"Actual: {actual_status_colored} {actual_preview}"
+        lines.append(actual_line)
+        
+        # Format execution time and success status
+        status_text = "PASSED" if success else "FAILED"
+        status_colored = self._color(status_text, "GREEN" if success else "RED")
+        summary_line = f"Result: {status_colored} | Execution time: {exec_time:.3f}s"
+        if query_type:
+            summary_line += f" | Query: {query_type}"
+        lines.append(summary_line)
+        
+        return lines
+    
+    def log_rollout_completion(self):
+        """Log rollout completion with ADB validation information in a table."""
+        # Check if we have ADB validation information
+        if "adb_validation" not in self.trajectory_data:
+            return
+        
+        # Create a new table for ADB validation
+        self.log("")
+        self.log(self._table_top())
+        self.log(self._table_row("ADB Validation"))
+        self.log(self._table_separator())
+        
+        # Format and log ADB validation details
+        validation_lines = self._format_adb_validation_details()
+        for line in validation_lines:
+            self.log(self._table_row(line))
+        
+        # Close the table
+        self.log(self._table_bottom())
     
     def set_summary(self, summary: Dict[str, Any]):
         """Set rollout summary."""

@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 from functools import partial
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import chz
 import tinker
@@ -19,6 +19,7 @@ from tinker_cookbook.rl.problem_env import ProblemEnv, ProblemGroupBuilder
 from tinker_cookbook.rl.types import Action, EnvGroupBuilder, RLDataset, RLDatasetBuilder, StepResult
 from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
 from tinker_cookbook.recipes.cua_rl.tinker_cua_agent import TinkerCuaAgent
+from tinker_cookbook.recipes.cua_rl.demo_tasks import CUATask
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class CUAEnv(ProblemEnv):
         max_turns: int = 20,
         box_type: str = "android",
         format_coef: float = 0.0,  # No format penalty for CUA
+        task: Optional[CUATask] = None,  # Optional task object for validation
     ):
         """
         Initialize CUA Environment.
@@ -67,6 +69,7 @@ class CUAEnv(ProblemEnv):
         self.tinker_api_key = tinker_api_key
         self.max_turns = max_turns
         self.box_type = box_type
+        self.task = task  # Store task object for validation
         
         # TinkerCuaAgent instance (created lazily during rollout)
         self._agent: Optional[TinkerCuaAgent] = None
@@ -177,6 +180,29 @@ class CUAEnv(ProblemEnv):
                 logger.info(f"[CUAEnv] ✓ Task execution completed in {task_time:.3f}s")
             
             self._rollout_result = result
+            
+            # Perform ADB validation if task has validation_query (before agent is closed)
+            if self.task and self.task.validation_query and rollout_logger:
+                try:
+                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                    
+                    validation_result = await validate_task_completion_with_details(
+                        task=self.task,
+                        gbox_client=self._agent.gbox_client,
+                    )
+                    
+                    if validation_result:
+                        rollout_logger.log_adb_validation(
+                            command=validation_result.command,
+                            expected_result=validation_result.expected_result,
+                            actual_result=validation_result.actual_result,
+                            success=validation_result.success,
+                            execution_time=validation_result.execution_time,
+                            validation_query=validation_result.validation_query,
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to perform ADB validation: {e}")
+            
             return result
         finally:
             # Cleanup
@@ -249,7 +275,7 @@ class CUADataset(RLDataset):
     
     def __init__(
         self,
-        tasks: List[str],
+        tasks: Union[List[str], List[CUATask]],  # Can be list of strings or CUATask objects
         batch_size: int,
         group_size: int,
         gbox_api_key: str,
@@ -296,12 +322,22 @@ class CUADataset(RLDataset):
         return builders
     
     def _make_env_group_builder(
-        self, task: str, group_size: int
+        self, task: Any, group_size: int  # task can be CUATask or str
     ) -> ProblemGroupBuilder:
+        # Extract task description and task object
+        if hasattr(task, 'description'):
+            # It's a CUATask object
+            task_description = task.description
+            task_obj = task
+        else:
+            # It's a string
+            task_description = str(task)
+            task_obj = None
+        
         return ProblemGroupBuilder(
             env_thunk=partial(
                 CUAEnv,
-                task,
+                task_description,
                 self.gbox_api_key,
                 tinker_api_key=self.tinker_api_key,
                 rollout_model_name=self.rollout_model_name,
@@ -309,6 +345,7 @@ class CUADataset(RLDataset):
                 convo_prefix=self.convo_prefix,
                 max_turns=self.max_turns,
                 box_type=self.box_type,
+                task=task_obj,  # Pass task object for validation (None if task is string)
             ),
             num_envs=group_size,
             dataset_name="cua",
