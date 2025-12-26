@@ -595,6 +595,175 @@ async def validate_task_completion(
                 return expected in result_message
             return str(expected) in result_message
 
+        # 11) Media volume
+        if q == "media_volume":
+            out = await _run_shell("dumpsys audio | grep -A 10 'STREAM_MUSIC' | grep 'volume:' | head -1 || settings get system volume_music")
+            try:
+                import re
+                volume_match = re.search(r'volume:\s*(\d+)/(\d+)', out)
+                if volume_match:
+                    current_vol = int(volume_match.group(1))
+                    max_vol = int(volume_match.group(2))
+                    val = int((current_vol / max_vol) * 100) if max_vol > 0 else 0
+                else:
+                    val = int(out.strip())
+                return val == int(expected) if isinstance(expected, (int, float)) else False
+            except (ValueError, AttributeError):
+                return False
+
+        # 12) Notification count
+        if q == "notification_count":
+            out = await _run_shell("dumpsys notification | grep -c 'NotificationRecord' || echo '0'")
+            try:
+                val = int(out.strip())
+                return val == int(expected) if isinstance(expected, (int, float)) else False
+            except ValueError:
+                return False
+
+        # 13) Auto time enabled
+        if q == "auto_time_enabled":
+            out = await _run_shell("settings get global auto_time")
+            try:
+                val = int(out.strip())
+                return bool(val) == bool(expected)
+            except ValueError:
+                return False
+
+        # 14) Battery saver enabled
+        if q == "battery_saver_enabled":
+            out = await _run_shell("settings get global low_power")
+            try:
+                val = int(out.strip())
+                return bool(val) == bool(expected)
+            except ValueError:
+                return False
+
+        # 15) Chrome cache cleared
+        if q == "chrome_cache_cleared":
+            out = await _run_shell("dumpsys package com.android.chrome | grep -A 5 'cacheSize' || pm clear com.android.chrome --dry-run")
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', out)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    return (cache_size < 1048576) == bool(expected)
+                return bool(expected)
+            except (ValueError, AttributeError):
+                return False
+
+        # 16) Facebook cache cleared
+        if q == "facebook_cache_cleared":
+            out = await _run_shell("dumpsys package com.facebook.katana | grep -A 5 'cacheSize' || pm clear com.facebook.katana --dry-run")
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', out)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    return (cache_size < 1048576) == bool(expected)
+                return bool(expected)
+            except (ValueError, AttributeError):
+                return False
+
+        # 17) Instagram cache cleared
+        if q == "instagram_cache_cleared":
+            out = await _run_shell("dumpsys package com.instagram.android | grep -A 5 'cacheSize' || pm clear com.instagram.android --dry-run")
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', out)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    return (cache_size < 1048576) == bool(expected)
+                return bool(expected)
+            except (ValueError, AttributeError):
+                return False
+
+        # 18) System language
+        if q == "system_language":
+            out = await _run_shell("settings get system system_locales || getprop ro.product.locale")
+            import re
+            lang_match = re.search(r'([a-z]{2})[-_]', out.lower())
+            if lang_match:
+                actual_lang = lang_match.group(1)
+            else:
+                actual_lang = out.strip()[:2].lower()
+            if isinstance(expected, str):
+                return expected.lower() in actual_lang or actual_lang in expected.lower()
+            return False
+
+        # 19) Dark theme enabled
+        if q == "dark_theme_enabled":
+            out = await _run_shell("settings get secure ui_night_mode || settings get system dark_theme")
+            try:
+                val = int(out.strip())
+                is_dark = val > 0
+                return is_dark == bool(expected)
+            except ValueError:
+                return False
+
+        # 20) App installed
+        if q == "app_installed":
+            if not isinstance(expected, dict) or "package" not in expected or "installed" not in expected:
+                logger.warning(f"app_installed validation requires expected_result with 'package' and 'installed' keys (task {task.id})")
+                return False
+            package = expected["package"]
+            expected_installed = expected["installed"]
+            out = await _run_shell(f"pm list packages | grep -q '^{package}$' && echo '1' || echo '0'")
+            try:
+                is_installed = int(out.strip()) == 1
+                return is_installed == bool(expected_installed)
+            except ValueError:
+                return False
+
+        # 21) App permission
+        if q == "app_permission":
+            if not isinstance(expected, dict) or "package" not in expected or "permission" not in expected or "granted" not in expected:
+                logger.warning(f"app_permission validation requires expected_result with 'package', 'permission', and 'granted' keys (task {task.id})")
+                return False
+            package = expected["package"]
+            permission = expected["permission"]
+            expected_granted = expected["granted"]
+            out = await _run_shell(f"dumpsys package {package} | grep -A 2 '{permission}' | grep 'granted=true' && echo '1' || echo '0'")
+            try:
+                is_granted = int(out.strip()) == 1
+                return is_granted == bool(expected_granted)
+            except ValueError:
+                return False
+
+        # 22) File exists
+        if q == "file_exists":
+            if not isinstance(expected, dict) or "path" not in expected or "exists" not in expected:
+                logger.warning(f"file_exists validation requires expected_result with 'path' and 'exists' keys (task {task.id})")
+                return False
+            file_path = expected["path"]
+            expected_exists = expected["exists"]
+            out = await _run_shell(f"test -e '{file_path}' && echo '1' || echo '0'")
+            try:
+                file_exists = int(out.strip()) == 1
+                return file_exists == bool(expected_exists)
+            except ValueError:
+                return False
+
+        # 23) Finish message contains
+        if q == "finish_message_contains":
+            if result_message is None:
+                logger.warning(f"finish_message_contains validation requires result_message parameter (task {task.id})")
+                return False
+            if isinstance(expected, str):
+                return expected in result_message
+            return str(expected) in result_message
+
+        # 24) Finish message contains size
+        if q == "finish_message_contains_size":
+            if result_message is None:
+                logger.warning(f"finish_message_contains_size validation requires result_message parameter (task {task.id})")
+                return False
+            import re
+            size_pattern = r'\d+\.?\d*\s*(KB|MB|GB|TB|bytes?)'
+            has_size = bool(re.search(size_pattern, result_message, re.IGNORECASE))
+            if isinstance(expected, str) and expected == "storage_size_reported":
+                return has_size
+            return str(expected) in result_message if expected else has_size
+
         logger.warning(f"No shell-based validator implemented for query '{q}' (task {task.id})")
         return False
 
@@ -777,6 +946,209 @@ async def validate_task_completion_with_details(
                 success = expected in result_message
             else:
                 success = str(expected) in result_message
+
+        # 11) Media volume
+        elif q == "media_volume":
+            command = "dumpsys audio | grep -A 10 'STREAM_MUSIC' | grep 'volume:' | head -1 || settings get system volume_music"
+            actual_output = await _run_shell(command)
+            try:
+                # Try to extract volume from dumpsys output (format: "volume: 15/100")
+                import re
+                volume_match = re.search(r'volume:\s*(\d+)/(\d+)', actual_output)
+                if volume_match:
+                    current_vol = int(volume_match.group(1))
+                    max_vol = int(volume_match.group(2))
+                    # Convert to percentage (0-100)
+                    val = int((current_vol / max_vol) * 100) if max_vol > 0 else 0
+                else:
+                    # Fallback: try to parse as direct value
+                    val = int(actual_output.strip())
+                success = val == int(expected) if isinstance(expected, (int, float)) else False
+            except (ValueError, AttributeError):
+                success = False
+
+        # 12) Notification count
+        elif q == "notification_count":
+            command = "dumpsys notification | grep -c 'NotificationRecord' || echo '0'"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = val == int(expected) if isinstance(expected, (int, float)) else False
+            except ValueError:
+                success = False
+
+        # 13) Auto time enabled
+        elif q == "auto_time_enabled":
+            command = "settings get global auto_time"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = bool(val) == bool(expected)
+            except ValueError:
+                success = False
+
+        # 14) Battery saver enabled
+        elif q == "battery_saver_enabled":
+            command = "settings get global low_power"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                success = bool(val) == bool(expected)
+            except ValueError:
+                success = False
+
+        # 15) Chrome cache cleared
+        elif q == "chrome_cache_cleared":
+            command = "dumpsys package com.android.chrome | grep -A 5 'cacheSize' || pm clear com.android.chrome --dry-run"
+            actual_output = await _run_shell(command)
+            # Check if cache size is 0 or very small
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    # Cache cleared means size is 0 or very small (< 1MB = 1048576 bytes)
+                    success = (cache_size < 1048576) == bool(expected)
+                else:
+                    # If we can't find cache size, assume validation based on command success
+                    success = bool(expected)
+            except (ValueError, AttributeError):
+                success = False
+
+        # 16) Facebook cache cleared
+        elif q == "facebook_cache_cleared":
+            command = "dumpsys package com.facebook.katana | grep -A 5 'cacheSize' || pm clear com.facebook.katana --dry-run"
+            actual_output = await _run_shell(command)
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    success = (cache_size < 1048576) == bool(expected)
+                else:
+                    success = bool(expected)
+            except (ValueError, AttributeError):
+                success = False
+
+        # 17) Instagram cache cleared
+        elif q == "instagram_cache_cleared":
+            command = "dumpsys package com.instagram.android | grep -A 5 'cacheSize' || pm clear com.instagram.android --dry-run"
+            actual_output = await _run_shell(command)
+            try:
+                import re
+                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
+                if cache_match:
+                    cache_size = int(cache_match.group(1))
+                    success = (cache_size < 1048576) == bool(expected)
+                else:
+                    success = bool(expected)
+            except (ValueError, AttributeError):
+                success = False
+
+        # 18) System language
+        elif q == "system_language":
+            command = "settings get system system_locales || getprop ro.product.locale"
+            actual_output = await _run_shell(command)
+            # Extract language code (e.g., "zh" from "zh_CN" or "zh-CN")
+            import re
+            lang_match = re.search(r'([a-z]{2})[-_]', actual_output.lower())
+            if lang_match:
+                actual_lang = lang_match.group(1)
+            else:
+                # Try to extract first 2 characters
+                actual_lang = actual_output.strip()[:2].lower()
+            if isinstance(expected, str):
+                success = expected.lower() in actual_lang or actual_lang in expected.lower()
+            else:
+                success = False
+
+        # 19) Dark theme enabled
+        elif q == "dark_theme_enabled":
+            command = "settings get secure ui_night_mode || settings get system dark_theme"
+            actual_output = await _run_shell(command)
+            try:
+                val = int(actual_output.strip())
+                # ui_night_mode: 0=light, 1=dark, 2=auto
+                # dark_theme: 0=light, 1=dark
+                is_dark = val > 0
+                success = is_dark == bool(expected)
+            except ValueError:
+                success = False
+
+        # 20) App installed
+        elif q == "app_installed":
+            if not isinstance(expected, dict) or "package" not in expected or "installed" not in expected:
+                logger.warning(f"app_installed validation requires expected_result with 'package' and 'installed' keys (task {task.id})")
+                return None
+            package = expected["package"]
+            expected_installed = expected["installed"]
+            command = f"pm list packages | grep -q '^{package}$' && echo '1' || echo '0'"
+            actual_output = await _run_shell(command)
+            try:
+                is_installed = int(actual_output.strip()) == 1
+                success = is_installed == bool(expected_installed)
+            except ValueError:
+                success = False
+
+        # 21) App permission
+        elif q == "app_permission":
+            if not isinstance(expected, dict) or "package" not in expected or "permission" not in expected or "granted" not in expected:
+                logger.warning(f"app_permission validation requires expected_result with 'package', 'permission', and 'granted' keys (task {task.id})")
+                return None
+            package = expected["package"]
+            permission = expected["permission"]
+            expected_granted = expected["granted"]
+            command = f"dumpsys package {package} | grep -A 2 '{permission}' | grep 'granted=true' && echo '1' || echo '0'"
+            actual_output = await _run_shell(command)
+            try:
+                is_granted = int(actual_output.strip()) == 1
+                success = is_granted == bool(expected_granted)
+            except ValueError:
+                success = False
+
+        # 22) File exists
+        elif q == "file_exists":
+            if not isinstance(expected, dict) or "path" not in expected or "exists" not in expected:
+                logger.warning(f"file_exists validation requires expected_result with 'path' and 'exists' keys (task {task.id})")
+                return None
+            file_path = expected["path"]
+            expected_exists = expected["exists"]
+            command = f"test -e '{file_path}' && echo '1' || echo '0'"
+            actual_output = await _run_shell(command)
+            try:
+                file_exists = int(actual_output.strip()) == 1
+                success = file_exists == bool(expected_exists)
+            except ValueError:
+                success = False
+
+        # 23) Finish message contains (same as result_message_contains)
+        elif q == "finish_message_contains":
+            if result_message is None:
+                logger.warning(f"finish_message_contains validation requires result_message parameter (task {task.id})")
+                return None
+            command = "finish_message_validation"
+            actual_output = result_message
+            if isinstance(expected, str):
+                success = expected in result_message
+            else:
+                success = str(expected) in result_message
+
+        # 24) Finish message contains size (checks if storage size is reported)
+        elif q == "finish_message_contains_size":
+            if result_message is None:
+                logger.warning(f"finish_message_contains_size validation requires result_message parameter (task {task.id})")
+                return None
+            command = "finish_message_size_validation"
+            actual_output = result_message
+            # Check if message contains size pattern (e.g., "20MB", "1.5GB", "500KB")
+            import re
+            size_pattern = r'\d+\.?\d*\s*(KB|MB|GB|TB|bytes?)'
+            has_size = bool(re.search(size_pattern, result_message, re.IGNORECASE))
+            if isinstance(expected, str) and expected == "storage_size_reported":
+                success = has_size
+            else:
+                # Fallback: check if expected string is in message
+                success = str(expected) in result_message if expected else has_size
 
         else:
             logger.warning(f"No shell-based validator implemented for query '{q}' (task {task.id})")

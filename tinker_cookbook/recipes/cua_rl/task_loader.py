@@ -61,17 +61,17 @@ class TaskSourceConfig:
     seed: Optional[int] = None
 
 
-def load_tasks_from_config(config: TaskSourceConfig) -> List[str]:
+def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
     """
     Load tasks based on configuration.
     
-    Returns a list of task descriptions (strings) that can be used by CUADataset.
+    Returns a list of CUATask objects that can be used by CUADataset.
     
     Args:
         config: TaskSourceConfig specifying how to load tasks
         
     Returns:
-        List of task description strings
+        List of CUATask objects
     """
     tasks: List[CUATask] = []
     
@@ -95,18 +95,42 @@ def load_tasks_from_config(config: TaskSourceConfig) -> List[str]:
         if not config.file_path:
             raise ValueError("file_path must be provided for source_type='file'")
         # Load from file - each line is a task description
+        # For file source, we create minimal CUATask objects with just descriptions
+        # (no validation_query, so validation won't be performed)
         file_path = Path(config.file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"Task file not found: {file_path}")
         with open(file_path, "r", encoding="utf-8") as f:
             task_descriptions = [line.strip() for line in f if line.strip()]
-        # Return directly as strings (not CUATask objects)
-        return task_descriptions
+        # Create minimal CUATask objects (no validation for file-based tasks)
+        tasks = [
+            CUATask(
+                id=f"file_task_{i}",
+                name=f"File Task {i+1}",
+                description=desc,
+                difficulty=TaskDifficulty.MEDIUM,
+                category=TaskCategory.SYSTEM,
+                validation_query=None,  # No validation for file-based tasks
+                expected_result=None,
+            )
+            for i, desc in enumerate(task_descriptions)
+        ]
     elif config.source_type == "custom":
         if not config.custom_tasks:
             raise ValueError("custom_tasks must be provided for source_type='custom'")
-        # Return directly as strings
-        return config.custom_tasks
+        # Create minimal CUATask objects (no validation for custom tasks)
+        tasks = [
+            CUATask(
+                id=f"custom_task_{i}",
+                name=f"Custom Task {i+1}",
+                description=desc,
+                difficulty=TaskDifficulty.MEDIUM,
+                category=TaskCategory.SYSTEM,
+                validation_query=None,  # No validation for custom tasks
+                expected_result=None,
+            )
+            for i, desc in enumerate(config.custom_tasks)
+        ]
     else:
         raise ValueError(
             f"Unknown source_type: {config.source_type}. "
@@ -126,29 +150,26 @@ def load_tasks_from_config(config: TaskSourceConfig) -> List[str]:
         )
         tasks = [t for t in tasks if t.difficulty == difficulty]
     
-    # Convert CUATask objects to description strings
-    task_descriptions = [task.description for task in tasks]
-    
     # Apply limit with optional sampling
-    if config.limit is not None and config.limit < len(task_descriptions):
+    if config.limit is not None and config.limit < len(tasks):
         if config.seed is not None:
             import random
             rng = random.Random(config.seed)
-            task_descriptions = rng.sample(task_descriptions, config.limit)
+            tasks = rng.sample(tasks, config.limit)
         else:
-            task_descriptions = task_descriptions[:config.limit]
+            tasks = tasks[:config.limit]
     
     logger.info(
-        f"Loaded {len(task_descriptions)} tasks from source_type='{config.source_type}'"
+        f"Loaded {len(tasks)} tasks from source_type='{config.source_type}'"
         + (f", category={config.category}" if config.category else "")
         + (f", difficulty={config.difficulty}" if config.difficulty else "")
         + (f", limit={config.limit}" if config.limit else "")
     )
     
-    return task_descriptions
+    return tasks
 
 
-def load_tasks_from_multiple_sources(configs: List[TaskSourceConfig]) -> List[str]:
+def load_tasks_from_multiple_sources(configs: List[TaskSourceConfig]) -> List[CUATask]:
     """
     Load tasks from multiple sources and combine them.
     
@@ -156,9 +177,9 @@ def load_tasks_from_multiple_sources(configs: List[TaskSourceConfig]) -> List[st
         configs: List of TaskSourceConfig objects
         
     Returns:
-        Combined list of task description strings
+        Combined list of CUATask objects
     """
-    all_tasks: List[str] = []
+    all_tasks: List[CUATask] = []
     for config in configs:
         tasks = load_tasks_from_config(config)
         all_tasks.extend(tasks)
@@ -174,7 +195,7 @@ def load_demo_training_tasks(
     difficulty: Optional[Union[str, TaskDifficulty]] = None,
     limit: Optional[int] = None,
     seed: Optional[int] = None,
-) -> List[str]:
+) -> List[CUATask]:
     """Load training tasks from demo_tasks.py."""
     config = TaskSourceConfig(
         source_type="demo_training",
@@ -191,7 +212,7 @@ def load_demo_eval_tasks(
     difficulty: Optional[Union[str, TaskDifficulty]] = None,
     limit: Optional[int] = None,
     seed: Optional[int] = None,
-) -> List[str]:
+) -> List[CUATask]:
     """Load evaluation tasks from demo_tasks.py."""
     config = TaskSourceConfig(
         source_type="demo_eval",
@@ -203,13 +224,13 @@ def load_demo_eval_tasks(
     return load_tasks_from_config(config)
 
 
-def load_tasks_by_ids(task_ids: List[str]) -> List[str]:
+def load_tasks_by_ids(task_ids: List[str]) -> List[CUATask]:
     """Load tasks by their IDs."""
     config = TaskSourceConfig(source_type="ids", task_ids=task_ids)
     return load_tasks_from_config(config)
 
 
-def load_tasks_from_file(file_path: str) -> List[str]:
+def load_tasks_from_file(file_path: str) -> List[CUATask]:
     """Load tasks from a file (one task description per line)."""
     config = TaskSourceConfig(source_type="file", file_path=file_path)
     return load_tasks_from_config(config)
