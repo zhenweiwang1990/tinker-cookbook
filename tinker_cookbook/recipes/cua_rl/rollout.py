@@ -118,14 +118,6 @@ async def _run_single_env_rollout(
             validation_query=validation_data.get("validation_query", ""),
         )
     
-    # Log rollout results to buffer
-    rollout_logger.log(f"Rollout Results:")
-    rollout_logger.log(f"  Task success: {task_success}")
-    rollout_logger.log(f"  Task completed: {task_completed}")
-    rollout_logger.log(f"  Number of turns: {num_turns}")
-    rollout_logger.log(f"  Total rollout time: {env_rollout_time:.2f}s")
-    rollout_logger.log(f"  Average time per turn: {env_rollout_time / max(num_turns, 1):.2f}s")
-    
     # Compute reward using comprehensive_reward_function
     validation_start = time.time()
     from tinker_cookbook.recipes.cua_rl.reward import (
@@ -164,11 +156,16 @@ async def _run_single_env_rollout(
     
     validation_time = time.time() - validation_start
     validation_method = "comprehensive_reward_function"
-    rollout_logger.log(f"[Validation] Method: {validation_method}")
-    rollout_logger.log(
-        f"[Validation] Reward: {reward:.4f} | task_success={task_success} | "
-        f"task_completed={task_completed} | validation_time={validation_time:.3f}s",
-        color="GREEN" if reward > 0 else "RED",
+    
+    # Log rollout summary in compact table format
+    rollout_logger.log_rollout_summary_table(
+        task_success=task_success,
+        task_completed=task_completed,
+        num_turns=num_turns,
+        total_rollout_time=env_rollout_time,
+        reward=reward,
+        validation_method=validation_method,
+        validation_time=validation_time,
     )
     
     # Set summary in rollout logger (after reward calculation)
@@ -199,9 +196,7 @@ async def _run_single_env_rollout(
         "temperature": temperature,
     }
     
-    rollout_logger.log("-" * 120)
-    
-    # Log ADB validation in table format (if available) - after reward calculation
+    # Log ADB validation details in table format (always shown, even if no validation)
     rollout_logger.log_rollout_completion()
     
     # Save trajectory BEFORE flush (so logs are still in buffer)

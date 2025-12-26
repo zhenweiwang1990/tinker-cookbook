@@ -122,17 +122,17 @@ class RolloutLogger:
     
     def _table_top(self) -> str:
         """Create top border of a table."""
-        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        border = self.BORDER_HORIZONTAL * (self.CONTENT_WIDTH-2)
         return f"{self.BORDER_CORNER_TOP_LEFT}{border}{self.BORDER_CORNER_TOP_RIGHT}"
     
     def _table_bottom(self) -> str:
         """Create bottom border of a table."""
-        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        border = self.BORDER_HORIZONTAL * (self.CONTENT_WIDTH-2)
         return f"{self.BORDER_CORNER_BOTTOM_LEFT}{border}{self.BORDER_CORNER_BOTTOM_RIGHT}"
     
     def _table_separator(self) -> str:
         """Create separator line of a table."""
-        border = self.BORDER_HORIZONTAL * self.CONTENT_WIDTH
+        border = self.BORDER_HORIZONTAL * (self.CONTENT_WIDTH-2)
         return f"{self.BORDER_SEPARATOR_LEFT}{border}{self.BORDER_SEPARATOR_RIGHT}"
     
     def _wrap_text_for_table(self, text: str, max_width: Optional[int] = None) -> List[str]:
@@ -786,22 +786,71 @@ class RolloutLogger:
         
         return lines
     
-    def log_rollout_completion(self):
-        """Log rollout completion with ADB validation information in a table."""
-        # Check if we have ADB validation information
-        if "adb_validation" not in self.trajectory_data:
-            return
+    def log_rollout_summary_table(
+        self,
+        task_success: bool,
+        task_completed: bool,
+        num_turns: int,
+        total_rollout_time: float,
+        reward: float,
+        validation_method: str = "comprehensive_reward_function",
+        validation_time: float = 0.0,
+    ):
+        """Log rollout summary and validation in a compact table format.
         
+        Args:
+            task_success: Whether task succeeded
+            task_completed: Whether task was completed
+            num_turns: Number of turns taken
+            total_rollout_time: Total rollout time in seconds
+            reward: Final reward value
+            validation_method: Method used for validation
+            validation_time: Time taken for validation
+        """
+        # Create a compact table with rollout results and validation
+        self.log("")
+        self.log(self._table_top())
+        self.log(self._table_row("Rollout Summary"))
+        self.log(self._table_separator())
+        
+        # Format task status with colors
+        success_status = self._color("✓", "GREEN") if task_success else self._color("✗", "RED")
+        completed_status = self._color("✓", "GREEN") if task_completed else self._color("✗", "RED")
+        
+        # Row 1: Task status
+        self.log(self._table_row(f"Task Success: {success_status} | Task Completed: {completed_status} | Turns: {num_turns}"))
+        
+        # Row 2: Timing
+        avg_time_per_turn = total_rollout_time / max(num_turns, 1)
+        self.log(self._table_row(f"Total Time: {total_rollout_time:.2f}s | Avg Time/Turn: {avg_time_per_turn:.2f}s"))
+        
+        # Row 3: Reward
+        reward_color = "GREEN" if reward > 0 else "RED"
+        reward_str = self._color(f"{reward:.4f}", reward_color)
+        self.log(self._table_row(f"Reward: {reward_str} | Method: {validation_method} | Validation Time: {validation_time:.3f}s"))
+        
+        # Close the table
+        self.log(self._table_bottom())
+    
+    def log_rollout_completion(self):
+        """Log rollout completion with ADB validation information in a table.
+        Always displays validation information, even if no validation was performed.
+        """
         # Create a new table for ADB validation
         self.log("")
         self.log(self._table_top())
-        self.log(self._table_row("ADB Validation"))
+        self.log(self._table_row("Validation Details"))
         self.log(self._table_separator())
         
-        # Format and log ADB validation details
-        validation_lines = self._format_adb_validation_details()
-        for line in validation_lines:
-            self.log(self._table_row(line))
+        # Check if we have ADB validation information
+        if "adb_validation" not in self.trajectory_data:
+            # No validation performed
+            self.log(self._table_row(self._color("⚠ No validation performed (task has no validation_query)", "YELLOW")))
+        else:
+            # Format and log ADB validation details
+            validation_lines = self._format_adb_validation_details()
+            for line in validation_lines:
+                self.log(self._table_row(line))
         
         # Close the table
         self.log(self._table_bottom())
