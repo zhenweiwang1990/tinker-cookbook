@@ -434,7 +434,7 @@ async def do_sync_training_with_stream_minibatch(
             eval_start = time.time()
             with timed("run_evals", metrics):
                 eval_metrics = await run_evaluations_parallel(
-                    evaluators, sampling_client, cfg, i_batch
+                    evaluators, sampling_client, cfg, i_batch, model_path=model_path
                 )
                 metrics.update(eval_metrics)
             eval_time = time.time() - eval_start
@@ -1164,7 +1164,7 @@ async def do_sync_training(
                 eval_start = time.time()
                 with timed("run_evals", metrics):
                     eval_metrics = await run_evaluations_parallel(
-                        evaluators, sampling_client, cfg, i_batch
+                        evaluators, sampling_client, cfg, i_batch, model_path=model_path
                     )
                     metrics.update(eval_metrics)
                 eval_time = time.time() - eval_start

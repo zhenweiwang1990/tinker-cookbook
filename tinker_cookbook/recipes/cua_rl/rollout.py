@@ -157,6 +157,19 @@ async def _run_single_env_rollout(
     validation_time = time.time() - validation_start
     validation_method = "comprehensive_reward_function"
     
+    # Set summary in rollout logger (after reward calculation)
+    rollout_logger.set_summary({
+        "task_success": task_success,
+        "task_completed": task_completed,
+        "num_turns": num_turns,
+        "rollout_time": env_rollout_time,
+        "reward": reward,
+    })
+    
+    # Log ADB validation details in table format (always shown, even if no validation)
+    # This should be shown BEFORE the rollout summary
+    rollout_logger.log_rollout_completion()
+    
     # Log rollout summary in compact table format
     rollout_logger.log_rollout_summary_table(
         task_success=task_success,
@@ -167,15 +180,6 @@ async def _run_single_env_rollout(
         validation_method=validation_method,
         validation_time=validation_time,
     )
-    
-    # Set summary in rollout logger (after reward calculation)
-    rollout_logger.set_summary({
-        "task_success": task_success,
-        "task_completed": task_completed,
-        "num_turns": num_turns,
-        "rollout_time": env_rollout_time,
-        "reward": reward,
-    })
     
     # Get temperature from policy if available
     temperature = None
@@ -195,9 +199,6 @@ async def _run_single_env_rollout(
         "rollout_time": env_rollout_time,
         "temperature": temperature,
     }
-    
-    # Log ADB validation details in table format (always shown, even if no validation)
-    rollout_logger.log_rollout_completion()
     
     # Save trajectory BEFORE flush (so logs are still in buffer)
     if output_dir:

@@ -647,7 +647,9 @@ async def validate_task_completion(
                 if cache_match:
                     cache_size = int(cache_match.group(1))
                     return (cache_size < 1048576) == bool(expected)
-                return bool(expected)
+                # If we can't find cache size, we can't confirm cache was cleared
+                # Return False to be conservative (can't verify task completion)
+                return False
             except (ValueError, AttributeError):
                 return False
 
@@ -660,7 +662,9 @@ async def validate_task_completion(
                 if cache_match:
                     cache_size = int(cache_match.group(1))
                     return (cache_size < 1048576) == bool(expected)
-                return bool(expected)
+                # If we can't find cache size, we can't confirm cache was cleared
+                # Return False to be conservative (can't verify task completion)
+                return False
             except (ValueError, AttributeError):
                 return False
 
@@ -673,7 +677,9 @@ async def validate_task_completion(
                 if cache_match:
                     cache_size = int(cache_match.group(1))
                     return (cache_size < 1048576) == bool(expected)
-                return bool(expected)
+                # If we can't find cache size, we can't confirm cache was cleared
+                # Return False to be conservative (can't verify task completion)
+                return False
             except (ValueError, AttributeError):
                 return False
 
@@ -877,33 +883,6 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 5) 当前 Activity（比如电池页）
-        elif q == "current_activity":
-            command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
-            actual_output = await _run_shell(command)
-            if not actual_output:
-                success = False
-            elif isinstance(expected, str) and expected:
-                success = expected.lower() in actual_output.lower()
-            else:
-                success = False
-
-        # 6) 是否在桌面
-        elif q == "is_home_screen":
-            command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
-            actual_output = await _run_shell(command)
-            if not actual_output:
-                success = False
-            else:
-                lowered = actual_output.lower()
-                is_home = (
-                    "launcher" in lowered
-                    or "home" in lowered
-                    or "com.android.launcher" in lowered
-                    or "launcher3" in lowered
-                )
-                success = is_home == bool(expected)
-
         # 7) 屏幕熄屏时间 (ms)
         elif q == "screen_timeout":
             command = "settings get system screen_off_timeout"
@@ -923,48 +902,6 @@ async def validate_task_completion_with_details(
                 is_enabled = val > 0
                 success = is_enabled == bool(expected)
             except ValueError:
-                success = False
-
-        # 9) 蓝牙开关
-        elif q == "bluetooth_enabled":
-            command = "settings get global bluetooth_on || settings get secure bluetooth_on"
-            actual_output = await _run_shell(command)
-            try:
-                val = int(actual_output.strip())
-                success = bool(val) == bool(expected)
-            except ValueError:
-                success = False
-
-        # 10) Result message contains check
-        elif q == "result_message_contains":
-            if result_message is None:
-                logger.warning(f"result_message_contains validation requires result_message parameter (task {task.id})")
-                return None
-            command = "result_message_validation"
-            actual_output = result_message
-            if isinstance(expected, str):
-                success = expected in result_message
-            else:
-                success = str(expected) in result_message
-
-        # 11) Media volume
-        elif q == "media_volume":
-            command = "dumpsys audio | grep -A 10 'STREAM_MUSIC' | grep 'volume:' | head -1 || settings get system volume_music"
-            actual_output = await _run_shell(command)
-            try:
-                # Try to extract volume from dumpsys output (format: "volume: 15/100")
-                import re
-                volume_match = re.search(r'volume:\s*(\d+)/(\d+)', actual_output)
-                if volume_match:
-                    current_vol = int(volume_match.group(1))
-                    max_vol = int(volume_match.group(2))
-                    # Convert to percentage (0-100)
-                    val = int((current_vol / max_vol) * 100) if max_vol > 0 else 0
-                else:
-                    # Fallback: try to parse as direct value
-                    val = int(actual_output.strip())
-                success = val == int(expected) if isinstance(expected, (int, float)) else False
-            except (ValueError, AttributeError):
                 success = False
 
         # 12) Notification count
@@ -997,84 +934,6 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 15) Chrome cache cleared
-        elif q == "chrome_cache_cleared":
-            command = "dumpsys package com.android.chrome | grep -A 5 'cacheSize' || pm clear com.android.chrome --dry-run"
-            actual_output = await _run_shell(command)
-            # Check if cache size is 0 or very small
-            try:
-                import re
-                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
-                if cache_match:
-                    cache_size = int(cache_match.group(1))
-                    # Cache cleared means size is 0 or very small (< 1MB = 1048576 bytes)
-                    success = (cache_size < 1048576) == bool(expected)
-                else:
-                    # If we can't find cache size, assume validation based on command success
-                    success = bool(expected)
-            except (ValueError, AttributeError):
-                success = False
-
-        # 16) Facebook cache cleared
-        elif q == "facebook_cache_cleared":
-            command = "dumpsys package com.facebook.katana | grep -A 5 'cacheSize' || pm clear com.facebook.katana --dry-run"
-            actual_output = await _run_shell(command)
-            try:
-                import re
-                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
-                if cache_match:
-                    cache_size = int(cache_match.group(1))
-                    success = (cache_size < 1048576) == bool(expected)
-                else:
-                    success = bool(expected)
-            except (ValueError, AttributeError):
-                success = False
-
-        # 17) Instagram cache cleared
-        elif q == "instagram_cache_cleared":
-            command = "dumpsys package com.instagram.android | grep -A 5 'cacheSize' || pm clear com.instagram.android --dry-run"
-            actual_output = await _run_shell(command)
-            try:
-                import re
-                cache_match = re.search(r'cacheSize[=:]\s*(\d+)', actual_output)
-                if cache_match:
-                    cache_size = int(cache_match.group(1))
-                    success = (cache_size < 1048576) == bool(expected)
-                else:
-                    success = bool(expected)
-            except (ValueError, AttributeError):
-                success = False
-
-        # 18) System language
-        elif q == "system_language":
-            command = "settings get system system_locales || getprop ro.product.locale"
-            actual_output = await _run_shell(command)
-            # Extract language code (e.g., "zh" from "zh_CN" or "zh-CN")
-            import re
-            lang_match = re.search(r'([a-z]{2})[-_]', actual_output.lower())
-            if lang_match:
-                actual_lang = lang_match.group(1)
-            else:
-                # Try to extract first 2 characters
-                actual_lang = actual_output.strip()[:2].lower()
-            if isinstance(expected, str):
-                success = expected.lower() in actual_lang or actual_lang in expected.lower()
-            else:
-                success = False
-
-        # 19) Dark theme enabled
-        elif q == "dark_theme_enabled":
-            command = "settings get secure ui_night_mode || settings get system dark_theme"
-            actual_output = await _run_shell(command)
-            try:
-                val = int(actual_output.strip())
-                # ui_night_mode: 0=light, 1=dark, 2=auto
-                # dark_theme: 0=light, 1=dark
-                is_dark = val > 0
-                success = is_dark == bool(expected)
-            except ValueError:
-                success = False
-
         # 20) App installed
         elif q == "app_installed":
             if not isinstance(expected, dict) or "package" not in expected or "installed" not in expected:
@@ -1082,27 +941,11 @@ async def validate_task_completion_with_details(
                 return None
             package = expected["package"]
             expected_installed = expected["installed"]
-            command = f"pm list packages | grep -q '^{package}$' && echo '1' || echo '0'"
+            command = f"pm list packages | grep -q '^package:{package}$' && echo '1' || echo '0'"
             actual_output = await _run_shell(command)
             try:
                 is_installed = int(actual_output.strip()) == 1
                 success = is_installed == bool(expected_installed)
-            except ValueError:
-                success = False
-
-        # 21) App permission
-        elif q == "app_permission":
-            if not isinstance(expected, dict) or "package" not in expected or "permission" not in expected or "granted" not in expected:
-                logger.warning(f"app_permission validation requires expected_result with 'package', 'permission', and 'granted' keys (task {task.id})")
-                return None
-            package = expected["package"]
-            permission = expected["permission"]
-            expected_granted = expected["granted"]
-            command = f"dumpsys package {package} | grep -A 2 '{permission}' | grep 'granted=true' && echo '1' || echo '0'"
-            actual_output = await _run_shell(command)
-            try:
-                is_granted = int(actual_output.strip()) == 1
-                success = is_granted == bool(expected_granted)
             except ValueError:
                 success = False
 

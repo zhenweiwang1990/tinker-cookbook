@@ -160,6 +160,9 @@ class CUAEnv(ProblemEnv):
             box_type=self.box_type,
             rollout_logger=rollout_logger,
         )
+        # Pass task object to agent for validation
+        if self.task:
+            self._agent.task = self.task
         agent_init_time = time.time() - agent_init_start
         if rollout_logger:
             rollout_logger.log(f"[CUAEnv] ✓ TinkerCuaAgent created in {agent_init_time:.3f}s")
@@ -181,31 +184,8 @@ class CUAEnv(ProblemEnv):
             
             self._rollout_result = result
             
-            # Perform ADB validation if task has validation_query (before agent is closed)
-            if self.task and self.task.validation_query and rollout_logger:
-                try:
-                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
-                    
-                    # Get result_message for validation if needed
-                    result_message = result.get("result_message", "") if isinstance(result, dict) else ""
-                    
-                    validation_result = await validate_task_completion_with_details(
-                        task=self.task,
-                        gbox_client=self._agent.gbox_client,
-                        result_message=result_message,
-                    )
-                    
-                    if validation_result:
-                        rollout_logger.log_adb_validation(
-                            command=validation_result.command,
-                            expected_result=validation_result.expected_result,
-                            actual_result=validation_result.actual_result,
-                            success=validation_result.success,
-                            execution_time=validation_result.execution_time,
-                            validation_query=validation_result.validation_query,
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to perform ADB validation: {e}")
+            # Note: Validation is now performed inside run_task() before the box is terminated
+            # This ensures gbox_client is still available when validation executes
             
             return result
         finally:

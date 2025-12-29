@@ -150,34 +150,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "brightness", "low"],
     ),
 
-    # Task 7: Increase media volume to maximum
-    CUATask(
-        id="train_07_max_media_volume",
-        name="Max Media Volume",
-        description="Open Settings or use volume controls to set the media volume to maximum.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=100,
-        tags=["settings", "sound", "volume", "media"],
-    ),
-
-    # Task 8: Mute media volume
-    CUATask(
-        id="train_08_mute_media_volume",
-        name="Mute Media Volume",
-        description="Open Settings or use volume controls to mute the media volume (set to 0).",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=10,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=0,
-        tags=["settings", "sound", "volume", "media", "mute"],
-    ),
-
     # Task 9: Clear all notifications
     CUATask(
         id="train_09_clear_notifications",
@@ -263,64 +235,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "battery", "saver"],
     ),
 
-    # Task 15: Clear Chrome app cache only
-    CUATask(
-        id="train_15_clear_chrome_cache",
-        name="Clear Chrome App Cache",
-        description="Navigate to Chrome's App Info > Storage and clear only the app cache (not data).",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=18,
-        validation_type="state",
-        validation_query="chrome_cache_cleared",
-        expected_result=True,
-        tags=["settings", "apps", "chrome", "cache"],
-    ),
-
-
-    # Task 16: Clear Facebook app cache only
-    CUATask(
-        id="train_16_clear_facebook_cache",
-        name="Clear Facebook App Cache",
-        description="Navigate to Facebook's App Info > Storage and clear only the app cache (not data).",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=18,
-        validation_type="state",
-        validation_query="facebook_cache_cleared",
-        expected_result=True,
-        tags=["settings", "apps", "facebook", "cache"],
-    ),
-
-
-    # Task 17: Change system language
-    CUATask(
-        id="train_17_change_system_language",
-        name="Change System Language to Chinese",
-        description="Open Language & input settings and change the system language to Chinese.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="system_language",
-        expected_result="zh",
-        tags=["settings", "language", "system"],
-    ),
-
-    # Task 18: Enable dark theme
-    CUATask(
-        id="train_18_enable_dark_theme",
-        name="Enable Dark Theme",
-        description="Open Display settings or quick settings and enable the system dark theme.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=12,
-        validation_type="state",
-        validation_query="dark_theme_enabled",
-        expected_result=True,
-        tags=["settings", "display", "theme", "dark"],
-    ),
-
     # Task 19: Uninstall Instagram
     CUATask(
         id="train_19_uninstall_instagram",
@@ -335,19 +249,6 @@ DEMO_TRAINING_TASKS = [
         tags=["system", "uninstall", "instagram"],
     ),
 
-    # Task 20: Disable Facebook contacts permission
-    CUATask(
-        id="train_20_disable_facebook_contacts",
-        name="Disable Facebook Contacts Permission",
-        description="Go to Facebook app settings and disable the Contacts permission.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.facebook.katana", "permission": "android.permission.READ_CONTACTS", "granted": False},
-        tags=["settings", "apps", "facebook", "permissions", "contacts"],
-    ),
 
     # Task 21: Create folder in Downloads
     CUATask(
@@ -391,20 +292,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "apps", "storage", "gbox"],
     ),
 
-    # Task 24: Disable Instagram location permission
-    CUATask(
-        id="train_24_disable_instagram_location",
-        name="Disable Instagram Location Permission",
-        description="Go to Instagram app settings and disable the Location permission.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.instagram.android", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
-        tags=["settings", "apps", "instagram", "permissions", "location"],
-    ),
-
     # Task 25: Create folder in Documents
     CUATask(
         id="train_25_create_documents_folder",
@@ -433,47 +320,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "apps", "storage", "chrome"],
     ),
 
-    # Task 27: Enable Instagram camera permission
-    CUATask(
-        id="train_27_enable_instagram_camera",
-        name="Enable Instagram Camera Permission",
-        description="Go to Instagram app settings and enable the Camera permission if it's disabled.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.instagram.android", "permission": "android.permission.CAMERA", "granted": True},
-        tags=["settings", "apps", "instagram", "permissions", "camera"],
-    ),
-
-    # Task 28: Clear Instagram cache
-    CUATask(
-        id="train_28_clear_instagram_cache",
-        name="Clear Instagram App Cache",
-        description="Navigate to Instagram's App Info > Storage and clear only the app cache.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=18,
-        validation_type="state",
-        validation_query="instagram_cache_cleared",
-        expected_result=True,
-        tags=["settings", "apps", "instagram", "cache"],
-    ),
-
-    # Task 29: Create folder in Pictures
-    CUATask(
-        id="train_29_create_pictures_folder",
-        name="Create Folder in Pictures",
-        description="Create a new folder named 'screenshots' in the Pictures directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Pictures/screenshots", "exists": True},
-        tags=["system", "file", "folder", "pictures"],
-    ),
 
     # Task 30: Uninstall Facebook
     CUATask(
@@ -487,20 +333,6 @@ DEMO_TRAINING_TASKS = [
         validation_query="app_installed",
         expected_result={"package": "com.facebook.katana", "installed": False},
         tags=["system", "uninstall", "facebook"],
-    ),
-
-    # Task 31: Disable Chrome location permission
-    CUATask(
-        id="train_31_disable_chrome_location",
-        name="Disable Chrome Location Permission",
-        description="Go to Chrome app settings and disable the Location permission.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.android.chrome", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
-        tags=["settings", "apps", "chrome", "permissions", "location"],
     ),
 
     # Task 32: Check Instagram storage size
@@ -531,19 +363,6 @@ DEMO_TRAINING_TASKS = [
         tags=["system", "file", "folder", "documents"],
     ),
 
-    # Task 34: Change media volume to 50%
-    CUATask(
-        id="train_34_media_volume_50",
-        name="Set Media Volume to 50%",
-        description="Open Sound settings or use volume controls to set media volume to 50%.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=50,
-        tags=["settings", "sound", "volume", "media"],
-    ),
 
     # Task 35: Change screen timeout to 5 minutes
     CUATask(
@@ -615,19 +434,6 @@ DEMO_TRAINING_TASKS = [
         tags=["system", "file", "folder", "documents"],
     ),
 
-    # Task 40: Enable Facebook location permission
-    CUATask(
-        id="train_40_enable_facebook_location",
-        name="Enable Facebook Location Permission",
-        description="Go to Facebook app settings and enable the Location permission if it's disabled.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.facebook.katana", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": True},
-        tags=["settings", "apps", "facebook", "permissions", "location"],
-    ),
 
     # Task 41: Change screen timeout to 15 minutes
     CUATask(
@@ -643,19 +449,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "display", "timeout"],
     ),
 
-    # Task 42: Change media volume to 80%
-    CUATask(
-        id="train_42_media_volume_80",
-        name="Set Media Volume to 80%",
-        description="Open Sound settings or use volume controls to set media volume to 80%.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=80,
-        tags=["settings", "sound", "volume", "media"],
-    ),
 
     # Task 43: Clear all app notifications
     CUATask(
@@ -671,61 +464,6 @@ DEMO_TRAINING_TASKS = [
         tags=["system", "notifications", "clear"],
     ),
 
-    # Task 44: Enable Chrome microphone permission
-    CUATask(
-        id="train_44_enable_chrome_mic",
-        name="Enable Chrome Microphone Permission",
-        description="Go to Chrome app settings and enable the Microphone permission if it's disabled.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.android.chrome", "permission": "android.permission.RECORD_AUDIO", "granted": True},
-        tags=["settings", "apps", "chrome", "permissions", "microphone"],
-    ),
-
-    # Task 45: Enable Chrome camera permission
-    CUATask(
-        id="train_45_enable_chrome_camera",
-        name="Enable Chrome Camera Permission",
-        description="Go to Chrome app settings and enable the Camera permission if it's disabled.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.android.chrome", "permission": "android.permission.CAMERA", "granted": True},
-        tags=["settings", "apps", "chrome", "permissions", "camera"],
-    ),
-
-    # Task 46: Change media volume to 30%
-    CUATask(
-        id="train_46_media_volume_30",
-        name="Set Media Volume to 30%",
-        description="Open Sound settings or use volume controls to set media volume to 30%.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=30,
-        tags=["settings", "sound", "volume", "media"],
-    ),
-
-    # Task 47: Change media volume to 60%
-    CUATask(
-        id="train_47_media_volume_60",
-        name="Set Media Volume to 60%",
-        description="Open Sound settings or use volume controls to set media volume to 60%.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="media_volume",
-        expected_result=60,
-        tags=["settings", "sound", "volume", "media"],
-    ),
 
     # Task 48: Change screen timeout to 30 minutes
     CUATask(
@@ -776,35 +514,6 @@ DEMO_EVAL_TASKS = [
         tags=["settings", "notifications", "dnd"],
     ),
 
-    # Eval Task 3: Change system language
-    CUATask(
-        id="eval_03_change_language",
-        name="Change System Language to Spanish",
-        description="Open Language & input settings and change the system language to Spanish.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=20,
-        validation_type="state",
-        validation_query="system_language",
-        expected_result="es",
-        tags=["settings", "language", "system"],
-    ),
-
-    # Eval Task 4: Enable dark theme
-    CUATask(
-        id="eval_04_enable_dark_theme",
-        name="Enable Dark Theme",
-        description="Enable the system dark theme from Display settings or quick settings.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="dark_theme_enabled",
-        expected_result=True,
-        tags=["settings", "display", "theme", "dark"],
-    ),
-
-
     # Eval Task 5: Enable battery saver
     CUATask(
         id="eval_05_enable_battery_saver",
@@ -831,34 +540,6 @@ DEMO_EVAL_TASKS = [
         validation_query="app_installed",
         expected_result={"package": "com.instagram.android", "installed": False},
         tags=["system", "uninstall", "instagram"],
-    ),
-
-    # Eval Task 7: Disable Facebook contacts permission
-    CUATask(
-        id="eval_07_disable_facebook_contacts",
-        name="Disable Facebook Contacts Permission",
-        description="Go to Facebook app settings and disable the Contacts permission.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=20,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.facebook.katana", "permission": "android.permission.READ_CONTACTS", "granted": False},
-        tags=["settings", "apps", "facebook", "permissions", "contacts"],
-    ),
-
-    # Eval Task 8: Clear Facebook cache
-    CUATask(
-        id="eval_08_clear_facebook_cache",
-        name="Clear Facebook App Cache",
-        description="Navigate to Facebook's App Info > Storage and clear only the app cache (not data).",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=18,
-        validation_type="state",
-        validation_query="facebook_cache_cleared",
-        expected_result=True,
-        tags=["settings", "apps", "facebook", "cache"],
     ),
 
     # Eval Task 9: Create folder in Downloads
@@ -915,34 +596,6 @@ DEMO_EVAL_TASKS = [
         validation_query="finish_message_contains",
         expected_result="51.54MB",
         tags=["settings", "apps", "storage", "chrome"],
-    ),
-
-    # Eval Task 13: Clear Instagram cache
-    CUATask(
-        id="eval_13_clear_instagram_cache",
-        name="Clear Instagram App Cache",
-        description="Navigate to Instagram's App Info > Storage and clear only the app cache.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=20,
-        validation_type="state",
-        validation_query="instagram_cache_cleared",
-        expected_result=True,
-        tags=["settings", "apps", "instagram", "cache"],
-    ),
-
-    # Eval Task 14: Disable Instagram location permission
-    CUATask(
-        id="eval_14_disable_instagram_location",
-        name="Disable Instagram Location Permission",
-        description="Go to Instagram app settings and disable the Location permission.",
-        difficulty=TaskDifficulty.HARD,
-        category=TaskCategory.SYSTEM,
-        max_steps=20,
-        validation_type="state",
-        validation_query="app_permission",
-        expected_result={"package": "com.instagram.android", "permission": "android.permission.ACCESS_FINE_LOCATION", "granted": False},
-        tags=["settings", "apps", "instagram", "permissions", "location"],
     ),
 
     # Eval Task 15: Create folder in Documents

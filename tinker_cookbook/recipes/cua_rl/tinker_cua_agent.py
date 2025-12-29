@@ -165,7 +165,7 @@ class TinkerCuaAgent:
         
         Args:
             tool_name: Name of the tool
-            arguments: Tool arguments
+            args: Tool arguments
             
         Returns:
             String signature (normalized JSON of tool name + sorted arguments)
@@ -209,7 +209,7 @@ class TinkerCuaAgent:
         Parse tool calls from model response.
         
         Supports multiple formats:
-        1. <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        1. <tool_call>{"name": "...", "args": {...}}</tool_call>
         2. <function_calls>...</function_calls> (OpenAI format)
         3. JSON tool calls embedded in text
         """
@@ -241,9 +241,9 @@ class TinkerCuaAgent:
         
         # Pattern 3: Try to find JSON objects that look like tool calls in the raw text
         if not tool_calls:
-            # Look for JSON objects with "name" and "arguments" keys directly in text
+            # Look for JSON objects with "name" and "args" keys directly in text
             json_obj = self._extract_json_from_text(response_text, start_char='{')
-            if json_obj and "name" in json_obj and "arguments" in json_obj:
+            if json_obj and "name" in json_obj and "args" in json_obj:
                 tool_calls.append(json_obj)
         
         return tool_calls
@@ -621,7 +621,7 @@ class TinkerCuaAgent:
                             # ToolCall object from renderer
                             tool_calls.append({
                                 "name": tc.function.name,
-                                "arguments": json.loads(tc.function.arguments),
+                                "args": json.loads(tc.function.arguments),
                             })
                         else:
                             # Already in dict format
@@ -647,11 +647,12 @@ class TinkerCuaAgent:
                     tool_results = []
                     for tool_call_idx, tool_call in enumerate(tool_calls):
                         tool_name = tool_call.get("name")
-                        tool_args = tool_call.get("arguments", {})
+                        # Use "args" field (model outputs "args")
+                        tool_args = tool_call.get("args", {})
                         
                         # Validate tool call format
                         if not tool_name:
-                            error_msg = f"Tool call {tool_call_idx + 1} is missing 'name' field. Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            error_msg = f"Tool call {tool_call_idx + 1} is missing 'name' field. Tool call format: {{'name': 'tool_name', 'args': {{...}}}}"
                             self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
@@ -665,7 +666,7 @@ class TinkerCuaAgent:
                             continue
                         
                         if not isinstance(tool_args, dict):
-                            error_msg = f"Tool call {tool_call_idx + 1} has invalid 'arguments' field (expected dict, got {type(tool_args)}). Tool call format: {{'name': 'tool_name', 'arguments': {{...}}}}"
+                            error_msg = f"Tool call {tool_call_idx + 1} has invalid 'args' field (expected dict, got {type(tool_args)}). Tool call format: {{'name': 'tool_name', 'args': {{...}}}}"
                             self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
@@ -681,6 +682,17 @@ class TinkerCuaAgent:
                         # Validate tool arguments (basic check for required fields)
                         if tool_name == "action" and "action_type" not in tool_args:
                             self.tool_arg_errors += 1
+                            error_msg = f"Tool call {tool_call_idx + 1} (action) is missing required 'action_type' field in args. Tool call format: {{'name': 'action', 'args': {{'action_type': 'tap'|'swipe'|..., ...}}}}"
+                            if self.rollout_logger:
+                                self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            else:
+                                logger.warning(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
+                            tool_results.append({
+                                "tool": tool_name,
+                                "error": error_msg,
+                                "status": "parse_error",
+                            })
+                            continue
                         elif tool_name == "wait" and "duration" not in tool_args:
                             # duration is optional for wait, so this is not an error
                             pass
@@ -879,10 +891,81 @@ class TinkerCuaAgent:
                 self.result_message = f"Task not completed within {self.max_turns} turns"
                 logger.warning(f"[Task End] Task did not complete within {self.max_turns} turns")
             
+            # Perform validation BEFORE terminating the box (if task object is available)
+            # This must happen in the try block, before the finally block, so gbox_client is still available
+            if hasattr(self, 'task') and self.task and self.task.validation_query and self.rollout_logger:
+                try:
+                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                    
+                    result_message = getattr(self, 'result_message', '')
+                    validation_result = await validate_task_completion_with_details(
+                        task=self.task,
+                        gbox_client=self.gbox_client,
+                        result_message=result_message,
+                    )
+                    
+                    if validation_result:
+                        self.rollout_logger.log_adb_validation(
+                            command=validation_result.command,
+                            expected_result=validation_result.expected_result,
+                            actual_result=validation_result.actual_result,
+                            success=validation_result.success,
+                            execution_time=validation_result.execution_time,
+                            validation_query=validation_result.validation_query,
+                        )
+                    else:
+                        logger.warning(f"[Task Validation] Validation returned None for task {self.task.id} (query: {self.task.validation_query})")
+                        self.rollout_logger.log_adb_validation_error(
+                            error="Validation returned None (unsupported query or validation failed)",
+                            validation_query=self.task.validation_query,
+                        )
+                except Exception as e:
+                    logger.warning(f"[Task Validation] Failed to perform ADB validation: {e}", exc_info=True)
+                    if hasattr(self, 'task') and self.task:
+                        self.rollout_logger.log_adb_validation_error(
+                            error=str(e),
+                            validation_query=self.task.validation_query,
+                        )
+            
         except Exception as e:
             logger.error(f"[Task End] ✗ Task failed with exception: {e}", exc_info=True)
             self.result_message = f"Task failed with error: {str(e)}"
             self.task_success = False
+            
+            # Try to perform validation even if task failed (if task object is available)
+            if hasattr(self, 'task') and self.task and self.task.validation_query and self.rollout_logger:
+                try:
+                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                    
+                    result_message = getattr(self, 'result_message', '')
+                    validation_result = await validate_task_completion_with_details(
+                        task=self.task,
+                        gbox_client=self.gbox_client,
+                        result_message=result_message,
+                    )
+                    
+                    if validation_result:
+                        self.rollout_logger.log_adb_validation(
+                            command=validation_result.command,
+                            expected_result=validation_result.expected_result,
+                            actual_result=validation_result.actual_result,
+                            success=validation_result.success,
+                            execution_time=validation_result.execution_time,
+                            validation_query=validation_result.validation_query,
+                        )
+                    else:
+                        self.rollout_logger.log_adb_validation_error(
+                            error="Validation returned None (unsupported query or validation failed)",
+                            validation_query=self.task.validation_query,
+                        )
+                except Exception as validation_error:
+                    logger.warning(f"[Task Validation] Failed to perform ADB validation after task error: {validation_error}", exc_info=True)
+                    if hasattr(self, 'task') and self.task:
+                        self.rollout_logger.log_adb_validation_error(
+                            error=str(validation_error),
+                            validation_query=self.task.validation_query,
+                        )
+        
         finally:
             # Terminate box
             cleanup_start = time.time()

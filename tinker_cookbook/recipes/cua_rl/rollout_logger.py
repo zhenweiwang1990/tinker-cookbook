@@ -693,14 +693,37 @@ class RolloutLogger:
             validation_query: Type of validation query (e.g., "wifi_enabled")
         """
         # Store ADB validation info for later logging
-        self.trajectory_data.setdefault("adb_validation", {
+        self.trajectory_data["adb_validation"] = {
             "command": command,
             "expected_result": str(expected_result),
             "actual_result": actual_result,
             "success": success,
             "execution_time": execution_time,
             "validation_query": validation_query,
-        })
+            "error": None,  # No error
+        }
+    
+    def log_adb_validation_error(
+        self,
+        error: str,
+        validation_query: Optional[str] = None,
+    ):
+        """Log ADB validation error (when validation cannot be performed).
+        
+        Args:
+            error: Error message describing why validation failed
+            validation_query: The validation_query that was attempted (if any)
+        """
+        # Store validation error info
+        self.trajectory_data["adb_validation"] = {
+            "command": None,
+            "expected_result": None,
+            "actual_result": None,
+            "success": False,
+            "execution_time": 0.0,
+            "validation_query": validation_query or "",
+            "error": error,
+        }
     
     def _format_adb_validation_details(self) -> List[str]:
         """Format ADB validation details for table display.
@@ -712,6 +735,22 @@ class RolloutLogger:
             return []
         
         validation = self.trajectory_data["adb_validation"]
+        error = validation.get("error")
+        
+        # If there's an error, show error message instead of validation details
+        if error:
+            query_type = validation.get("validation_query", "")
+            if query_type:
+                return [
+                    self._color(f"⚠ Validation Error: {error}", "YELLOW"),
+                    f"Validation Query: {query_type}",
+                ]
+            else:
+                return [
+                    self._color(f"⚠ Validation Error: {error}", "YELLOW"),
+                    "No validation_query configured for this task",
+                ]
+        
         command = validation.get("command", "N/A")
         expected = validation.get("expected_result", "N/A")
         actual = validation.get("actual_result", "N/A")
@@ -844,10 +883,10 @@ class RolloutLogger:
         
         # Check if we have ADB validation information
         if "adb_validation" not in self.trajectory_data:
-            # No validation performed
-            self.log(self._table_row(self._color("⚠ No validation performed (task has no validation_query)", "YELLOW")))
+            # No validation attempted at all (should not happen if task object is properly passed)
+            self.log(self._table_row(self._color("⚠ No validation information available", "YELLOW")))
         else:
-            # Format and log ADB validation details
+            # Format and log ADB validation details (including errors)
             validation_lines = self._format_adb_validation_details()
             for line in validation_lines:
                 self.log(self._table_row(line))
