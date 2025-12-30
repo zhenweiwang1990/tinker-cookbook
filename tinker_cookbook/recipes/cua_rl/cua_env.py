@@ -77,6 +77,9 @@ class CUAEnv(ProblemEnv):
         # Track rollout state
         self._rollout_messages: List[Dict[str, Any]] = []
         self._rollout_result: Optional[Dict[str, Any]] = None
+        
+        # Trajectory data for token-level training (saved from agent before cleanup)
+        self._trajectory_turns: List = []
     
     def get_question(self) -> str:
         """Return the task description."""
@@ -183,6 +186,12 @@ class CUAEnv(ProblemEnv):
                 logger.info(f"[CUAEnv] ✓ Task execution completed in {task_time:.3f}s")
             
             self._rollout_result = result
+            
+            # Save trajectory data from agent before cleanup (for token-level training)
+            if self._agent and hasattr(self._agent, 'trajectory_turns'):
+                self._trajectory_turns = self._agent.trajectory_turns.copy()
+            else:
+                self._trajectory_turns = []
             
             # Note: Validation is now performed inside run_task() before the box is terminated
             # This ensures gbox_client is still available when validation executes

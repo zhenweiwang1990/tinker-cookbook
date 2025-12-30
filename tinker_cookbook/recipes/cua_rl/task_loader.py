@@ -28,6 +28,10 @@ from tinker_cookbook.recipes.cua_rl.demo_tasks import (
     get_eval_tasks,
     get_all_tasks,
 )
+from tinker_cookbook.recipes.cua_rl.tasks.task_adapter import (
+    TaskAdapter,
+    get_tasks_train_eval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ logger = logging.getLogger(__name__)
 class TaskSourceConfig:
     """Configuration for loading tasks from a source."""
     
-    # Source type: "demo_training", "demo_eval", "demo_all", "ids", "file", "custom"
+    # Source type: "demo_training", "demo_eval", "demo_all", "ids", "file", "custom", "task_adapter"
     source_type: str
     
     # For "ids": list of task IDs
@@ -54,11 +58,16 @@ class TaskSourceConfig:
     # For "custom": list of task descriptions (strings)
     custom_tasks: Optional[List[str]] = None
     
+    # For "task_adapter": configuration
+    tasks_dir: Optional[str] = None  # Path to tasks directory (default: auto-detect)
+    train_ratio: float = 0.8  # Ratio for train/eval split (only used if split_type is specified)
+    split_type: Optional[str] = None  # "train" or "eval" - which split to use. If None, uses all tasks.
+    
     # Limit number of tasks (for sampling)
     limit: Optional[int] = None
     
-    # Random seed for sampling
-    seed: Optional[int] = None
+    # Random seed for sampling and splitting
+    seed: Optional[int] = 42
 
 
 def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
@@ -131,10 +140,90 @@ def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
             )
             for i, desc in enumerate(config.custom_tasks)
         ]
+    elif config.source_type == "task_adapter":
+        # Load tasks from task adapter (discovers tasks from tasks directory)
+        adapter = TaskAdapter(
+            tasks_dir=config.tasks_dir,
+            train_ratio=config.train_ratio,
+            seed=config.seed or 42,
+        )
+        
+        if config.split_type == "train":
+            task_infos = adapter.get_train_tasks()
+        elif config.split_type == "eval":
+            task_infos = adapter.get_eval_tasks()
+        else:
+            # Use all tasks (both train and eval)
+            train_infos = adapter.get_train_tasks()
+            eval_infos = adapter.get_eval_tasks()
+            task_infos = train_infos + eval_infos
+        
+        # Convert task infos to CUATask objects
+        # Extract app information from task path/module
+        tasks = []
+        for i, task_info in enumerate(task_infos):
+            # Extract description from task_info
+            desc = None
+            task_instance = None
+            if isinstance(task_info, dict):
+                task_instance = task_info.get("task_instance")
+                if task_instance and hasattr(task_instance, "description"):
+                    desc = task_instance.description
+                else:
+                    desc = task_info.get("name", f"Task {i+1}")
+            else:
+                desc = str(task_info)
+            
+            # Identify app from module path or task path
+            app_name = None
+            module_path = task_info.get("module_path", "") if isinstance(task_info, dict) else ""
+            task_path = task_info.get("path", "") if isinstance(task_info, dict) else ""
+            
+            # Check module path or file path for app name
+            if 'airbnb' in module_path.lower() or 'airbnb' in task_path.lower():
+                app_name = "airbnb"
+            elif 'instagram' in module_path.lower() or 'instagram' in task_path.lower():
+                app_name = "instagram"
+            else:
+                # Fallback: identify from description
+                desc_lower = desc.lower()
+                if any(kw in desc_lower for kw in ['airbnb', 'listing', 'host', 'booking', 'reservation', 'save listings']):
+                    app_name = "airbnb"
+                elif any(kw in desc_lower for kw in ['instagram', 'post', 'reel', 'follow', 'like', 'comment']):
+                    app_name = "instagram"
+            
+            # Get task name if available
+            task_name = None
+            if isinstance(task_info, dict):
+                if task_instance and hasattr(task_instance, "name"):
+                    task_name = task_instance.name
+                else:
+                    task_name = task_info.get("name", f"Task {i+1}")
+            else:
+                task_name = f"Task {i+1}"
+            
+            # Create task with app info
+            # Note: We don't set validation_query here - validation will be done via _original_task's validator
+            task = CUATask(
+                id=f"task_adapter_{i}",
+                name=task_name,
+                description=desc,
+                difficulty=TaskDifficulty.MEDIUM,
+                category=TaskCategory.SYSTEM,
+                validation_query=None,  # Will use _original_task's validator instead
+                expected_result=None,
+                tags=[app_name] if app_name else [],
+            )
+            # Store app name as attribute for easy access
+            task.app_name = app_name
+            # Store original task instance so we can use its validator
+            if task_instance:
+                task._original_task = task_instance
+            tasks.append(task)
     else:
         raise ValueError(
             f"Unknown source_type: {config.source_type}. "
-            "Supported: 'demo_training', 'demo_eval', 'demo_all', 'ids', 'file', 'custom'"
+            "Supported: 'demo_training', 'demo_eval', 'demo_all', 'ids', 'file', 'custom', 'task_adapter'"
         )
     
     # Apply filters for demo sources

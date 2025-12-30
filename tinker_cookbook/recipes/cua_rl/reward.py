@@ -304,11 +304,25 @@ def comprehensive_reward_function(
     """
     max_turns = max_turns or result.max_turns
     
+    # ========== DETERMINE ACTUAL SUCCESS ==========
+    # All tasks must have validator - use validation_passed as the ground truth
+    # If no validation_details, it means task has no validator (should have been warned)
+    has_validation = result.validation_details is not None
+    if not has_validation:
+        # Task missing validator - log warning and treat as failed
+        logger.warning(
+            f"Task {result.task_id} has no validation result. "
+            f"All tasks must have a validator. Treating as failed."
+        )
+        actual_success = False
+    else:
+        actual_success = result.validation_passed
+    
     # ========== BASE SCORE ==========
-    if result.task_success:
+    if actual_success:
         base_reward = 1.5
     elif result.task_completed:
-        base_reward = 0.3  # Attempted but failed
+        base_reward = 0.3  # Attempted but failed validation
     elif result.ran_out_of_turns:
         base_reward = 0.0
     else:
@@ -362,12 +376,12 @@ def comprehensive_reward_function(
     # ========== COMPLETED CASE ==========
     # Perfect execution bonus
     # Perfect execution requires:
-    # - Task succeeded
+    # - Task actually succeeded (validation_passed if validation exists, otherwise task_success)
     # - No consecutive repeated actions (wasteful)
     # - No errors of any kind (parse, tool_name, tool_arg, runtime)
     # - Efficient: used <= 20% of max_turns (e.g., <= 3 turns if max_turns=15, <= 4 if max_turns=20)
     is_perfect = (
-        result.task_success and
+        actual_success and
         result.consecutive_repeated_actions == 0 and
         result.runtime_errors == 0 and
         result.parse_errors == 0 and
@@ -378,8 +392,9 @@ def comprehensive_reward_function(
     
     if is_perfect:
         logger.info(
-            f"Perfect execution: success={result.task_success}, "
-            f"turns={result.num_turns}, task_id={result.task_id}"
+            f"Perfect execution: actual_success={actual_success}, "
+            f"validation_passed={result.validation_passed if has_validation else 'N/A'}, "
+            f"task_success={result.task_success}, turns={result.num_turns}, task_id={result.task_id}"
         )
         return 3.0
     
@@ -781,12 +796,98 @@ async def validate_task_completion(
 @dataclass
 class ADBValidationResult:
     """Result of ADB validation with detailed information."""
-    command: str  # ADB/shell command executed
+    command: str  # ADB/shell command executed (or description for Task validator)
     expected_result: Any  # Expected result
     actual_result: str  # Actual output from command
     success: bool  # Whether validation passed
     execution_time: float  # Time taken to execute (seconds)
-    validation_query: str  # Type of validation query (e.g., "wifi_enabled")
+    validation_query: str  # Type of validation query (e.g., "wifi_enabled", "task_validator")
+
+
+async def validate_task_validator_with_details(
+    original_task: Any,
+    gbox_client,
+) -> Optional[ADBValidationResult]:
+    """Validate task using the original Task object's validator, returning detailed information.
+    
+    Args:
+        original_task: The original Task object with get_validator() method
+        gbox_client: GBox client for executing commands
+    
+    Returns:
+        ADBValidationResult with validation details, or None if validator is not available.
+    """
+    import time
+    import io
+    import sys
+    
+    try:
+        # Get validator from task
+        if not hasattr(original_task, "get_validator"):
+            return None
+        
+        validator = original_task.get_validator()
+        if not validator or not hasattr(validator, "validate"):
+            return None
+        
+        # Create AdbClient using gbox_client
+        from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient
+        
+        # Get box from gbox_client
+        box = None
+        if hasattr(gbox_client, "_get_box"):
+            box = gbox_client._get_box()
+        elif hasattr(gbox_client, "_sdk") and hasattr(gbox_client, "box_id"):
+            box = gbox_client._sdk.get(gbox_client.box_id)
+        
+        if not box:
+            logger.warning("Cannot get box from gbox_client for validator execution")
+            return None
+        
+        # Create AdbClient with gbox_client and enable command history
+        adb_client = AdbClient(gbox_client=gbox_client, enable_command_history=True)
+        
+        # Capture validator output
+        output_capture = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = output_capture
+        
+        try:
+            # Execute validator
+            start_time = time.time()
+            success = validator.validate(adb_client)
+            execution_time = time.time() - start_time
+        finally:
+            # Restore stdout
+            sys.stdout = old_stdout
+        
+        # Get captured output
+        captured_output = output_capture.getvalue()
+        
+        # Get validator description (class name or method docstring)
+        validator_name = validator.__class__.__name__
+        validator_desc = getattr(validator, "__doc__", None) or f"Validator: {validator_name}"
+        
+        # Get all executed commands
+        command_history = adb_client.get_command_history()
+        if command_history:
+            # Join all commands with newlines for display
+            full_command = "\n".join(command_history)
+        else:
+            # Fallback to validator name if no commands were recorded
+            full_command = f"Task validator ({validator_name})"
+        
+        return ADBValidationResult(
+            command=full_command,
+            expected_result=True,  # Validators return bool, True means success
+            actual_result=captured_output.strip() if captured_output.strip() else ("Validation passed" if success else "Validation failed"),
+            success=success,
+            execution_time=execution_time,
+            validation_query="task_validator",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to execute task validator: {e}", exc_info=True)
+        return None
 
 
 async def validate_task_completion_with_details(
@@ -807,6 +908,16 @@ async def validate_task_completion_with_details(
     """
     import time
     
+    # First, check if we have an original Task object with validator
+    if hasattr(task, "_original_task") and task._original_task:
+        validator_result = await validate_task_validator_with_details(
+            original_task=task._original_task,
+            gbox_client=gbox_client,
+        )
+        if validator_result:
+            return validator_result
+    
+    # Fall back to validation_query-based validation
     if not task.validation_query:
         return None
     

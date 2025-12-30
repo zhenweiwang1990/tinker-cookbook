@@ -118,6 +118,31 @@ async def _run_single_env_rollout(
             validation_query=validation_data.get("validation_query", ""),
         )
     
+    # Check if task has validator (required for all tasks)
+    task_has_validator = False
+    if hasattr(env, 'task') and env.task:
+        # Check for _original_task with validator
+        if hasattr(env.task, '_original_task') and env.task._original_task:
+            if hasattr(env.task._original_task, 'get_validator'):
+                validator = env.task._original_task.get_validator()
+                if validator and hasattr(validator, 'validate'):
+                    task_has_validator = True
+        # Check for validation_query
+        if not task_has_validator and env.task.validation_query:
+            task_has_validator = True
+    
+    # All tasks must have validator - warn if missing
+    if not task_has_validator:
+        task_id = getattr(env.task, 'id', 'unknown') if hasattr(env, 'task') and env.task else 'unknown'
+        task_name = getattr(env.task, 'name', 'unknown') if hasattr(env, 'task') and env.task else 'unknown'
+        logger.warning(
+            f"Task {task_id} ({task_name}) does not have a validator! "
+            f"Setting task_success=False. All tasks must have a validator."
+        )
+        # Set task_success to False if no validator
+        task_success = False
+        adb_validation_result = None  # No validation result available
+    
     # Compute reward using comprehensive_reward_function
     validation_start = time.time()
     from tinker_cookbook.recipes.cua_rl.reward import (
@@ -139,6 +164,7 @@ async def _run_single_env_rollout(
             "validation_query": adb_validation_result.validation_query,
         }
     else:
+        # No validation result - set to False
         rollout_result_with_validation["validation_passed"] = False
         rollout_result_with_validation["validation_details"] = None
     
@@ -158,12 +184,24 @@ async def _run_single_env_rollout(
     validation_method = "comprehensive_reward_function"
     
     # Set summary in rollout logger (after reward calculation)
+    # All tasks must have validator - use validation_passed as the actual task_success
+    # If no validator, task_success is already set to False with warning logged
+    actual_task_success = (
+        adb_validation_result.success if adb_validation_result else False
+    )
+    # Save original task_success (agent's self-reported success from finish tool)
+    original_task_success = task_success
+    # Save validation_passed (validator's result)
+    validation_passed = adb_validation_result.success if adb_validation_result else False
+    
     rollout_logger.set_summary({
-        "task_success": task_success,
+        "task_success": actual_task_success,
         "task_completed": task_completed,
         "num_turns": num_turns,
         "rollout_time": env_rollout_time,
         "reward": reward,
+        "validation_passed": validation_passed,
+        "agent_reported_success": original_task_success,
     })
     
     # Log ADB validation details in table format (always shown, even if no validation)
@@ -172,8 +210,9 @@ async def _run_single_env_rollout(
     
     # Log rollout summary in compact table format
     rollout_logger.log_rollout_summary_table(
-        task_success=task_success,
+        validation_passed=validation_passed,
         task_completed=task_completed,
+        agent_reported_success=original_task_success,
         num_turns=num_turns,
         total_rollout_time=env_rollout_time,
         reward=reward,
@@ -188,16 +227,22 @@ async def _run_single_env_rollout(
     elif hasattr(policy, 'sampling_params') and hasattr(policy.sampling_params, 'temperature'):
         temperature = policy.sampling_params.temperature
     
+    # Get three comparison values for summary
+    validation_passed = adb_validation_result.success if adb_validation_result else False
+    original_task_success = task_success  # Agent's self-reported success
+    
     # Create summary dict
     summary_dict = {
         "rollout_id": rollout_id,
         "task_description": env.task_description[:50] + "..." if len(env.task_description) > 50 else env.task_description,
         "task_completed": task_completed,
-        "task_success": task_success,
+        "task_success": actual_task_success,  # Use validation_passed as ground truth
         "num_turns": num_turns,
         "reward": reward,
         "rollout_time": env_rollout_time,
         "temperature": temperature,
+        "validation_passed": validation_passed,
+        "agent_reported_success": original_task_success,
     }
     
     # Save trajectory BEFORE flush (so logs are still in buffer)
@@ -215,38 +260,69 @@ async def _run_single_env_rollout(
     # Flush all logs at once for this environment (after saving)
     rollout_logger.flush()
     
-    # Create a simplified trajectory
-    # For now, we create a single transition with the task description as observation
-    # and a dummy action. In the future, we could extract actual messages from GBoxAgent.
+    # Extract full trajectory from env (token-level training)
+    # Trajectory data is saved in env._trajectory_turns before agent cleanup
+    trajectory_turns = getattr(env, '_trajectory_turns', [])
     
-    # Build initial observation from task description
-    # Note: This is a simplified version. In practice, we'd want to include
-    # the actual conversation history with screenshots.
-    initial_ob = env.renderer.build_generation_prompt([
-        {"role": "user", "content": env.task_description}
-    ])
+    if not trajectory_turns:
+        raise ValueError(
+            f"[Rollout] No trajectory data available from agent. "
+            f"This indicates the rollout did not produce any turns or trajectory data was not saved. "
+            f"Task: {env.task_description[:100]}..."
+        )
     
-    # Create a dummy action (empty tokens) since we don't have the actual agent response
-    # In practice, we'd extract this from GBoxAgent's internal state
-    dummy_action = TokensWithLogprobs(tokens=[], maybe_logprobs=None)
+    transitions: list[Transition] = []
     
-    # Create transition
-    transition = Transition(
-        ob=initial_ob,
-        ac=dummy_action,
-        reward=reward,
-        episode_done=True,
-        metrics={
-            "task_success": float(task_success),
-            "task_completed": float(task_completed),
-            "num_turns": num_turns,
-            "rollout_time": env_rollout_time,  # Store rollout time for evaluation results
-        },
-    )
+    # We have token-level trajectory data from the agent
+    # Distribute reward across turns (uniform distribution for now)
+    # In the future, we could use more sophisticated reward shaping
+    num_trajectory_turns = len(trajectory_turns)
+    
+    # Distribute reward evenly across all turns
+    # Alternatively, we could give all reward to the last turn, or use reward shaping
+    per_turn_reward = reward / num_trajectory_turns if num_trajectory_turns > 0 else 0.0
+    
+    for turn_idx, (turn_num, observation, action_tokens, action_logprobs) in enumerate(trajectory_turns):
+        # Create TokensWithLogprobs for this action
+        # Ensure logprobs match tokens length: use empty list if tokens are empty, otherwise use provided logprobs
+        if len(action_tokens) == 0:
+            final_logprobs: list[float] | None = []
+        elif action_logprobs and len(action_logprobs) == len(action_tokens):
+            final_logprobs = action_logprobs
+        else:
+            # Mismatch: raise error since we require valid trajectory data
+            raise ValueError(
+                f"[Rollout] Turn {turn_num}: tokens length ({len(action_tokens)}) != logprobs length "
+                f"({len(action_logprobs) if action_logprobs else 0}). "
+                f"Token-level training requires matching tokens and logprobs."
+            )
+        
+        action = TokensWithLogprobs(
+            tokens=action_tokens,
+            maybe_logprobs=final_logprobs
+        )
+        
+        # Determine if this is the last turn
+        is_last_turn = (turn_idx == num_trajectory_turns - 1)
+        
+        # Create transition
+        transition = Transition(
+            ob=observation,
+            ac=action,
+            reward=per_turn_reward,
+            episode_done=is_last_turn,
+            metrics={
+                "task_success": float(task_success) if is_last_turn else 0.0,
+                "task_completed": float(task_completed) if is_last_turn else 0.0,
+                "turn": turn_num,
+                "rollout_time": env_rollout_time if is_last_turn else 0.0,
+            },
+        )
+        transitions.append(transition)
     
     # Create trajectory
     trajectory = Trajectory(
-        transitions=[transition],
+        transitions=transitions,
         final_ob=tinker.ModelInput.empty(),
     )
     
@@ -468,16 +544,20 @@ async def do_cua_group_rollout(
     
     # Print summary statistics (skip for evaluation mode)
     if not is_eval:
-        logger.info("-" * 57)
+        logger.info("-" * 72)
         logger.info(f"Total environments: {len(envs)}")
         logger.info(f"Total rollout time: {total_rollout_time:.2f}s")
         logger.info(f"Average time per environment: {total_rollout_time / len(envs):.2f}s")
-        success_count = sum(1 for m in metrics_list if m.get("task_success", False))
-        logger.info(f"Successful tasks: {success_count}/{len(envs)} ({100 * success_count / len(envs):.1f}%)")
+        # Count successes based on validator (ground truth)
+        validation_success_count = sum(1 for s in rollout_summaries if s.get("validation_passed", False))
+        logger.info(f"Validator success: {validation_success_count}/{len(envs)} ({100 * validation_success_count / len(envs):.1f}%)")
+        # Count agent reported successes
+        agent_success_count = sum(1 for s in rollout_summaries if s.get("agent_reported_success", False))
+        logger.info(f"Agent reported success: {agent_success_count}/{len(envs)} ({100 * agent_success_count / len(envs):.1f}%)")
         total_turns = sum(m.get("num_turns", 0) for m in metrics_list)
         logger.info(f"Total turns across all environments: {total_turns}")
         logger.info(f"Average turns per environment: {total_turns / len(envs):.1f}")
-        logger.info("=" * 57)
+        logger.info("=" * 72)
         
         # Check for learning signal: if all rewards are the same, there's no learning signal
         # Extract rewards from trajectories (each trajectory has transitions with rewards)

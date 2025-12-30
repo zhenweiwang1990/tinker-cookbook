@@ -2,7 +2,7 @@
 
 import base64
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 
 from gbox_sdk import GboxSDK
 
@@ -35,8 +35,18 @@ class CuaGBoxClient:
         self._sdk = GboxSDK(api_key=api_key)
         self._box: Optional[Any] = None
     
-    async def create_box(self, box_type: Optional[str] = None) -> Dict[str, Any]:
-        """Create a new GBox environment."""
+    async def create_box(
+        self, 
+        box_type: Optional[str] = None, 
+        apk_paths: Optional[Union[str, List[str]]] = None
+    ) -> Dict[str, Any]:
+        """Create a new GBox environment.
+        
+        Args:
+            box_type: Type of box to create (defaults to self.box_type)
+            apk_paths: Optional path(s) to APK file(s) to install after box creation.
+                      Can be a single string or a list of strings.
+        """
         box_type = box_type or self.box_type
         logger.debug(f"Creating {box_type} box...")
         
@@ -54,6 +64,20 @@ class CuaGBoxClient:
         self._box = box
         self.box_id = box.data.id
         logger.debug(f"Box created: {self.box_id}")
+        
+        # Install APK(s) if provided
+        if apk_paths:
+            if isinstance(apk_paths, str):
+                apk_paths = [apk_paths]
+            
+            # Install all APKs except the last one (without opening)
+            for apk_path in apk_paths[:-1]:
+                await self.install_apk(apk_path, open_app=False)
+            
+            # Install and open the last APK
+            if apk_paths:
+                await self.install_apk(apk_paths[-1], open_app=True)
+        
         return {"id": self.box_id}
     
     def _get_box(self, box_id: Optional[str] = None) -> Any:
@@ -82,6 +106,38 @@ class CuaGBoxClient:
             self._box = None
         
         return {"id": box_id, "status": "terminated"}
+    
+    async def install_apk(self, apk_path: str, box_id: Optional[str] = None, open_app: bool = True) -> Dict[str, Any]:
+        """Install an APK file on the box.
+        
+        Args:
+            apk_path: Path to local APK file
+            box_id: Optional box ID (defaults to current box)
+            open_app: Whether to open the app after installation (default: True)
+            
+        Returns:
+            Dictionary with installation result including package_name
+        """
+        box = self._get_box(box_id)
+        logger.debug(f"Installing APK from {apk_path}...")
+        
+        # Open APK file and install
+        with open(apk_path, "rb") as apk_file:
+            app = box.app.install(apk=apk_file)
+        
+        package_name = app.data.package_name
+        logger.info(f"APK installed successfully: {package_name}")
+        
+        # Open the app after installation
+        if open_app:
+            app.open()
+            logger.info(f"App opened: {package_name}")
+        
+        return {
+            "package_name": package_name,
+            "status": "installed",
+            "opened": open_app,
+        }
     
     async def take_screenshot(
         self,

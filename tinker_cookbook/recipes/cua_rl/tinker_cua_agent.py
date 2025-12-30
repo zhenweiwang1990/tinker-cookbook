@@ -116,6 +116,10 @@ class TinkerCuaAgent:
         self.messages: List[renderers.Message] = []
         self.system_prompt: Optional[str] = None
         
+        # Store trajectory data for token-level training
+        # Each entry contains: (turn, observation_model_input, action_tokens, action_logprobs)
+        self.trajectory_turns: List[Tuple[int, tinker.ModelInput, List[int], List[float]]] = []
+        
         # Metrics tracking for reward calculation
         self.num_total_actions: int = 0
         self.consecutive_repeated_actions: int = 0
@@ -130,6 +134,80 @@ class TinkerCuaAgent:
         # Track last action for detecting consecutive repeats
         self._last_action_signature: Optional[str] = None
         self._current_repeat_count: int = 0
+        
+        # Store task object if available (for app identification)
+        self.task: Optional[Any] = None
+    
+    def _identify_app_from_task(self, task_description: str) -> Optional[str]:
+        """
+        Identify which app the task belongs to (airbnb or instagram).
+        
+        Args:
+            task_description: Task description string
+            
+        Returns:
+            "airbnb", "instagram", or None if cannot be determined
+        """
+        # First, try to identify from task object if available
+        if self.task is not None:
+            # Check if task has app_name attribute (set by task_loader)
+            app_name = getattr(self.task, 'app_name', None)
+            if app_name:
+                return app_name
+            
+            # Check if task has module path or path attribute
+            task_module = getattr(self.task, '__module__', None)
+            if task_module:
+                if 'airbnb' in task_module.lower():
+                    return "airbnb"
+                elif 'instagram' in task_module.lower():
+                    return "instagram"
+            
+            # Check task name or id
+            task_name = getattr(self.task, 'name', '') or getattr(self.task, 'id', '')
+            if task_name:
+                task_name_lower = task_name.lower()
+                if 'airbnb' in task_name_lower:
+                    return "airbnb"
+                elif 'instagram' in task_name_lower:
+                    return "instagram"
+            
+            # Check tags
+            tags = getattr(self.task, 'tags', [])
+            if 'airbnb' in [tag.lower() for tag in tags]:
+                return "airbnb"
+            elif 'instagram' in [tag.lower() for tag in tags]:
+                return "instagram"
+        
+        # Fallback: identify from task description keywords
+        task_lower = task_description.lower()
+        
+        # Strong Airbnb indicators (more specific)
+        airbnb_strong_keywords = [
+            'airbnb', 'listing', 'listings', 'host', 'booking', 'reservation',
+            'save 3 listings', 'save a listing', 'book a listing', 
+            'cancel reservation', 'cancel all', 'trip', 'vacation',
+            'guest favourite', 'guest favorite', 'amazing pools', 'amazing views'
+        ]
+        
+        # Strong Instagram indicators (more specific)
+        instagram_strong_keywords = [
+            'instagram', 'post', 'posts', 'reel', 'reels', 'follow', 'unfollow',
+            'like', 'comment', 'profile', 'story', 'feed', 'first post',
+            'first reel', 'search user', 'open my profile'
+        ]
+        
+        # Check for strong indicators first
+        for keyword in airbnb_strong_keywords:
+            if keyword in task_lower:
+                return "airbnb"
+        
+        for keyword in instagram_strong_keywords:
+            if keyword in task_lower:
+                return "instagram"
+        
+        # If no clear match, return None (will install both)
+        return None
     
     def _data_uri_to_pil(self, data_uri: str) -> Image.Image:
         """Convert data URI to PIL Image."""
@@ -423,13 +501,14 @@ class TinkerCuaAgent:
     async def _sample_with_tinker(
         self,
         messages: List[renderers.Message],
-    ) -> Tuple[renderers.Message, bool]:
+    ) -> Tuple[renderers.Message, bool, List[int], List[float]]:
         """
         Sample from Tinker model.
         
         Returns:
-            (response_message, parse_success)
+            (response_message, parse_success, tokens, logprobs)
             response_message contains 'content' and optionally 'tool_calls' parsed by renderer
+            tokens and logprobs are the raw sampled tokens and their log probabilities
         """
         # Ensure checkpoint is loaded
         self._ensure_checkpoint_loaded()
@@ -462,7 +541,11 @@ class TinkerCuaAgent:
         seq = sample_resp.sequences[0]
         response_message, parse_success = self.renderer.parse_response(seq.tokens)
         
-        return response_message, parse_success
+        # Extract tokens and logprobs
+        tokens = seq.tokens
+        logprobs = seq.logprobs if seq.logprobs is not None else []
+        
+        return response_message, parse_success, tokens, logprobs
     
     async def run_task(
         self,
@@ -530,6 +613,9 @@ class TinkerCuaAgent:
         self._last_action_signature = None
         self._current_repeat_count = 0
         
+        # Reset trajectory data for this rollout
+        self.trajectory_turns.clear()
+        
         try:
             # Create system prompt
             prompt_start = time.time()
@@ -546,10 +632,128 @@ class TinkerCuaAgent:
             
             # Create GBox environment
             box_creation_start = time.time()
-            box_info = await self.gbox_client.create_box(box_type=self.box_type)
+            # Determine which app to use based on task
+            app_name = self._identify_app_from_task(task_description)
+            import os
+            # Get the directory of this file
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            tasks_dir = os.path.join(current_dir, "tasks")
+            
+            # Determine APK path based on task
+            if app_name == "airbnb":
+                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
+                package_name = "com.airbnb.clone"
+            elif app_name == "instagram":
+                # Instagram is no longer supported
+                logger.warning(f"[Task Setup] Instagram app is no longer supported, defaulting to airbnb")
+                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
+                package_name = "com.airbnb.clone"
+            else:
+                # Default: install airbnb APK when app cannot be determined
+                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
+                package_name = "com.airbnb.clone"
+                logger.warning(f"[Task Setup] Could not identify app from task, defaulting to airbnb APK")
+            
+            # Create box without installing APK (we'll do it manually)
+            box_info = await self.gbox_client.create_box(box_type=self.box_type, apk_paths=None)
             box_id = box_info.get("id") or self.gbox_client.box_id
+            
+            # Install APK without opening the app
+            if self.rollout_logger:
+                self.rollout_logger.log(f"[Task Setup] Installing APK...")
+            else:
+                logger.info(f"[Task Setup] Installing APK...")
+            await self.gbox_client.install_apk(apk_path, open_app=False)
+            
             box_creation_time = time.time() - box_creation_start
-            logger.info(f"[Task Setup] Task executing... with max {self.max_turns} turns on the box {box_id}(box prepared in {box_creation_time:.3f}s)")
+            if self.rollout_logger:
+                self.rollout_logger.log(f"[Task Setup] Box created and APK installed in {box_creation_time:.3f}s")
+            else:
+                logger.info(f"[Task Setup] Task executing on {app_name or 'unknown'} app with max {self.max_turns} turns on the box {box_id}(box prepared in {box_creation_time:.3f}s)")
+
+            # Create AdbClient for prehook and app launch
+            from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient
+            adb_client = AdbClient(gbox_client=self.gbox_client)
+            
+            # Execute prehook if task has one (before launching app)
+            # Check both self.task and self.task._original_task (for CUATask wrapper)
+            pre_hook = None
+            task_with_prehook = None
+            
+            if self.task is not None:
+                # First, try to get prehook from self.task directly
+                if hasattr(self.task, "get_pre_hook"):
+                    pre_hook = self.task.get_pre_hook()
+                    task_with_prehook = self.task
+                # If not found, check _original_task (for CUATask wrapper from task_adapter)
+                elif hasattr(self.task, "_original_task") and self.task._original_task is not None:
+                    original_task = self.task._original_task
+                    if hasattr(original_task, "get_pre_hook"):
+                        pre_hook = original_task.get_pre_hook()
+                        task_with_prehook = original_task
+            
+            if pre_hook is not None:
+                prehook_start = time.time()
+                if self.rollout_logger:
+                    self.rollout_logger.log(f"[Task Setup] Executing prehook...")
+                else:
+                    logger.info(f"[Task Setup] Executing prehook...")
+                
+                try:
+                    # Execute prehook
+                    # Capture print output from prehook.run() if possible
+                    import sys
+                    from io import StringIO
+                    old_stdout = sys.stdout
+                    captured_output = StringIO()
+                    sys.stdout = captured_output
+                    
+                    try:
+                        pre_hook.run(adb_client)
+                    finally:
+                        sys.stdout = old_stdout
+                        output = captured_output.getvalue()
+                        if output.strip():
+                            if self.rollout_logger:
+                                self.rollout_logger.log(f"[Task Setup] Prehook output: {output.strip()}")
+                            else:
+                                logger.info(f"[Task Setup] Prehook output: {output.strip()}")
+                    
+                    prehook_time = time.time() - prehook_start
+                    if self.rollout_logger:
+                        self.rollout_logger.log(f"[Task Setup] ✓ Prehook executed in {prehook_time:.3f}s")
+                    else:
+                        logger.info(f"[Task Setup] ✓ Prehook executed in {prehook_time:.3f}s")
+                except Exception as e:
+                    prehook_time = time.time() - prehook_start
+                    error_msg = f"[Task Setup] ✗ Prehook execution failed after {prehook_time:.3f}s: {str(e)}"
+                    if self.rollout_logger:
+                        self.rollout_logger.log(error_msg)
+                    else:
+                        logger.error(error_msg)
+                    # Continue execution even if prehook fails
+            
+            # Launch app after prehook execution (or if no prehook)
+            if self.rollout_logger:
+                self.rollout_logger.log(f"[Task Setup] Launching app...")
+            else:
+                logger.info(f"[Task Setup] Launching app...")
+            
+            try:
+                adb_client.launch(package_name)
+                await asyncio.sleep(1.0)  # Wait for app to fully load
+                
+                if self.rollout_logger:
+                    self.rollout_logger.log(f"[Task Setup] ✓ App launched")
+                else:
+                    logger.info(f"[Task Setup] ✓ App launched")
+            except Exception as launch_err:
+                error_msg = f"[Task Setup] ✗ App launch failed: {str(launch_err)}"
+                if self.rollout_logger:
+                    self.rollout_logger.log(error_msg)
+                else:
+                    logger.error(error_msg)
+                # Continue execution - app might already be running
 
             # Run task in turns
             turn = 0
@@ -594,8 +798,20 @@ class TinkerCuaAgent:
                     logger.info(f"[Turn {turn}] Calling model for inference...")
                     logger.info(f"[Turn {turn}] Model input - Conversation length: {len(self.messages)} messages")
                 
-                response_message, parse_success = await self._sample_with_tinker(self.messages)
+                # Build ModelInput for this turn (before truncation) to store in trajectory
+                # We need the full observation including screenshot
+                turn_observation = self.renderer.build_generation_prompt(self.messages)
+                
+                response_message, parse_success, action_tokens, action_logprobs = await self._sample_with_tinker(self.messages)
                 response_text = response_message.get("content", "")
+                
+                # Store trajectory data for this turn
+                self.trajectory_turns.append((
+                    turn,
+                    turn_observation,
+                    action_tokens,
+                    action_logprobs,
+                ))
                 
                 model_call_time = time.time() - model_call_start
                 if self.rollout_logger:
@@ -893,7 +1109,20 @@ class TinkerCuaAgent:
             
             # Perform validation BEFORE terminating the box (if task object is available)
             # This must happen in the try block, before the finally block, so gbox_client is still available
-            if hasattr(self, 'task') and self.task and self.task.validation_query and self.rollout_logger:
+            # All tasks must have validator - check for either validation_query or _original_task with validator
+            has_validation = False
+            if hasattr(self, 'task') and self.task and self.rollout_logger:
+                # Check for _original_task with validator
+                if hasattr(self.task, '_original_task') and self.task._original_task:
+                    if hasattr(self.task._original_task, 'get_validator'):
+                        validator = self.task._original_task.get_validator()
+                        if validator and hasattr(validator, 'validate'):
+                            has_validation = True
+                # Check for validation_query
+                if not has_validation and self.task.validation_query:
+                    has_validation = True
+            
+            if has_validation:
                 try:
                     from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
                     
@@ -914,18 +1143,35 @@ class TinkerCuaAgent:
                             validation_query=validation_result.validation_query,
                         )
                     else:
-                        logger.warning(f"[Task Validation] Validation returned None for task {self.task.id} (query: {self.task.validation_query})")
+                        validation_query_str = self.task.validation_query or "task_validator"
+                        logger.warning(f"[Task Validation] Validation returned None for task {self.task.id} (query: {validation_query_str})")
                         self.rollout_logger.log_adb_validation_error(
                             error="Validation returned None (unsupported query or validation failed)",
-                            validation_query=self.task.validation_query,
+                            validation_query=validation_query_str,
                         )
                 except Exception as e:
                     logger.warning(f"[Task Validation] Failed to perform ADB validation: {e}", exc_info=True)
                     if hasattr(self, 'task') and self.task:
                         self.rollout_logger.log_adb_validation_error(
                             error=str(e),
-                            validation_query=self.task.validation_query,
+                            validation_query=self.task.validation_query or "task_validator",
                         )
+            else:
+                # Task has no validator - this is an error
+                task_id = getattr(self.task, 'id', 'unknown') if hasattr(self, 'task') and self.task else 'unknown'
+                task_name = getattr(self.task, 'name', 'unknown') if hasattr(self, 'task') and self.task else 'unknown'
+                logger.warning(
+                    f"[Task Validation] Task {task_id} ({task_name}) does not have a validator! "
+                    f"All tasks must have a validator. Setting task_success=False."
+                )
+                # Set task_success to False
+                self.task_success = False
+                # Log validation error
+                if self.rollout_logger:
+                    self.rollout_logger.log_adb_validation_error(
+                        error="Task has no validator (all tasks must have a validator)",
+                        validation_query=None,
+                    )
             
         except Exception as e:
             logger.error(f"[Task End] ✗ Task failed with exception: {e}", exc_info=True)
@@ -933,7 +1179,19 @@ class TinkerCuaAgent:
             self.task_success = False
             
             # Try to perform validation even if task failed (if task object is available)
-            if hasattr(self, 'task') and self.task and self.task.validation_query and self.rollout_logger:
+            has_validation = False
+            if hasattr(self, 'task') and self.task and self.rollout_logger:
+                # Check for _original_task with validator
+                if hasattr(self.task, '_original_task') and self.task._original_task:
+                    if hasattr(self.task._original_task, 'get_validator'):
+                        validator = self.task._original_task.get_validator()
+                        if validator and hasattr(validator, 'validate'):
+                            has_validation = True
+                # Check for validation_query
+                if not has_validation and self.task.validation_query:
+                    has_validation = True
+            
+            if has_validation:
                 try:
                     from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
                     
@@ -963,8 +1221,24 @@ class TinkerCuaAgent:
                     if hasattr(self, 'task') and self.task:
                         self.rollout_logger.log_adb_validation_error(
                             error=str(validation_error),
-                            validation_query=self.task.validation_query,
+                            validation_query=self.task.validation_query or "task_validator",
                         )
+            else:
+                # Task has no validator - this is an error
+                task_id = getattr(self.task, 'id', 'unknown') if hasattr(self, 'task') and self.task else 'unknown'
+                task_name = getattr(self.task, 'name', 'unknown') if hasattr(self, 'task') and self.task else 'unknown'
+                logger.warning(
+                    f"[Task Validation] Task {task_id} ({task_name}) does not have a validator! "
+                    f"All tasks must have a validator. Setting task_success=False."
+                )
+                # Set task_success to False
+                self.task_success = False
+                # Log validation error
+                if self.rollout_logger:
+                    self.rollout_logger.log_adb_validation_error(
+                        error="Task has no validator (all tasks must have a validator)",
+                        validation_query=None,
+                    )
         
         finally:
             # Terminate box

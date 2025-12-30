@@ -157,8 +157,21 @@ def trajectory_to_data(traj: Trajectory, traj_advantage: float) -> list[tinker.D
         delta_ob_len = _flat_ob_token_len(delta_ob_flat)
         SequenceAccumulator.full_sequence.extend(delta_ob_flat)
         SequenceAccumulator.full_sequence.extend(ac_with_logprobs.tokens)
+        # Handle missing logprobs: use empty list if tokens are empty, otherwise raise error
+        if ac_with_logprobs.maybe_logprobs is None:
+            if len(ac_with_logprobs.tokens) == 0:
+                # Empty tokens should have empty logprobs
+                action_logprobs: list[float] = []
+            else:
+                raise ValueError(
+                    f"Logprobs are required for training but are missing. "
+                    f"Found {len(ac_with_logprobs.tokens)} tokens but no logprobs. "
+                    f"This usually means the rollout code didn't request logprobs during sampling."
+                )
+        else:
+            action_logprobs = ac_with_logprobs.logprobs
         SequenceAccumulator.sampled_logprobs.extend(
-            [0.0] * delta_ob_len + ac_with_logprobs.logprobs
+            [0.0] * delta_ob_len + action_logprobs
         )
         SequenceAccumulator.advantages.extend(
             [0] * delta_ob_len + [traj_advantage] * len(ac_with_logprobs.tokens)

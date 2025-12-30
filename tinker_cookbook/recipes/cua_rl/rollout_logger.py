@@ -760,18 +760,32 @@ class RolloutLogger:
         
         lines = []
         
-        # Format command line (wrap if too long)
-        command_line = f"ADB Command: {command}"
+        # Format command line (handle multi-line commands)
         max_width = self.CONTENT_WIDTH - len("│ ") - len(" │")
-        if len(command_line) > max_width:
-            # Split command into multiple lines
+        
+        # Check if command contains newlines (multiple commands)
+        if "\n" in command:
+            # Multiple commands - always show on separate lines
             lines.append("ADB Command:")
-            # Wrap command itself
-            wrapped_cmd = self._wrap_text_for_table(command, max_width=max_width - 2)
-            for cmd_line in wrapped_cmd:
-                lines.append(f"  {cmd_line}")
+            command_lines = command.split("\n")
+            for i, cmd_line in enumerate(command_lines):
+                if cmd_line.strip():  # Skip empty lines
+                    # Wrap each command line if needed
+                    wrapped_cmd = self._wrap_text_for_table(cmd_line.strip(), max_width=max_width - 2)
+                    for wrapped_line in wrapped_cmd:
+                        lines.append(f"  {wrapped_line}")
         else:
-            lines.append(command_line)
+            # Single command
+            command_line = f"ADB Command: {command}"
+            if len(command_line) > max_width:
+                # Split command into multiple lines
+                lines.append("ADB Command:")
+                # Wrap command itself
+                wrapped_cmd = self._wrap_text_for_table(command, max_width=max_width - 2)
+                for cmd_line in wrapped_cmd:
+                    lines.append(f"  {cmd_line}")
+            else:
+                lines.append(command_line)
         
         # Format expected result
         expected_str = str(expected)
@@ -827,8 +841,9 @@ class RolloutLogger:
     
     def log_rollout_summary_table(
         self,
-        task_success: bool,
+        validation_passed: bool,
         task_completed: bool,
+        agent_reported_success: bool,
         num_turns: int,
         total_rollout_time: float,
         reward: float,
@@ -838,8 +853,9 @@ class RolloutLogger:
         """Log rollout summary and validation in a compact table format.
         
         Args:
-            task_success: Whether task succeeded
-            task_completed: Whether task was completed
+            validation_passed: Whether task actually succeeded (determined by validator)
+            task_completed: Whether task was completed (agent called finish tool)
+            agent_reported_success: Whether agent reported success (finish tool's success parameter)
             num_turns: Number of turns taken
             total_rollout_time: Total rollout time in seconds
             reward: Final reward value
@@ -852,16 +868,21 @@ class RolloutLogger:
         self.log(self._table_row("Rollout Summary"))
         self.log(self._table_separator())
         
-        # Format task status with colors
-        success_status = self._color("✓", "GREEN") if task_success else self._color("✗", "RED")
+        # Format status with colors
+        validation_status = self._color("✓", "GREEN") if validation_passed else self._color("✗", "RED")
         completed_status = self._color("✓", "GREEN") if task_completed else self._color("✗", "RED")
+        agent_success_status = self._color("✓", "GREEN") if agent_reported_success else self._color("✗", "RED")
         
-        # Row 1: Task status
-        self.log(self._table_row(f"Task Success: {success_status} | Task Completed: {completed_status} | Turns: {num_turns}"))
+        # Row 1: Task status comparison (three-way comparison)
+        self.log(self._table_row(
+            f"Validator Result: {validation_status} | "
+            f"Task Completed: {completed_status} | "
+            f"Agent Reported: {agent_success_status}"
+        ))
         
-        # Row 2: Timing
+        # Row 2: Turns and timing
         avg_time_per_turn = total_rollout_time / max(num_turns, 1)
-        self.log(self._table_row(f"Total Time: {total_rollout_time:.2f}s | Avg Time/Turn: {avg_time_per_turn:.2f}s"))
+        self.log(self._table_row(f"Turns: {num_turns} | Total Time: {total_rollout_time:.2f}s | Avg Time/Turn: {avg_time_per_turn:.2f}s"))
         
         # Row 3: Reward
         reward_color = "GREEN" if reward > 0 else "RED"
