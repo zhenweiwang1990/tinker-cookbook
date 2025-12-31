@@ -104,6 +104,7 @@ class Baseline(Base):
 
     # Relationships
     training = relationship("Training", back_populates="baselines")
+    groups = relationship("Group", back_populates="baseline", cascade="all, delete-orphan")
     rollouts = relationship("Rollout", back_populates="baseline", cascade="all, delete-orphan")
 
 
@@ -136,6 +137,7 @@ class Eval(Base):
 
     # Relationships
     training = relationship("Training", back_populates="evals")
+    groups = relationship("Group", back_populates="eval", cascade="all, delete-orphan")
     rollouts = relationship("Rollout", back_populates="eval", cascade="all, delete-orphan")
 
     # Unique constraint
@@ -225,12 +227,60 @@ class Step(Base):
 
     # Relationships
     training = relationship("Training", back_populates="steps")
+    groups = relationship("Group", back_populates="step", cascade="all, delete-orphan")
     rollouts = relationship("Rollout", back_populates="step", cascade="all, delete-orphan")
 
     # Unique constraint
     __table_args__ = (
         UniqueConstraint("training_id", "step", name="uq_step_training_step"),
         Index("idx_step_training_step", "training_id", "step"),
+    )
+
+
+class Group(Base):
+    """Rollout group model."""
+    __tablename__ = "group"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    step_id = Column(Integer, ForeignKey("step.id"), index=True)
+    eval_id = Column(Integer, ForeignKey("eval.id"), index=True)
+    baseline_id = Column(Integer, ForeignKey("baseline.id"), index=True)
+    group_num = Column(Integer, nullable=False)  # Group number within step/eval/baseline
+    batch = Column(Integer)
+    source_type = Column(String, nullable=False)  # 'step', 'eval', or 'baseline'
+    status = Column(String, default="pending", index=True)
+    progress_percent = Column(Float, default=0.0)
+    current_phase = Column(String)
+    status_message = Column(Text)
+    error_message = Column(Text)
+    start_time = Column(DateTime)
+    end_time = Column(DateTime)
+    num_rollouts = Column(Integer, default=0)
+    completed_rollouts = Column(Integer, default=0)
+    reward_mean = Column(Float)
+    reward_std = Column(Float)
+    success_count = Column(Integer, default=0)
+    metrics_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    step = relationship("Step", back_populates="groups")
+    eval = relationship("Eval", back_populates="groups")
+    baseline = relationship("Baseline", back_populates="groups")
+    rollouts = relationship("Rollout", back_populates="group", cascade="all, delete-orphan")
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_group_source_step", "source_type", "step_id", "group_num"),
+        Index("idx_group_source_eval", "source_type", "eval_id", "group_num"),
+        Index("idx_group_source_baseline", "source_type", "baseline_id", "group_num"),
+        CheckConstraint(
+            "(source_type = 'step' AND step_id IS NOT NULL AND eval_id IS NULL AND baseline_id IS NULL) OR "
+            "(source_type = 'eval' AND eval_id IS NOT NULL AND step_id IS NULL AND baseline_id IS NULL) OR "
+            "(source_type = 'baseline' AND baseline_id IS NOT NULL AND step_id IS NULL AND eval_id IS NULL)",
+            name="check_group_source"
+        ),
     )
 
 
@@ -243,9 +293,10 @@ class Rollout(Base):
     step_id = Column(Integer, ForeignKey("step.id"), index=True)
     eval_id = Column(Integer, ForeignKey("eval.id"), index=True)
     baseline_id = Column(Integer, ForeignKey("baseline.id"), index=True)
+    group_id = Column(Integer, ForeignKey("group.id"), index=True)  # Reference to group table
     rollout_id = Column(String, unique=True, nullable=False, index=True)
     batch = Column(Integer)
-    group = Column(Integer)
+    group_num = Column(Integer)  # Group number (kept for backward compatibility, renamed from 'group' to avoid conflict)
     env_index = Column(Integer)
     task_id = Column(Integer, ForeignKey("task.id"), nullable=False, index=True)
     model_path = Column(Text, nullable=False)
@@ -292,6 +343,7 @@ class Rollout(Base):
     step = relationship("Step", back_populates="rollouts")
     eval = relationship("Eval", back_populates="rollouts")
     baseline = relationship("Baseline", back_populates="rollouts")
+    group = relationship("Group", back_populates="rollouts")
     task = relationship("Task", back_populates="rollouts")
     turns = relationship("Turn", back_populates="rollout", cascade="all, delete-orphan")
     validation = relationship("Validation", back_populates="rollout", uselist=False, cascade="all, delete-orphan")

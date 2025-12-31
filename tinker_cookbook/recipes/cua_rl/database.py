@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from typing import Any, Generator, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tinker_cookbook.recipes.cua_rl.database_models import Base
@@ -69,8 +69,30 @@ def init_database(db_url: Optional[str] = None, echo: bool = False) -> None:
         pool_recycle=3600,  # Recycle connections after 1 hour
     )
     
-    # Create all tables
+    # Create all tables (for new databases)
     Base.metadata.create_all(engine)
+    
+    # Run Alembic migrations to ensure schema is up to date
+    try:
+        from alembic import command
+        from alembic.config import Config
+        import os
+        
+        # Get alembic.ini path (should be in the same directory as this file)
+        alembic_dir = os.path.dirname(os.path.abspath(__file__))
+        alembic_ini_path = os.path.join(alembic_dir, "alembic.ini")
+        
+        if os.path.exists(alembic_ini_path):
+            alembic_cfg = Config(alembic_ini_path)
+            # Set database URL in config
+            alembic_cfg.set_main_option("sqlalchemy.url", database_url)
+            # Run migrations
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Alembic migrations applied successfully")
+        else:
+            logger.warning(f"Alembic config not found at {alembic_ini_path}, skipping migrations")
+    except Exception as e:
+        logger.warning(f"Failed to run Alembic migrations: {e}. Tables may need manual migration.")
     
     # Create session factory
     _session_factory = sessionmaker(bind=engine)

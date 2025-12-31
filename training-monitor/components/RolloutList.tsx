@@ -13,6 +13,9 @@ interface Rollout {
   num_turns: number;
   reward: number;
   created_at: string;
+  group_number?: number;
+  group_status?: string;
+  env_index?: number;
 }
 
 interface RolloutListProps {
@@ -51,7 +54,11 @@ export default function RolloutList({ rollouts, onSelect }: RolloutListProps) {
                 {isExpanded ? '▼' : '▶'}
               </span>
               <span className={styles.rolloutId}>
-                Rollout {rollout.rollout_id}
+                {rollout.group_number !== undefined && rollout.group_number !== null ? (
+                  <>Group {rollout.group_number}, Env {rollout.env_index !== undefined ? rollout.env_index : '?'}</>
+                ) : (
+                  <>Rollout {rollout.rollout_id}</>
+                )}
               </span>
               <div className={styles.badges}>
                 {rollout.task_success && (

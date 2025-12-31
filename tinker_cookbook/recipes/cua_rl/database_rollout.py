@@ -40,14 +40,35 @@ def record_rollout_start(
     group: Optional[int] = None,
     env_index: Optional[int] = None,
     is_eval: bool = False,
+    group_id: Optional[int] = None,  # Database group ID (if already created)
     **kwargs
 ) -> int:
     """
     Record the start of a rollout.
     
+    If group_id is not provided, will create or get the group record.
+    
     Returns:
         Database rollout ID
     """
+    # Create or get group if not provided
+    if group_id is None and group is not None:
+        from tinker_cookbook.recipes.cua_rl.database_dao import get_or_create_group
+        group_obj = get_or_create_group(
+            session,
+            source_type=source_type,
+            group_num=group,
+            step_id=step_id,
+            eval_id=eval_id,
+            baseline_id=baseline_id,
+            batch=batch,
+        )
+        group_id = group_obj.id
+    
+    # Update group: increment num_rollouts (whether group_id was provided or just created)
+    # Note: We update group AFTER creating rollout to avoid any session issues
+    # The group update will happen after rollout is created and flushed
+    
     rollout = create_rollout(
         session,
         source_type=source_type,
@@ -57,14 +78,32 @@ def record_rollout_start(
         step_id=step_id,
         eval_id=eval_id,
         baseline_id=baseline_id,
+        group_id=group_id,
         batch=batch,
-        group=group,
+        group_num=group,  # Use group_num instead of group to avoid conflict with relationship
         env_index=env_index,
         is_eval=is_eval,
         status="pending",
         start_time=datetime.utcnow(),
         **kwargs
     )
+    
+    # Update group: increment num_rollouts AFTER rollout is created and flushed
+    # This avoids any session state issues
+    if group_id is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_dao import get_group, update_group
+            group_obj = get_group(session, group_id)
+            if group_obj:
+                update_group(
+                    session,
+                    group_id,
+                    num_rollouts=(group_obj.num_rollouts or 0) + 1,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to update group {group_id} num_rollouts: {e}", exc_info=True)
+            # Continue anyway - group update is not critical for rollout creation
+    
     return rollout.id
 
 
@@ -142,6 +181,48 @@ def record_rollout_completion(
     update_rollout(session, db_rollout.id, **update_kwargs)
 
 
+def record_turn_start(
+    session: Session,
+    rollout_id: str,
+    turn: int,
+    start_time: Optional[datetime] = None,
+) -> int:
+    """
+    Record the start of a turn (create turn record at the beginning).
+    
+    Returns:
+        Database turn ID
+    """
+    db_rollout = get_rollout_by_rollout_id(session, rollout_id)
+    if not db_rollout:
+        logger.warning(f"Rollout {rollout_id} not found in database")
+        return None
+    
+    # Check if turn already exists
+    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn_by_rollout_and_turn
+    existing_turn = get_turn_by_rollout_and_turn(session, db_rollout.id, turn)
+    if existing_turn:
+        return existing_turn.id
+    
+    # Create turn record at start
+    turn_obj = create_turn(
+        session,
+        rollout_id=db_rollout.id,
+        turn=turn,
+        start_time=start_time or datetime.utcnow(),
+    )
+    
+    # Update rollout current_turn
+    update_rollout(
+        session,
+        db_rollout.id,
+        current_turn=turn,
+        status="running",
+    )
+    
+    return turn_obj.id
+
+
 def record_turn(
     session: Session,
     rollout_id: str,
@@ -154,7 +235,10 @@ def record_turn(
     turn_time: Optional[float] = None,
 ) -> int:
     """
-    Record a turn.
+    Record a turn (update existing turn record or create if not exists).
+    
+    This function can be called at turn end to update the turn record.
+    If the turn record doesn't exist, it will be created.
     
     Returns:
         Database turn ID
@@ -164,18 +248,36 @@ def record_turn(
         logger.warning(f"Rollout {rollout_id} not found in database")
         return None
     
-    turn_obj = create_turn(
-        session,
-        rollout_id=db_rollout.id,
-        turn=turn,
-        reward=reward,
-        episode_done=episode_done,
-        metrics_json=metrics,
-        start_time=start_time or datetime.utcnow(),
-        end_time=end_time,
-        turn_time=turn_time,
-    )
-    return turn_obj.id
+    # Check if turn already exists
+    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn_by_rollout_and_turn, update_turn
+    existing_turn = get_turn_by_rollout_and_turn(session, db_rollout.id, turn)
+    
+    if existing_turn:
+        # Update existing turn
+        update_turn(
+            session,
+            existing_turn.id,
+            reward=reward,
+            episode_done=episode_done,
+            metrics_json=metrics,
+            end_time=end_time or datetime.utcnow(),
+            turn_time=turn_time,
+        )
+        return existing_turn.id
+    else:
+        # Create new turn (fallback if record_turn_start wasn't called)
+        turn_obj = create_turn(
+            session,
+            rollout_id=db_rollout.id,
+            turn=turn,
+            reward=reward,
+            episode_done=episode_done,
+            metrics_json=metrics,
+            start_time=start_time or datetime.utcnow(),
+            end_time=end_time,
+            turn_time=turn_time,
+        )
+        return turn_obj.id
 
 
 def record_action(

@@ -9,6 +9,8 @@
 - ✅ 数据库初始化和会话管理 (`database.py`)
 - ✅ 完整的 DAO 层 (`database_dao.py`)
 - ✅ 全局数据库上下文 (`database_context.py`)
+- ✅ Alembic 数据库迁移 (`alembic/`)
+- ✅ 数据库重建脚本 (`rebuild_database.py`)
 
 ### 2. 数据记录模块
 - ✅ 任务和验证器记录 (`database_task_loader.py`)
@@ -45,12 +47,18 @@
 - 滚动和训练的进度
 - 指标和损失值
 
+### 滚动组 (Group)
+- 每个 step/eval/baseline 包含多个 group
+- Group 状态和进度
+- Group 级别的统计信息（rollout 数量、成功率等）
+
 ### 滚动 (Rollout)
 - 完整的滚动信息
 - 任务执行结果
 - 验证结果
 - 奖励和指标
 - 支持 step/eval/baseline 三种来源
+- 属于某个 group（通过 group_id 关联）
 
 ### 回合、动作、观察 (Turn, Action, Obs)
 - 每个回合的详细信息
@@ -120,7 +128,12 @@ tinker_cookbook/recipes/cua_rl/
 ├── database_training_hooks.py   # 训练循环 Hook
 ├── database_schema.md           # 数据库表结构文档
 ├── DATABASE_USAGE.md           # 使用说明
-└── DATABASE_IMPLEMENTATION.md  # 实现总结 (本文件)
+├── DATABASE_IMPLEMENTATION.md  # 实现总结 (本文件)
+├── rebuild_database.py         # 数据库重建脚本
+├── alembic.ini                 # Alembic 配置文件
+└── alembic/                    # Alembic 迁移目录
+    ├── env.py                  # Alembic 环境配置
+    └── versions/               # 迁移脚本目录
 ```
 
 ## 技术栈
@@ -154,11 +167,33 @@ export POSTGRES_PASSWORD=training_password
 3. **性能**: 数据库操作是异步的，对训练性能影响最小
 4. **并发**: PostgreSQL 完全支持并发访问，适合生产环境
 
+## 数据库迁移
+
+项目使用 Alembic 进行数据库迁移管理。数据库初始化时会自动运行迁移。
+
+### 重建数据库
+
+如果需要重建数据库（删除所有表并重新创建）：
+
+```bash
+uv run python -m tinker_cookbook.recipes.cua_rl.rebuild_database
+```
+
+### 创建新迁移
+
+当模型结构改变时：
+
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run alembic revision --autogenerate -m "描述更改"
+uv run alembic upgrade head
+```
+
 ## 依赖
 
-需要安装 SQLAlchemy：
+需要安装 SQLAlchemy、PostgreSQL 驱动和 Alembic：
 ```bash
-pip install sqlalchemy>=2.0.0
+pip install sqlalchemy>=2.0.0 psycopg2-binary alembic>=1.13.0
 ```
 
 或安装完整的 CUA 依赖：

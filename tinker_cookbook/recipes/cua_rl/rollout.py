@@ -57,6 +57,7 @@ async def _run_single_env_rollout(
     step_id: int | None = None,
     eval_id: int | None = None,
     baseline_id: int | None = None,
+    group_id: int | None = None,  # Database group ID
 ) -> tuple[Trajectory, float, dict, dict]:
     """
     Run rollout for a single environment.
@@ -88,6 +89,24 @@ async def _run_single_env_rollout(
                 task_id_str = getattr(env.task, 'id', None)
                 if task_id_str:
                     task_db_id = get_task_db_id(db_session, task_id_str)
+                    if task_db_id is None:
+                        # Task not found in database, try to create it
+                        # This is a fallback mechanism - tasks should normally be saved during dataset initialization
+                        logger.info(f"[Rollout DB] Task {task_id_str} not found in database (should have been saved during initialization), creating it now as fallback")
+                        try:
+                            from tinker_cookbook.recipes.cua_rl.database_task_loader import save_task_to_database
+                            # Determine source_type for task saving
+                            task_source_type = "baseline" if source_type == "baseline" else ("eval" if is_eval else "step")
+                            task_db_id = save_task_to_database(db_session, env.task, task_source_type)
+                            db_session.commit()
+                            logger.info(f"[Rollout DB] Successfully created task {task_id_str} in database with ID {task_db_id}")
+                        except Exception as e:
+                            logger.error(f"[Rollout DB] Failed to create task {task_id_str} in database: {e}", exc_info=True)
+                            db_session.rollback()
+                else:
+                    logger.warning(f"[Rollout DB] Task has no ID attribute: {env.task}")
+            else:
+                logger.warning(f"[Rollout DB] Environment has no task attribute")
             
             if task_db_id and source_type:
                 # Determine source ID
@@ -121,6 +140,7 @@ async def _run_single_env_rollout(
                         group=group_num,
                         env_index=env_idx,
                         is_eval=is_eval,
+                        group_id=group_id,  # Pass group_id to link rollout to group
                         **source_id_map
                     )
                     # Record status change
@@ -600,24 +620,56 @@ async def do_cua_group_rollout(
     step_id_db = None
     eval_id_db = None
     baseline_id_db = None
-    if db_session is not None:
-        if step_id is not None:
-            source_type = "step"
-            step_id_db = step_id
-        elif eval_id is not None:
-            source_type = "eval"
-            eval_id_db = eval_id
-        elif baseline_id is not None:
+    
+    # Determine source_type and IDs - this should work even if db_session is None
+    # (we'll check db_session later when actually recording)
+    if step_id is not None:
+        source_type = "step"
+        step_id_db = step_id
+    elif eval_id is not None:
+        source_type = "eval"
+        eval_id_db = eval_id
+    elif baseline_id is not None:
+        source_type = "baseline"
+        baseline_id_db = baseline_id
+    elif is_eval and step is None:
+        # This is a baseline evaluation - try to get baseline_id from context
+        from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+        baseline_id_from_context = get_baseline_id()
+        if baseline_id_from_context:
             source_type = "baseline"
-            baseline_id_db = baseline_id
-        elif is_eval and step is None:
-            # This is a baseline evaluation - try to get baseline_id from context
-            from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
-            baseline_id_from_context = get_baseline_id()
-            if baseline_id_from_context:
-                source_type = "baseline"
-                baseline_id_db = baseline_id_from_context
-                logger.info(f"Using baseline_id={baseline_id_db} from context for baseline rollout")
+            baseline_id_db = baseline_id_from_context
+            logger.info(f"[Rollout DB] Using baseline_id={baseline_id_db} from context for baseline rollout")
+        else:
+            logger.warning(f"[Rollout DB] is_eval=True, step=None, but baseline_id is None in context. This might be a baseline evaluation that hasn't been set up yet.")
+    
+    # Now check if we have db_session for recording
+    if db_session is None:
+        db_session = global_db_session
+    
+    # Create or get group record at the start of group rollout
+    group_id_db = None
+    if db_session is not None and source_type and group is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_dao import get_or_create_group, update_group
+            group_obj = get_or_create_group(
+                session=db_session,
+                source_type=source_type,
+                group_num=group,
+                step_id=step_id_db,
+                eval_id=eval_id_db,
+                baseline_id=baseline_id_db,
+                batch=trajectory_batch,
+                status="running",
+                current_phase="rollout",
+            )
+            group_id_db = group_obj.id
+            db_session.commit()
+            logger.info(f"[Rollout DB] Created/retrieved group {group} (group_id={group_id_db}) for {source_type}")
+        except Exception as e:
+            logger.warning(f"[Rollout DB] Failed to create/get group record: {e}")
+            if db_session:
+                db_session.rollback()
     
     # Run rollouts in parallel using asyncio.gather
     # This allows multiple GBox environments to execute simultaneously
@@ -642,6 +694,7 @@ async def do_cua_group_rollout(
             step_id=step_id_db,
             eval_id=eval_id_db,
             baseline_id=baseline_id_db,
+            group_id=group_id_db,  # Pass group_id so rollout belongs to the group
         )
         rollout_tasks.append(task)
     

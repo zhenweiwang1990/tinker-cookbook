@@ -385,22 +385,37 @@ class CUADatasetBuilder(RLDatasetBuilder):
         
         # Load tasks from TaskSourceConfig
         # Save to database if db_session is provided
-        save_to_db = self.db_session is not None
+        # If db_session is None or closed, try to get from global context
+        db_session = self.db_session
+        if db_session is None:
+            from tinker_cookbook.recipes.cua_rl.database_context import get_database_session
+            db_session = get_database_session()
+        
+        save_to_db = db_session is not None
         if isinstance(self.tasks, dict):
             # Single TaskSourceConfig
             config = TaskSourceConfig(**self.tasks)
-            tasks = load_tasks_from_config(config, save_to_db=save_to_db, db_session=self.db_session)
+            tasks = load_tasks_from_config(config, save_to_db=save_to_db, db_session=db_session)
         elif isinstance(self.tasks, list):
             if len(self.tasks) == 0:
                 raise ValueError("tasks list cannot be empty")
             # List of TaskSourceConfig dicts
             configs = [TaskSourceConfig(**item) for item in self.tasks]
-            tasks = load_tasks_from_multiple_sources(configs, save_to_db=save_to_db, db_session=self.db_session)
+            tasks = load_tasks_from_multiple_sources(configs, save_to_db=save_to_db, db_session=db_session)
         else:
             raise ValueError(
                 f"Invalid tasks format: {type(self.tasks)}. "
                 "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
             )
+        
+        # Commit task saves if we saved any tasks
+        if save_to_db and db_session is not None and tasks:
+            try:
+                db_session.commit()
+                logger.info(f"[Dataset Builder] Committed {len(tasks)} tasks to database")
+            except Exception as e:
+                logger.error(f"[Dataset Builder] Failed to commit tasks to database: {e}", exc_info=True)
+                db_session.rollback()
         
         # Get renderer
         tokenizer = get_tokenizer(self.model_name_for_tokenizer)
@@ -431,12 +446,21 @@ class CUADatasetBuilder(RLDatasetBuilder):
         if self.eval_tasks is not None:
             if isinstance(self.eval_tasks, dict):
                 eval_config = TaskSourceConfig(**self.eval_tasks)
-                eval_tasks = load_tasks_from_config(eval_config, save_to_db=save_to_db, db_session=self.db_session)
+                eval_tasks = load_tasks_from_config(eval_config, save_to_db=save_to_db, db_session=db_session)
             elif isinstance(self.eval_tasks, list):
                 if len(self.eval_tasks) == 0:
                     raise ValueError("eval_tasks list cannot be empty")
                 eval_configs = [TaskSourceConfig(**item) for item in self.eval_tasks]
-                eval_tasks = load_tasks_from_multiple_sources(eval_configs, save_to_db=save_to_db, db_session=self.db_session)
+                eval_tasks = load_tasks_from_multiple_sources(eval_configs, save_to_db=save_to_db, db_session=db_session)
+            
+            # Commit eval task saves if we saved any tasks
+            if save_to_db and db_session is not None and eval_tasks:
+                try:
+                    db_session.commit()
+                    logger.info(f"[Dataset Builder] Committed {len(eval_tasks)} eval tasks to database")
+                except Exception as e:
+                    logger.error(f"[Dataset Builder] Failed to commit eval tasks to database: {e}", exc_info=True)
+                    db_session.rollback()
             else:
                 raise ValueError(
                     f"Invalid eval_tasks format: {type(self.eval_tasks)}. "

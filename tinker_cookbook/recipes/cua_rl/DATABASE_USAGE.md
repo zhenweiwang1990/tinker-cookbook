@@ -125,7 +125,8 @@ with get_session() as session:
 - `task` - 任务
 - `validator` - 验证器
 - `step` - 训练步骤
-- `rollout` - 滚动
+- `group` - 滚动组（每个 step/eval/baseline 包含多个 group）
+- `rollout` - 滚动（属于某个 group）
 - `turn` - 回合
 - `action` - 动作
 - `obs` - 观察
@@ -149,11 +150,55 @@ with get_session() as session:
 3. **错误处理**: 如果数据库操作失败，会记录警告但不会中断训练
 4. **并发**: PostgreSQL 完全支持并发访问，适合生产环境
 
+## 数据库迁移
+
+项目使用 Alembic 进行数据库迁移管理。
+
+### 重建数据库（从零开始）
+
+如果需要重建数据库以应用最新的模型结构：
+
+```bash
+uv run python -m tinker_cookbook.recipes.cua_rl.rebuild_database
+```
+
+这会：
+1. 删除所有现有表
+2. 根据当前模型重新创建所有表
+3. 创建并标记初始 Alembic 迁移
+
+### 创建新的迁移
+
+当模型结构改变时，创建新的迁移：
+
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run alembic revision --autogenerate -m "描述你的更改"
+uv run alembic upgrade head
+```
+
+### 应用迁移
+
+数据库初始化时会自动运行 Alembic 迁移。也可以手动运行：
+
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run alembic upgrade head
+```
+
+### 查看迁移历史
+
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run alembic history
+uv run alembic current
+```
+
 ## 依赖
 
-需要安装 SQLAlchemy 和 PostgreSQL 驱动：
+需要安装 SQLAlchemy、PostgreSQL 驱动和 Alembic：
 ```bash
-pip install sqlalchemy>=2.0.0 psycopg2-binary
+pip install sqlalchemy>=2.0.0 psycopg2-binary alembic>=1.13.0
 ```
 
 或者安装完整的CUA依赖：

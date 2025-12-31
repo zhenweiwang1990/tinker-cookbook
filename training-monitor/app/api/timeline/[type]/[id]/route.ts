@@ -29,36 +29,78 @@ export async function GET(
       item = itemResult.rows[0] ? serializeRow(itemResult.rows[0]) : null;
       
       if (item) {
-        const rolloutsResult = await query(`
-          SELECT * FROM rollout 
+        // Get groups for this baseline
+        const groupsResult = await query(`
+          SELECT * FROM "group" 
           WHERE source_type = 'baseline' AND baseline_id = $1
-          ORDER BY created_at ASC
+          ORDER BY group_num ASC
+        `, [itemId]);
+        const groups = groupsResult.rows.map(serializeRow);
+        
+        // Get rollouts with group information
+        const rolloutsResult = await query(`
+          SELECT r.*, g.group_num as group_number, g.status as group_status
+          FROM rollout r
+          LEFT JOIN "group" g ON r.group_id = g.id
+          WHERE r.source_type = 'baseline' AND r.baseline_id = $1
+          ORDER BY g.group_num ASC, r.env_index ASC
         `, [itemId]);
         rollouts = rolloutsResult.rows.map(serializeRow);
+        
+        // Add groups to item
+        item.groups = groups;
       }
     } else if (type === 'step') {
       const itemResult = await query('SELECT * FROM step WHERE id = $1', [itemId]);
       item = itemResult.rows[0] ? serializeRow(itemResult.rows[0]) : null;
       
       if (item) {
-        const rolloutsResult = await query(`
-          SELECT * FROM rollout 
+        // Get groups for this step
+        const groupsResult = await query(`
+          SELECT * FROM "group" 
           WHERE source_type = 'step' AND step_id = $1
-          ORDER BY created_at ASC
+          ORDER BY group_num ASC
+        `, [itemId]);
+        const groups = groupsResult.rows.map(serializeRow);
+        
+        // Get rollouts with group information
+        const rolloutsResult = await query(`
+          SELECT r.*, g.group_num as group_number, g.status as group_status
+          FROM rollout r
+          LEFT JOIN "group" g ON r.group_id = g.id
+          WHERE r.source_type = 'step' AND r.step_id = $1
+          ORDER BY g.group_num ASC, r.env_index ASC
         `, [itemId]);
         rollouts = rolloutsResult.rows.map(serializeRow);
+        
+        // Add groups to item
+        item.groups = groups;
       }
     } else if (type === 'eval') {
       const itemResult = await query('SELECT * FROM eval WHERE id = $1', [itemId]);
       item = itemResult.rows[0] ? serializeRow(itemResult.rows[0]) : null;
       
       if (item) {
-        const rolloutsResult = await query(`
-          SELECT * FROM rollout 
+        // Get groups for this eval
+        const groupsResult = await query(`
+          SELECT * FROM "group" 
           WHERE source_type = 'eval' AND eval_id = $1
-          ORDER BY created_at ASC
+          ORDER BY group_num ASC
+        `, [itemId]);
+        const groups = groupsResult.rows.map(serializeRow);
+        
+        // Get rollouts with group information
+        const rolloutsResult = await query(`
+          SELECT r.*, g.group_num as group_number, g.status as group_status
+          FROM rollout r
+          LEFT JOIN "group" g ON r.group_id = g.id
+          WHERE r.source_type = 'eval' AND r.eval_id = $1
+          ORDER BY g.group_num ASC, r.env_index ASC
         `, [itemId]);
         rollouts = rolloutsResult.rows.map(serializeRow);
+        
+        // Add groups to item
+        item.groups = groups;
       }
     } else {
       return NextResponse.json(

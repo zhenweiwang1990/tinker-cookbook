@@ -63,6 +63,7 @@ cua = [
     "gbox-sdk",
     "sqlalchemy>=2.0.0",
     "psycopg2-binary",
+    "alembic>=1.13.0",
 ]
 
 all = [

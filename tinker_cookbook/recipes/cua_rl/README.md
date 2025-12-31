@@ -375,6 +375,55 @@ python -m tinker_cookbook.recipes.cua_rl.train \
 
 4. **Binary Rewards**: Currently uses simple binary rewards (1.0/0.0). More sophisticated reward shaping can be added via `reward.py`.
 
+## Database Integration
+
+The recipe automatically records all training data to a PostgreSQL database for monitoring and analysis.
+
+### Database Setup
+
+The database is automatically initialized when training starts. You can configure it via environment variables:
+
+```bash
+export DATABASE_URL=postgresql://training_user:training_password@localhost:5432/training_db
+```
+
+Or use individual variables:
+```bash
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=training_db
+export POSTGRES_USER=training_user
+export POSTGRES_PASSWORD=training_password
+```
+
+### Database Migration
+
+The project uses Alembic for database migrations. The database schema is automatically migrated on initialization.
+
+**Rebuild database** (if needed):
+```bash
+uv run python -m tinker_cookbook.recipes.cua_rl.rebuild_database
+```
+
+**Create new migration** (when models change):
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run alembic revision --autogenerate -m "描述更改"
+uv run alembic upgrade head
+```
+
+See `DATABASE_USAGE.md` for more details.
+
+### Training Monitor
+
+A web-based training monitor is available to visualize training progress in real-time. See `training-monitor/` directory for setup instructions.
+
+The monitor displays:
+- Training sessions and their status
+- Steps with group and rollout information
+- Evaluations and baseline assessments
+- Real-time updates (auto-refreshes every 10 seconds)
+
 ## References
 
 - [Tinker Training and Sampling Guide](https://tinker-docs.thinkingmachines.ai/training-sampling)
@@ -383,4 +432,5 @@ python -m tinker_cookbook.recipes.cua_rl.train \
 - [Tinker RL Guide](https://tinker-docs.thinkingmachines.ai/rl)
 - [GBoxAgent Documentation](https://github.com/your-org/gbox-agent)
 - Task Configuration: See `TASK_CONFIG_QUICKSTART.md` and `task_config_examples.md`
+- Database Usage: See `DATABASE_USAGE.md` and `DATABASE_IMPLEMENTATION.md`
 

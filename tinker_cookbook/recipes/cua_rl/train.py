@@ -275,33 +275,27 @@ async def cli_main(cli_config: CLIConfig) -> None:
     elif eval_tasks is None:
         logger.info("No eval_tasks configured, evaluation will be disabled")
     
-    # Build dataset builder with database session
-    try:
-        dataset_builder = CUADatasetBuilder(
-            tasks=cli_config.tasks,
-            eval_tasks=eval_tasks,
-            batch_size=cli_config.groups_per_batch,
-            group_size=cli_config.group_size,
-            gbox_api_key=gbox_api_key,
-            tinker_api_key=tinker_api_key,  # Tinker API key for OpenAI-compatible API
-            rollout_model_name=None,  # Not used, rollout uses dynamic checkpoint path from training
-            model_name_for_tokenizer=cli_config.model_name,
-            renderer_name=renderer_name,
-            max_turns=cli_config.max_turns,
-            box_type=cli_config.box_type,
-            seed=cli_config.seed,
-            db_session=db_session,  # Pass database session for task saving
-            training_id=training_id,  # Pass training ID
-        )
-        # Commit task saves
-        db_session.commit()
-    except Exception as e:
-        db_session.rollback()
-        db_session.close()
-        raise
-    finally:
-        # Close session after dataset is built (tasks are saved)
-        db_session.close()
+    # Build dataset builder
+    # Note: db_session is passed but will be used later when dataset_builder.__call__() is invoked
+    # We don't close the session here because tasks are saved during __call__() which happens later
+    dataset_builder = CUADatasetBuilder(
+        tasks=cli_config.tasks,
+        eval_tasks=eval_tasks,
+        batch_size=cli_config.groups_per_batch,
+        group_size=cli_config.group_size,
+        gbox_api_key=gbox_api_key,
+        tinker_api_key=tinker_api_key,  # Tinker API key for OpenAI-compatible API
+        rollout_model_name=None,  # Not used, rollout uses dynamic checkpoint path from training
+        model_name_for_tokenizer=cli_config.model_name,
+        renderer_name=renderer_name,
+        max_turns=cli_config.max_turns,
+        box_type=cli_config.box_type,
+        seed=cli_config.seed,
+        db_session=db_session,  # Pass database session for task saving (will be used in __call__)
+        training_id=training_id,  # Pass training ID
+    )
+    # Don't close db_session here - it will be used when dataset_builder.__call__() is invoked
+    # The session will be managed by the global database context
     
     # Override train.do_group_rollout with our custom function for training rollouts
     # Note: rollouts.do_group_rollout was already overridden at module import time

@@ -18,6 +18,7 @@ from tinker_cookbook.recipes.cua_rl.database_models import (
     Baseline,
     Environment,
     Eval,
+    Group,
     Observation,
     Rollout,
     StatusHistory,
@@ -438,6 +439,180 @@ def list_rollouts_by_baseline(session: Session, baseline_id: int) -> List[Rollou
 def list_rollouts_by_task(session: Session, task_id: int) -> List[Rollout]:
     """List all rollouts for a task."""
     return session.query(Rollout).filter(Rollout.task_id == task_id).all()
+
+
+def list_rollouts_by_group(session: Session, group_id: int) -> List[Rollout]:
+    """List all rollouts for a group."""
+    return session.query(Rollout).filter(Rollout.group_id == group_id).all()
+
+
+# ============================================================================
+# Group DAO
+# ============================================================================
+
+def create_group(
+    session: Session,
+    source_type: str,
+    group_num: int,
+    step_id: Optional[int] = None,
+    eval_id: Optional[int] = None,
+    baseline_id: Optional[int] = None,
+    **kwargs
+) -> Group:
+    """Create a new group."""
+    # Validate source_type and set appropriate ID
+    if source_type == "step":
+        if step_id is None:
+            raise ValueError("step_id required when source_type='step'")
+        eval_id = None
+        baseline_id = None
+    elif source_type == "eval":
+        if eval_id is None:
+            raise ValueError("eval_id required when source_type='eval'")
+        step_id = None
+        baseline_id = None
+    elif source_type == "baseline":
+        if baseline_id is None:
+            raise ValueError("baseline_id required when source_type='baseline'")
+        step_id = None
+        eval_id = None
+    else:
+        raise ValueError(f"Invalid source_type: {source_type}. Must be 'step', 'eval', or 'baseline'")
+    
+    # Serialize JSON fields
+    if "metrics_json" in kwargs and isinstance(kwargs["metrics_json"], (dict, list)):
+        kwargs["metrics_json"] = json_serialize(kwargs["metrics_json"])
+    
+    group = Group(
+        source_type=source_type,
+        group_num=group_num,
+        step_id=step_id,
+        eval_id=eval_id,
+        baseline_id=baseline_id,
+        status="pending",
+        start_time=datetime.utcnow(),
+        **kwargs
+    )
+    session.add(group)
+    session.flush()
+    
+    # Record status history
+    record_status_change(
+        session,
+        entity_type="group",
+        entity_id=group.id,
+        new_status=group.status or "pending",
+    )
+    
+    return group
+
+
+def get_group(session: Session, group_id: int) -> Optional[Group]:
+    """Get a group by ID."""
+    return session.query(Group).filter(Group.id == group_id).first()
+
+
+def get_or_create_group(
+    session: Session,
+    source_type: str,
+    group_num: int,
+    step_id: Optional[int] = None,
+    eval_id: Optional[int] = None,
+    baseline_id: Optional[int] = None,
+    **kwargs
+) -> Group:
+    """Get or create a group."""
+    # Try to find existing group
+    query = session.query(Group).filter(
+        Group.source_type == source_type,
+        Group.group_num == group_num
+    )
+    
+    if source_type == "step" and step_id is not None:
+        query = query.filter(Group.step_id == step_id)
+    elif source_type == "eval" and eval_id is not None:
+        query = query.filter(Group.eval_id == eval_id)
+    elif source_type == "baseline" and baseline_id is not None:
+        query = query.filter(Group.baseline_id == baseline_id)
+    
+    existing_group = query.first()
+    if existing_group:
+        return existing_group
+    
+    # Create new group
+    return create_group(
+        session,
+        source_type=source_type,
+        group_num=group_num,
+        step_id=step_id,
+        eval_id=eval_id,
+        baseline_id=baseline_id,
+        **kwargs
+    )
+
+
+def update_group(session: Session, group_id: int, **kwargs) -> Optional[Group]:
+    """Update a group."""
+    group = get_group(session, group_id)
+    if not group:
+        return None
+    
+    old_status = group.status
+    
+    # Serialize JSON fields
+    if "metrics_json" in kwargs and isinstance(kwargs["metrics_json"], (dict, list)):
+        kwargs["metrics_json"] = json_serialize(kwargs["metrics_json"])
+    
+    for key, value in kwargs.items():
+        if hasattr(group, key):
+            setattr(group, key, value)
+    
+    group.updated_at = datetime.utcnow()
+    session.flush()
+    
+    # Record status change
+    if "status" in kwargs and kwargs["status"] != old_status:
+        record_status_change(
+            session,
+            entity_type="group",
+            entity_id=group_id,
+            old_status=old_status,
+            new_status=kwargs["status"],
+            progress_percent=kwargs.get("progress_percent"),
+            status_message=kwargs.get("status_message"),
+        )
+    
+    return group
+
+
+def list_groups_by_step(session: Session, step_id: int) -> List[Group]:
+    """List all groups for a step."""
+    return (
+        session.query(Group)
+        .filter(and_(Group.source_type == "step", Group.step_id == step_id))
+        .order_by(Group.group_num.asc())
+        .all()
+    )
+
+
+def list_groups_by_eval(session: Session, eval_id: int) -> List[Group]:
+    """List all groups for an eval."""
+    return (
+        session.query(Group)
+        .filter(and_(Group.source_type == "eval", Group.eval_id == eval_id))
+        .order_by(Group.group_num.asc())
+        .all()
+    )
+
+
+def list_groups_by_baseline(session: Session, baseline_id: int) -> List[Group]:
+    """List all groups for a baseline."""
+    return (
+        session.query(Group)
+        .filter(and_(Group.source_type == "baseline", Group.baseline_id == baseline_id))
+        .order_by(Group.group_num.asc())
+        .all()
+    )
 
 
 # ============================================================================

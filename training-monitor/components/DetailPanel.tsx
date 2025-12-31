@@ -37,7 +37,7 @@ export default function DetailPanel({
 
   useEffect(() => {
     fetchDetails();
-    const interval = setInterval(fetchDetails, 2000);
+    const interval = setInterval(fetchDetails, 2000); // Auto-refresh every 2 seconds
     return () => clearInterval(interval);
   }, [type, id]);
 
@@ -133,6 +133,38 @@ export default function DetailPanel({
             )}
           </div>
         </div>
+
+        {(type === 'step' || type === 'eval' || type === 'baseline') && item.groups && item.groups.length > 0 && (
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Groups ({item.groups.length})</h3>
+            <div className={styles.groupsList}>
+              {item.groups.map((group: any) => (
+                <div key={group.id} className={styles.groupItem}>
+                  <div className={styles.groupHeader}>
+                    <span className={styles.groupNumber}>Group {group.group_num}</span>
+                    <span className={styles.status}>{group.status}</span>
+                    {group.progress_percent !== null && (
+                      <span className={styles.progress}>
+                        {group.progress_percent.toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.groupStats}>
+                    {group.completed_rollouts !== null && group.num_rollouts !== null && (
+                      <span>Rollouts: {group.completed_rollouts}/{group.num_rollouts}</span>
+                    )}
+                    {group.reward_mean !== null && (
+                      <span>Reward: {group.reward_mean.toFixed(4)}</span>
+                    )}
+                    {group.success_count !== null && (
+                      <span>Success: {group.success_count}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Rollouts ({rollouts.length})</h3>
