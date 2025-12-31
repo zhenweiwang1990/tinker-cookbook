@@ -61,6 +61,8 @@ verifiers = [
 ]
 cua = [
     "gbox-sdk",
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary",
 ]
 
 all = [

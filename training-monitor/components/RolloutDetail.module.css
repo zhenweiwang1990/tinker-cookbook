@@ -1,0 +1,298 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background-color: #fafafa;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.closeButton {
+  padding: 6px 12px;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.closeButton:hover {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+.content {
+  flex: 1;
+  padding: 20px;
+}
+
+.section {
+  margin-bottom: 30px;
+}
+
+.sectionTitle {
+  margin: 0 0 15px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 8px;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+}
+
+.summaryItem {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.label {
+  font-size: 13px;
+  color: #666;
+  font-weight: 500;
+}
+
+.value {
+  font-size: 13px;
+  color: #333;
+  font-weight: 600;
+}
+
+.value.success {
+  color: #4caf50;
+}
+
+.value.failed {
+  color: #f44336;
+}
+
+.taskInfo {
+  padding: 15px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.taskName {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.taskDescription {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.5;
+}
+
+.validationInfo {
+  padding: 15px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.validationResult {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.validationQuery,
+.validationExpected,
+.validationActual {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.code {
+  display: block;
+  padding: 8px;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  overflow-x: auto;
+  margin-top: 4px;
+}
+
+.turnsList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turn {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background-color: #fff;
+  overflow: hidden;
+}
+
+.turnHeader {
+  display: flex;
+  align-items: center;
+  padding: 12px 15px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  gap: 10px;
+}
+
+.turnHeader:hover {
+  background-color: #f5f5f5;
+}
+
+.expandIcon {
+  font-size: 10px;
+  color: #666;
+  width: 16px;
+  text-align: center;
+}
+
+.turnNumber {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+}
+
+.turnMetrics {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: #666;
+}
+
+.turnMetric {
+  white-space: nowrap;
+}
+
+.episodeDone {
+  padding: 2px 6px;
+  background-color: #4caf50;
+  color: white;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.turnDetails {
+  padding: 15px;
+  background-color: #fafafa;
+  border-top: 1px solid #e0e0e0;
+}
+
+.turnSection {
+  margin-bottom: 20px;
+}
+
+.turnSection:last-child {
+  margin-bottom: 0;
+}
+
+.turnSectionTitle {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+}
+
+.action,
+.observation {
+  margin-bottom: 10px;
+  padding: 10px;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.actionHeader,
+.obsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.actionType,
+.obsType {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+}
+
+.tokenCount {
+  font-size: 10px;
+  color: #999;
+}
+
+.actionArgs {
+  margin-top: 8px;
+}
+
+.textContent {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.screenshot {
+  margin-top: 8px;
+}
+
+.screenshotImg {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.empty {
+  padding: 20px;
+  text-align: center;
+  color: #999;
+  font-size: 12px;
+}
+
+.loading,
+.error {
+  padding: 40px;
+  text-align: center;
+  color: #999;
+  font-size: 14px;
+}
+
+.error {
+  color: #f44336;
+}
+

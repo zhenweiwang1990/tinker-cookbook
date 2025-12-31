@@ -52,6 +52,11 @@ async def _run_single_env_rollout(
     group_num: int,
     output_dir: str | None,
     is_eval: bool,
+    db_session = None,  # Optional database session
+    source_type: str | None = None,  # 'step', 'eval', or 'baseline'
+    step_id: int | None = None,
+    eval_id: int | None = None,
+    baseline_id: int | None = None,
 ) -> tuple[Trajectory, float, dict, dict]:
     """
     Run rollout for a single environment.
@@ -68,6 +73,66 @@ async def _run_single_env_rollout(
         group=group_num,
         rollout_index=env_idx,
     )
+    
+    # Record rollout start in database if session is available
+    db_rollout_id = None
+    task_db_id = None
+    if db_session is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_rollout import (
+                record_rollout_start,
+                get_task_db_id,
+            )
+            # Get task database ID
+            if hasattr(env, 'task') and env.task:
+                task_id_str = getattr(env.task, 'id', None)
+                if task_id_str:
+                    task_db_id = get_task_db_id(db_session, task_id_str)
+            
+            if task_db_id and source_type:
+                # Determine source ID
+                source_id_map = {}
+                if source_type == "step" and step_id is not None:
+                    source_id_map["step_id"] = step_id
+                elif source_type == "eval" and eval_id is not None:
+                    source_id_map["eval_id"] = eval_id
+                elif source_type == "baseline":
+                    # Try to get baseline_id from parameter or context
+                    if baseline_id is not None:
+                        source_id_map["baseline_id"] = baseline_id
+                    else:
+                        # Fallback to context if not provided as parameter
+                        from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+                        baseline_id_from_context = get_baseline_id()
+                        if baseline_id_from_context:
+                            source_id_map["baseline_id"] = baseline_id_from_context
+                            logger.info(f"[Rollout DB] Using baseline_id={baseline_id_from_context} from context for rollout {rollout_id}")
+                        else:
+                            logger.warning(f"[Rollout DB] source_type='baseline' but baseline_id is None (not in params or context) for rollout {rollout_id}")
+                
+                if source_id_map:
+                    db_rollout_id = record_rollout_start(
+                        session=db_session,
+                        source_type=source_type,
+                        rollout_id=rollout_id,
+                        task_id=task_db_id,
+                        model_path=model_path,
+                        batch=trajectory_batch,
+                        group=group_num,
+                        env_index=env_idx,
+                        is_eval=is_eval,
+                        **source_id_map
+                    )
+                    # Record status change
+                    from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+                    record_rollout_status(
+                        db_session,
+                        rollout_id,
+                        status="env_creation",
+                        current_phase="env_creation",
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to record rollout start in database: {e}")
     
     # Log environment-specific information
     rollout_logger.log("-" * 120)
@@ -251,6 +316,69 @@ async def _run_single_env_rollout(
         "agent_reported_success": original_task_success,
     }
     
+    # Record rollout completion in database
+    if db_session is not None and db_rollout_id is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_rollout import (
+                record_rollout_completion,
+                record_validation,
+            )
+            # Record validation if available
+            if adb_validation_result:
+                record_validation(
+                    db_session,
+                    rollout_id,
+                    success=adb_validation_result.success,
+                    validation_query=adb_validation_result.validation_query,
+                    expected_result=adb_validation_result.expected_result,
+                    actual_result=adb_validation_result.actual_result,
+                    execution_time=adb_validation_result.execution_time,
+                )
+            
+            # Extract metrics from rollout_result (it's a dict, not an object)
+            num_total_actions = rollout_result.get('num_total_actions', 0)
+            consecutive_repeated_actions = rollout_result.get('consecutive_repeated_actions', 0)
+            parse_errors = rollout_result.get('parse_errors', 0)
+            tool_name_errors = rollout_result.get('tool_name_errors', 0)
+            tool_arg_errors = rollout_result.get('tool_arg_errors', 0)
+            runtime_errors = rollout_result.get('runtime_errors', 0)
+            ran_out_of_turns = rollout_result.get('ran_out_of_turns', False)
+            attempted_completion = rollout_result.get('attempted_completion', False)
+            turn_first_success = rollout_result.get('turn_first_success', -1)
+            turn_task_completed = rollout_result.get('turn_task_completed', -1)
+            
+            # Record rollout completion
+            record_rollout_completion(
+                db_session,
+                rollout_id,
+                task_completed=task_completed,
+                task_success=actual_task_success,
+                agent_reported_success=original_task_success,
+                validation_passed=validation_passed,
+                num_turns=num_turns,
+                reward=reward,
+                rollout_time=env_rollout_time,
+                errors=errors,
+                summary=summary_dict,
+                num_total_actions=num_total_actions,
+                consecutive_repeated_actions=consecutive_repeated_actions,
+                parse_errors=parse_errors,
+                tool_name_errors=tool_name_errors,
+                tool_arg_errors=tool_arg_errors,
+                runtime_errors=runtime_errors,
+                ran_out_of_turns=ran_out_of_turns,
+                attempted_completion=attempted_completion,
+                turn_first_success=turn_first_success,
+                turn_task_completed=turn_task_completed,
+                max_turns=max_turns,
+                temperature=temperature,
+            )
+            db_session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to record rollout completion in database: {e}")
+            if db_session:
+                db_session.rollback()
+    
     # Save trajectory BEFORE flush (so logs are still in buffer)
     if output_dir:
         from pathlib import Path
@@ -350,6 +478,10 @@ async def do_cua_group_rollout(
     group: int | None = None,
     output_dir: str | None = None,
     is_eval: bool = False,
+    db_session = None,  # Optional database session for recording
+    step_id: int | None = None,  # Database step ID
+    eval_id: int | None = None,  # Database eval ID
+    baseline_id: int | None = None,  # Database baseline ID
 ) -> TrajectoryGroup:
     """
     Custom rollout function for CUA environments.
@@ -457,6 +589,36 @@ async def do_cua_group_rollout(
     logger.info(f"Model path: {model_path}")
     logger.info("=" * 120)
     
+    # Determine source_type and source IDs for database
+    # Try to get from global context if not provided
+    from tinker_cookbook.recipes.cua_rl.database_context import get_database_session, get_training_id
+    global_db_session = get_database_session()
+    if db_session is None and global_db_session is not None:
+        db_session = global_db_session
+    
+    source_type = None
+    step_id_db = None
+    eval_id_db = None
+    baseline_id_db = None
+    if db_session is not None:
+        if step_id is not None:
+            source_type = "step"
+            step_id_db = step_id
+        elif eval_id is not None:
+            source_type = "eval"
+            eval_id_db = eval_id
+        elif baseline_id is not None:
+            source_type = "baseline"
+            baseline_id_db = baseline_id
+        elif is_eval and step is None:
+            # This is a baseline evaluation - try to get baseline_id from context
+            from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+            baseline_id_from_context = get_baseline_id()
+            if baseline_id_from_context:
+                source_type = "baseline"
+                baseline_id_db = baseline_id_from_context
+                logger.info(f"Using baseline_id={baseline_id_db} from context for baseline rollout")
+    
     # Run rollouts in parallel using asyncio.gather
     # This allows multiple GBox environments to execute simultaneously
     rollout_tasks = []
@@ -475,6 +637,11 @@ async def do_cua_group_rollout(
             group_num=group_num,
             output_dir=trajectory_output_dir,
             is_eval=is_eval,
+            db_session=db_session,
+            source_type=source_type,
+            step_id=step_id_db,
+            eval_id=eval_id_db,
+            baseline_id=baseline_id_db,
         )
         rollout_tasks.append(task)
     

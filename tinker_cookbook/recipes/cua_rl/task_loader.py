@@ -70,7 +70,11 @@ class TaskSourceConfig:
     seed: Optional[int] = 42
 
 
-def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
+def load_tasks_from_config(
+    config: TaskSourceConfig,
+    save_to_db: bool = True,
+    db_session = None,
+) -> List[CUATask]:
     """
     Load tasks based on configuration.
     
@@ -78,6 +82,8 @@ def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
     
     Args:
         config: TaskSourceConfig specifying how to load tasks
+        save_to_db: If True, save tasks to database (requires db_session)
+        db_session: Database session (required if save_to_db=True)
         
     Returns:
         List of CUATask objects
@@ -255,22 +261,42 @@ def load_tasks_from_config(config: TaskSourceConfig) -> List[CUATask]:
         + (f", limit={config.limit}" if config.limit else "")
     )
     
+    # Save to database if requested
+    if save_to_db and db_session is not None and tasks:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_task_loader import (
+                save_cua_tasks_to_database,
+            )
+            save_cua_tasks_to_database(
+                session=db_session,
+                tasks=tasks,
+                source_type=config.source_type,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save tasks to database: {e}")
+    
     return tasks
 
 
-def load_tasks_from_multiple_sources(configs: List[TaskSourceConfig]) -> List[CUATask]:
+def load_tasks_from_multiple_sources(
+    configs: List[TaskSourceConfig],
+    save_to_db: bool = True,
+    db_session = None,
+) -> List[CUATask]:
     """
     Load tasks from multiple sources and combine them.
     
     Args:
         configs: List of TaskSourceConfig objects
+        save_to_db: If True, save tasks to database (requires db_session)
+        db_session: Database session (required if save_to_db=True)
         
     Returns:
         Combined list of CUATask objects
     """
     all_tasks: List[CUATask] = []
     for config in configs:
-        tasks = load_tasks_from_config(config)
+        tasks = load_tasks_from_config(config, save_to_db=save_to_db, db_session=db_session)
         all_tasks.extend(tasks)
     
     logger.info(f"Loaded {len(all_tasks)} total tasks from {len(configs)} sources")

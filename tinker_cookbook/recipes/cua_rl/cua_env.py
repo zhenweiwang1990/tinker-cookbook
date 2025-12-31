@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import chz
 import tinker
+from sqlalchemy.orm import Session
 
 from tinker_cookbook import renderers
 from tinker_cookbook.completers import StopCondition
@@ -369,6 +370,8 @@ class CUADatasetBuilder(RLDatasetBuilder):
     max_turns: int = 20
     box_type: str = "android"
     seed: int = 0
+    db_session: Optional[Session] = None  # Database session for saving tasks
+    training_id: Optional[int] = None  # Training ID for database records
     
     async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
         from tinker_cookbook.tokenizer_utils import get_tokenizer
@@ -381,16 +384,18 @@ class CUADatasetBuilder(RLDatasetBuilder):
         )
         
         # Load tasks from TaskSourceConfig
+        # Save to database if db_session is provided
+        save_to_db = self.db_session is not None
         if isinstance(self.tasks, dict):
             # Single TaskSourceConfig
             config = TaskSourceConfig(**self.tasks)
-            tasks = load_tasks_from_config(config)
+            tasks = load_tasks_from_config(config, save_to_db=save_to_db, db_session=self.db_session)
         elif isinstance(self.tasks, list):
             if len(self.tasks) == 0:
                 raise ValueError("tasks list cannot be empty")
             # List of TaskSourceConfig dicts
             configs = [TaskSourceConfig(**item) for item in self.tasks]
-            tasks = load_tasks_from_multiple_sources(configs)
+            tasks = load_tasks_from_multiple_sources(configs, save_to_db=save_to_db, db_session=self.db_session)
         else:
             raise ValueError(
                 f"Invalid tasks format: {type(self.tasks)}. "
@@ -426,12 +431,12 @@ class CUADatasetBuilder(RLDatasetBuilder):
         if self.eval_tasks is not None:
             if isinstance(self.eval_tasks, dict):
                 eval_config = TaskSourceConfig(**self.eval_tasks)
-                eval_tasks = load_tasks_from_config(eval_config)
+                eval_tasks = load_tasks_from_config(eval_config, save_to_db=save_to_db, db_session=self.db_session)
             elif isinstance(self.eval_tasks, list):
                 if len(self.eval_tasks) == 0:
                     raise ValueError("eval_tasks list cannot be empty")
                 eval_configs = [TaskSourceConfig(**item) for item in self.eval_tasks]
-                eval_tasks = load_tasks_from_multiple_sources(eval_configs)
+                eval_tasks = load_tasks_from_multiple_sources(eval_configs, save_to_db=save_to_db, db_session=self.db_session)
             else:
                 raise ValueError(
                     f"Invalid eval_tasks format: {type(self.eval_tasks)}. "

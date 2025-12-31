@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: training-monitor-postgres
+    environment:
+      - POSTGRES_DB=training_db
+      - POSTGRES_USER=training_user
+      - POSTGRES_PASSWORD=training_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U training_user -d training_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  training-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: training-monitor
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://training_user:training_password@postgres:5432/training_db
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=training_db
+      - POSTGRES_USER=training_user
+      - POSTGRES_PASSWORD=training_password
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/trainings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:

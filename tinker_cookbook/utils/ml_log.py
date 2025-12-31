@@ -47,11 +47,46 @@ except ImportError:
 
 def dump_config(config: Any) -> Any:
     """Convert configuration object to JSON-serializable format."""
+    # Handle SQLAlchemy Session objects and other non-serializable database objects
+    try:
+        from sqlalchemy.orm import Session
+        if isinstance(config, Session):
+            return "<Session>"
+    except ImportError:
+        pass
+    
     if hasattr(config, "to_dict"):
         return config.to_dict()
     elif chz.is_chz(config):
         # Recursively dump values to handle nested non-serializable fields
-        return {k: dump_config(v) for k, v in chz.asdict(config).items()}
+        # Manually extract fields to avoid deepcopy issues with non-serializable objects like Session
+        try:
+            # Get annotations to know which attributes are actual fields
+            annotations = getattr(config, "__annotations__", {})
+            result = {}
+            for field_name in annotations.keys():
+                try:
+                    value = getattr(config, field_name, None)
+                    # Skip Session objects (they can't be deepcopied)
+                    try:
+                        from sqlalchemy.orm import Session
+                        if isinstance(value, Session):
+                            continue
+                    except ImportError:
+                        pass
+                    result[field_name] = dump_config(value)
+                except (TypeError, AttributeError):
+                    # Skip fields that can't be accessed
+                    continue
+            return result
+        except Exception:
+            # If manual extraction fails, try asdict as last resort
+            # This might fail if there are non-serializable objects, but it's worth trying
+            try:
+                return {k: dump_config(v) for k, v in chz.asdict(config).items()}
+            except Exception:
+                # Last resort: return a minimal representation
+                return {"<non-serializable>": str(type(config))}
     elif is_dataclass(config) and not isinstance(config, type):
         # Recursively dump values to handle nested non-serializable fields
         return {k: dump_config(v) for k, v in asdict(config).items()}

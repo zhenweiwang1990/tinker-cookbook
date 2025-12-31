@@ -635,11 +635,15 @@ class TinkerCuaAgent:
         recording_started = False
         
         try:
+            # Determine which app to use based on task (needed for system prompt)
+            app_name = self._identify_app_from_task(task_description)
+            
             # Create system prompt
             prompt_start = time.time()
             self.system_prompt = create_system_prompt(
                 task_description=task_description,
                 max_turns=self.max_turns,
+                app_name=app_name,
             )
             prompt_time = time.time() - prompt_start
             
@@ -650,8 +654,6 @@ class TinkerCuaAgent:
             
             # Create GBox environment
             box_creation_start = time.time()
-            # Determine which app to use based on task
-            app_name = self._identify_app_from_task(task_description)
             import os
             # Get the directory of this file
             current_dir = os.path.dirname(os.path.abspath(__file__))
