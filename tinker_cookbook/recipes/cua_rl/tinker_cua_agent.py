@@ -578,18 +578,33 @@ class TinkerCuaAgent:
         
         context_str = " | ".join(context_parts) if context_parts else ""
         
+        # Get task name if available
+        task_name_str = ""
+        if self.task:
+            task_name = getattr(self.task, 'name', None) or getattr(self.task, 'id', None)
+            if task_name:
+                task_name_str = f"Task: {task_name} | "
+        
         logger.info("")
         logger.info("╔" + "=" * 118 + "╗")
         if context_str:
-            # Format: "TASK EXECUTION START | Step: X | Batch: Y | Group: Z | Rollout: W"
-            title = f"TASK EXECUTION START | {context_str}"
+            # Format: "TASK EXECUTION START | Task: X | Step: Y | Batch: Z | Group: W | Rollout: V"
+            title = f"TASK EXECUTION START | {task_name_str}{context_str}"
             # Calculate padding to center the text
             total_len = len(title)
             padding_left = (118 - total_len) // 2
             padding_right = 118 - total_len - padding_left
             logger.info(f"║{' ' * padding_left}{title}{' ' * padding_right}║")
         else:
-            logger.info("║" + " " * 48 + "TASK EXECUTION START" + " " * 50 + "║")
+            # If no context but have task name, show it
+            if task_name_str:
+                title = f"TASK EXECUTION START | {task_name_str.rstrip(' | ')}"
+                total_len = len(title)
+                padding_left = (118 - total_len) // 2
+                padding_right = 118 - total_len - padding_left
+                logger.info(f"║{' ' * padding_left}{title}{' ' * padding_right}║")
+            else:
+                logger.info("║" + " " * 48 + "TASK EXECUTION START" + " " * 50 + "║")
         logger.info("╠" + "=" * 118 + "╣")
         logger.info(f"║ Task Description: {task_description[:98]:<98} ║")
         logger.info(f"║ Max Turns: {self.max_turns:<105} ║")
@@ -615,6 +630,9 @@ class TinkerCuaAgent:
         
         # Reset trajectory data for this rollout
         self.trajectory_turns.clear()
+        
+        # Track recording state (initialized before try block so it's accessible in finally)
+        recording_started = False
         
         try:
             # Create system prompt
@@ -643,11 +661,6 @@ class TinkerCuaAgent:
             if app_name == "airbnb":
                 apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
                 package_name = "com.airbnb.clone"
-            elif app_name == "instagram":
-                # Instagram is no longer supported
-                logger.warning(f"[Task Setup] Instagram app is no longer supported, defaulting to airbnb")
-                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
-                package_name = "com.airbnb.clone"
             else:
                 # Default: install airbnb APK when app cannot be determined
                 apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
@@ -658,12 +671,12 @@ class TinkerCuaAgent:
             box_info = await self.gbox_client.create_box(box_type=self.box_type, apk_paths=None)
             box_id = box_info.get("id") or self.gbox_client.box_id
             
-            # Install APK without opening the app
+            # Install APK
             if self.rollout_logger:
                 self.rollout_logger.log(f"[Task Setup] Installing APK...")
             else:
                 logger.info(f"[Task Setup] Installing APK...")
-            await self.gbox_client.install_apk(apk_path, open_app=False)
+            await self.gbox_client.install_apk(apk_path, open_app=True)
             
             box_creation_time = time.time() - box_creation_start
             if self.rollout_logger:
@@ -675,7 +688,29 @@ class TinkerCuaAgent:
             from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient
             adb_client = AdbClient(gbox_client=self.gbox_client)
             
-            # Execute prehook if task has one (before launching app)
+            # Wait additional time after app launch before executing prehook
+            if self.rollout_logger:
+                self.rollout_logger.log(f"[Task Setup] Waiting 3 seconds for app to stabilize...")
+            else:
+                logger.info(f"[Task Setup] Waiting 3 seconds for app to stabilize...")
+            await asyncio.sleep(3.0)
+            
+            # Start screen recording
+            try:
+                box = self.gbox_client._get_box()
+                box.action.recording.start()
+                recording_started = True
+                if self.rollout_logger:
+                    self.rollout_logger.log(f"[Task Setup] Screen recording started")
+                else:
+                    logger.info(f"[Task Setup] Screen recording started")
+            except Exception as e:
+                if self.rollout_logger:
+                    self.rollout_logger.log(f"[Task Setup] Failed to start recording: {e}")
+                else:
+                    logger.warning(f"[Task Setup] Failed to start recording: {e}")
+
+            # Execute prehook after app launch and wait period
             # Check both self.task and self.task._original_task (for CUATask wrapper)
             pre_hook = None
             task_with_prehook = None
@@ -733,27 +768,11 @@ class TinkerCuaAgent:
                         logger.error(error_msg)
                     # Continue execution even if prehook fails
             
-            # Launch app after prehook execution (or if no prehook)
+            # Environment setup is now complete (APK installed, app launched, prehook executed)
             if self.rollout_logger:
-                self.rollout_logger.log(f"[Task Setup] Launching app...")
+                self.rollout_logger.log(f"[Task Setup] ✓ Environment setup complete")
             else:
-                logger.info(f"[Task Setup] Launching app...")
-            
-            try:
-                adb_client.launch(package_name)
-                await asyncio.sleep(1.0)  # Wait for app to fully load
-                
-                if self.rollout_logger:
-                    self.rollout_logger.log(f"[Task Setup] ✓ App launched")
-                else:
-                    logger.info(f"[Task Setup] ✓ App launched")
-            except Exception as launch_err:
-                error_msg = f"[Task Setup] ✗ App launch failed: {str(launch_err)}"
-                if self.rollout_logger:
-                    self.rollout_logger.log(error_msg)
-                else:
-                    logger.error(error_msg)
-                # Continue execution - app might already be running
+                logger.info(f"[Task Setup] ✓ Environment setup complete")
 
             # Run task in turns
             turn = 0
@@ -1241,10 +1260,47 @@ class TinkerCuaAgent:
                     )
         
         finally:
+            # Stop screen recording and save recording URL (only if recording was started)
+            recording_url = None
+            recording_storage_key = None
+            if recording_started:
+                try:
+                    box = self.gbox_client._get_box()
+                    recording_result = box.action.recording.stop()
+                    if hasattr(recording_result, 'presignedUrl'):
+                        recording_url = recording_result.presignedUrl
+                    elif isinstance(recording_result, dict):
+                        recording_url = recording_result.get('presignedUrl')
+                        recording_storage_key = recording_result.get('storageKey')
+                    
+                    if recording_url:
+                        if self.rollout_logger:
+                            self.rollout_logger.log(f"[Task Cleanup] Screen recording stopped, URL: {recording_url[:100]}...")
+                            # Store recording URL in trajectory data
+                            if not hasattr(self.rollout_logger, 'trajectory_data'):
+                                self.rollout_logger.trajectory_data = {}
+                            self.rollout_logger.trajectory_data["recording"] = {
+                                "presigned_url": recording_url,
+                                "storage_key": recording_storage_key,
+                            }
+                        else:
+                            logger.info(f"[Task Cleanup] Screen recording stopped, URL: {recording_url[:100]}...")
+                    else:
+                        if self.rollout_logger:
+                            self.rollout_logger.log(f"[Task Cleanup] Screen recording stopped, but no URL returned")
+                        else:
+                            logger.warning(f"[Task Cleanup] Screen recording stopped, but no URL returned")
+                except Exception as recording_error:
+                    if self.rollout_logger:
+                        self.rollout_logger.log(f"[Task Cleanup] Failed to stop recording: {recording_error}")
+                    else:
+                        logger.warning(f"[Task Cleanup] Failed to stop recording: {recording_error}")
+            
             # Terminate box
             cleanup_start = time.time()
             try:
-                await self.gbox_client.terminate_box()
+                # DO NOT TERMINATE THE BOX HERE, FOR DEBUGGING PURPOSES
+                # await self.gbox_client.terminate_box()
                 cleanup_time = time.time() - cleanup_start
                 logger.info(f"[Task Cleanup] ✓ GBox environment terminated in {cleanup_time:.3f}s")
             except Exception as cleanup_error:

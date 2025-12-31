@@ -71,7 +71,13 @@ async def _run_single_env_rollout(
     
     # Log environment-specific information
     rollout_logger.log("-" * 120)
-    rollout_logger.log(f"ENVIRONMENT {env_idx + 1}/{total_envs} ROLLOUT START")
+    # Get task name if available
+    task_name_str = ""
+    if hasattr(env, 'task') and env.task:
+        task_name = getattr(env.task, 'name', None) or getattr(env.task, 'id', None)
+        if task_name:
+            task_name_str = f" | Task: {task_name}"
+    rollout_logger.log(f"ENVIRONMENT {env_idx + 1}/{total_envs} ROLLOUT START{task_name_str}")
     rollout_logger.log("-" * 120)
     
     env_rollout_start = time.time()

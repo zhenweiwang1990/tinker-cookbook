@@ -14,7 +14,7 @@ class Task29Validator:
         for sql in queries:
             output = adb_client.run_sqlite_query(
                 package_name=config.get_package_name(),
-                db_relative_path="databases/airbnbSQLiteSQLite.db",
+                db_relative_path="/data/data/"+config.get_package_name()+"/databases/airbnbSQLiteSQLite.db",
                 sql=sql,
             )
             print(output)

@@ -237,6 +237,58 @@ class AdbClient:
         comp = f"{package_name}/{activity}"
         self._run("shell", "am", "start", "-n", comp, capture_output=True)
 
+    def get_current_app(self) -> Optional[str]:
+        """Get the package name of the currently running foreground app.
+        
+        Returns:
+            Package name if found, None otherwise.
+        """
+        try:
+            import re
+            
+            if self.use_gbox:
+                # In GBox mode, pass the full shell command as a string
+                # Try dumpsys window first (more reliable)
+                try:
+                    out = self._run_gbox_command(
+                        "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
+                    )
+                    if out:
+                        # Extract package name from output like:
+                        # mCurrentFocus=Window{... com.airbnb.clone/com.airbnb.clone.MainActivity}
+                        match = re.search(r'([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+', out)
+                        if match:
+                            return match.group(1)
+                except Exception:
+                    pass
+            else:
+                # In local ADB mode, pass the full command as a string to shell
+                if not self.selected_device_id:
+                    return None
+                
+                # Try dumpsys window first
+                try:
+                    # Use shell=True to handle pipes correctly
+                    cmd = f"adb -s {shlex.quote(self.selected_device_id)} shell 'dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity'"
+                    proc = subprocess.run(
+                        cmd,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    out = proc.stdout
+                    if out:
+                        match = re.search(r'([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+', out)
+                        if match:
+                            return match.group(1)
+                except Exception:
+                    pass
+            
+            return None
+        except Exception:
+            return None
+
     def launch(self, package_name: str, activity: Optional[str] = None) -> None:
         if not self.is_installed(package_name):
             raise AdbError(f"Package not installed: {package_name}")

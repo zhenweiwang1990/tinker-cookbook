@@ -986,6 +986,31 @@ class RolloutLogger:
                 except Exception as e:
                     logger.warning(f"Failed to save screenshot {idx}: {e}")
         
+        # Download and save recording video if available
+        recording_info = self.trajectory_data.get("recording")
+        if recording_info and recording_info.get("presigned_url"):
+            try:
+                import httpx
+                recording_url = recording_info["presigned_url"]
+                recording_path = trajectory_dir / "recording.mp4"
+                
+                # Download video file (use longer timeout for large video files)
+                with httpx.Client(timeout=300.0) as client:
+                    response = client.get(recording_url, follow_redirects=True)
+                    response.raise_for_status()
+                    with open(recording_path, "wb") as f:
+                        # Write in chunks to handle large files
+                        for chunk in response.iter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                
+                file_size_mb = recording_path.stat().st_size / (1024 * 1024)
+                logger.info(f"Recording video saved to: {recording_path} ({file_size_mb:.2f} MB)")
+            except Exception as e:
+                logger.warning(f"Failed to download recording video: {e}")
+                # Log the URL for manual download if needed
+                if recording_info.get("presigned_url"):
+                    logger.info(f"Recording URL (for manual download): {recording_info['presigned_url'][:100]}...")
+        
         # Save summary
         summary_file = trajectory_dir / "summary.json"
         with open(summary_file, "w", encoding="utf-8") as f:

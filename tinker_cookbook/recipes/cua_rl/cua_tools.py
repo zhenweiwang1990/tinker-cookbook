@@ -521,11 +521,61 @@ async def perform_action_impl(
         return {"action": "key_press", "keys": keys}
     
     elif action_type == "button_press":
+        # Valid button values according to GBox API
+        VALID_BUTTONS = {
+            "power", "volumeUp", "volumeDown", "volumeMute", 
+            "home", "back", "menu", "appSwitch"
+        }
+        
+        # Button name normalization map (common variations -> valid names)
+        # Keys are lowercase for case-insensitive matching
+        BUTTON_NORMALIZE = {
+            "volume_up": "volumeUp",
+            "volume-up": "volumeUp",
+            "volume_down": "volumeDown",
+            "volume-down": "volumeDown",
+            "volume_mute": "volumeMute",
+            "volume-mute": "volumeMute",
+            "app_switch": "appSwitch",
+            "app-switch": "appSwitch",
+            "recent": "appSwitch",
+            "recent_apps": "appSwitch",
+        }
+        
         # Support both single button and multiple buttons
         if button:
             buttons_list = [button] if isinstance(button, str) else button
         else:
             buttons_list = ["home"] if box_type == "android" else ["power"]
+        
+        # Normalize and validate button values
+        normalized_buttons = []
+        for btn in buttons_list:
+            # First check if it's already a valid button (case-insensitive)
+            btn_lower = btn.lower()
+            if btn in VALID_BUTTONS:
+                # Already valid, use as-is
+                normalized_btn = btn
+            elif btn_lower in BUTTON_NORMALIZE:
+                # Normalize common variations
+                normalized_btn = BUTTON_NORMALIZE[btn_lower]
+            else:
+                # Try case-insensitive match against valid buttons
+                matched = None
+                for valid_btn in VALID_BUTTONS:
+                    if valid_btn.lower() == btn_lower:
+                        matched = valid_btn
+                        break
+                if matched:
+                    normalized_btn = matched
+                else:
+                    raise ValueError(
+                        f"Invalid button value: '{btn}'. "
+                        f"Valid values are: {sorted(VALID_BUTTONS)}"
+                    )
+            normalized_buttons.append(normalized_btn)
+        
+        buttons_list = normalized_buttons
         
         if not rollout_logger:
             logger.info(f"[Tool: perform_action] Button press: {buttons_list}")
