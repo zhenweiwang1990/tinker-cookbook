@@ -66,7 +66,17 @@ async def _run_single_env_rollout(
         tuple of (trajectory, final_reward, metrics, summary_dict)
     """
     # Create rollout logger for this environment
-    rollout_id = f"env_{env_idx}"
+    # Generate unique rollout_id as UUID for reliable tracking
+    import uuid
+    import sys
+    rollout_id = str(uuid.uuid4())
+    
+    # Debug: Log function entry - use print directly to bypass logger
+    print(f"[Rollout DEBUG] _run_single_env_rollout called: env_idx={env_idx}, rollout_id={rollout_id}", file=sys.stderr, flush=True)
+    logger.info(f"[Rollout DEBUG] _run_single_env_rollout called: env_idx={env_idx}, rollout_id={rollout_id}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     rollout_logger = RolloutLogger(
         rollout_id=rollout_id,
         step=trajectory_step,
@@ -75,9 +85,28 @@ async def _run_single_env_rollout(
         rollout_index=env_idx,
     )
     
+    # Debug: Verify logger was created - use print directly
+    print(f"[Rollout DEBUG] RolloutLogger created, buffer size={len(rollout_logger.log_buffer)}", file=sys.stderr, flush=True)
+    logger.info(f"[Rollout DEBUG] RolloutLogger created, buffer size={len(rollout_logger.log_buffer)}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     # Record rollout start in database if session is available
-    db_rollout_id = None
+    # rollout_id is now a UUID generated above
     task_db_id = None
+    
+    # Write debug info to file (bypass logging buffer)
+    import os
+    from datetime import datetime
+    debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+    try:
+        os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+        with open(debug_file, "a") as f:
+            f.write(f"[{datetime.now().isoformat()}] [Rollout DB] _run_single_env_rollout: rollout_id={rollout_id}, db_session={db_session is not None}, source_type={source_type}, baseline_id={baseline_id}, step_id={step_id}, eval_id={eval_id}, is_eval={is_eval}\n")
+            f.flush()
+    except Exception as e:
+        pass  # Ignore file write errors
+    
     if db_session is not None:
         try:
             from tinker_cookbook.recipes.cua_rl.database_rollout import (
@@ -108,6 +137,16 @@ async def _run_single_env_rollout(
             else:
                 logger.warning(f"[Rollout DB] Environment has no task attribute")
             
+            # Write debug info to file
+            try:
+                task_id_str = getattr(env.task, 'id', None) if hasattr(env, 'task') and env.task else None
+                task_desc = getattr(env.task, 'description', None)[:100] if hasattr(env, 'task') and env.task and hasattr(env.task, 'description') else None
+                with open(debug_file, "a") as f:
+                    f.write(f"[{datetime.now().isoformat()}] [Rollout DB] After task lookup: rollout_id={rollout_id}, task_id_str={task_id_str}, task_db_id={task_db_id}, task_desc={task_desc}, source_type={source_type}\n")
+                    f.flush()
+            except Exception:
+                pass
+            
             if task_db_id and source_type:
                 # Determine source ID
                 source_id_map = {}
@@ -130,31 +169,70 @@ async def _run_single_env_rollout(
                             logger.warning(f"[Rollout DB] source_type='baseline' but baseline_id is None (not in params or context) for rollout {rollout_id}")
                 
                 if source_id_map:
-                    db_rollout_id = record_rollout_start(
+                    # Get box_type from env
+                    box_type = getattr(env, 'box_type', 'android')
+                    # record_rollout_start returns the rollout_id (UUID) which is the same as what we generated
+                    recorded_rollout_id = record_rollout_start(
                         session=db_session,
                         source_type=source_type,
-                        rollout_id=rollout_id,
+                        rollout_id=rollout_id,  # rollout_id is now a UUID
                         task_id=task_db_id,
                         model_path=model_path,
+                        env_type=box_type,  # Environment type (android/linux)
                         batch=trajectory_batch,
                         group=group_num,
                         env_index=env_idx,
                         is_eval=is_eval,
                         group_id=group_id,  # Pass group_id to link rollout to group
+                        box_type=box_type,  # Box type for environment
                         **source_id_map
                     )
+                    # Ensure we use the returned rollout_id (should match what we generated)
+                    if recorded_rollout_id != rollout_id:
+                        logger.warning(f"Rollout ID mismatch: generated {rollout_id}, but database returned {recorded_rollout_id}")
+                        rollout_id = recorded_rollout_id
+                    
                     # Record status change
                     from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
                     record_rollout_status(
                         db_session,
-                        rollout_id,
+                        rollout_id,  # rollout_id is now a UUID
                         status="env_creation",
                         current_phase="env_creation",
                     )
+                    # Write success to debug file
+                    try:
+                        with open(debug_file, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] [Rollout DB] Successfully recorded rollout start: rollout_id={rollout_id}\n")
+                            f.flush()
+                    except Exception:
+                        pass
         except Exception as e:
-            logger.warning(f"Failed to record rollout start in database: {e}")
+            # Write error to debug file
+            try:
+                with open(debug_file, "a") as f:
+                    f.write(f"[{datetime.now().isoformat()}] [Rollout DB] ERROR recording rollout start: {e}\n")
+                    import traceback
+                    f.write(traceback.format_exc() + "\n")
+                    f.flush()
+            except Exception:
+                pass
+            logger.warning(f"Failed to record rollout start in database: {e}", exc_info=True)
+    else:
+        # Write warning to debug file
+        try:
+            with open(debug_file, "a") as f:
+                f.write(f"[{datetime.now().isoformat()}] [Rollout DB] WARNING: db_session is None, skipping database recording for rollout {rollout_id}\n")
+                f.flush()
+        except Exception:
+            pass
     
     # Log environment-specific information
+    # Debug: Test that log() is working
+    import sys
+    logger.info(f"[Rollout DEBUG] About to log to rollout_logger, buffer size={len(rollout_logger.log_buffer)}")
+    sys.stdout.flush()
+    
     rollout_logger.log("-" * 120)
     # Get task name if available
     task_name_str = ""
@@ -162,8 +240,12 @@ async def _run_single_env_rollout(
         task_name = getattr(env.task, 'name', None) or getattr(env.task, 'id', None)
         if task_name:
             task_name_str = f" | Task: {task_name}"
-    rollout_logger.log(f"ENVIRONMENT {env_idx + 1}/{total_envs} ROLLOUT START{task_name_str}")
+    rollout_logger.log(f"ENVIRONMENT {env_idx + 1}/{total_envs} ROLLOUT START | Rollout ID: {rollout_id}{task_name_str}")
     rollout_logger.log("-" * 120)
+    
+    # Debug: Verify logs were added
+    logger.info(f"[Rollout DEBUG] After logging, buffer size={len(rollout_logger.log_buffer)}")
+    sys.stdout.flush()
     
     env_rollout_start = time.time()
     
@@ -176,18 +258,99 @@ async def _run_single_env_rollout(
         else "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Default model name
     )
     
-    rollout_result = await env.run_rollout_with_tinker_model(
-        tinker_model_path=model_path,
-        tinker_api_key=env.tinker_api_key,  # Use Tinker API key (not gbox_api_key!)
-        base_model_name=base_model_name,
-        renderer_name=env.renderer.name if hasattr(env.renderer, 'name') else None,
-        rollout_logger=rollout_logger,
-    )
+    # Force flush before starting rollout
+    import sys
+    logger.info(f"[Rollout] Starting rollout for env {env_idx}, model_path={model_path}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
+    # Update rollout status to running BEFORE starting execution
+    if db_session is not None and rollout_id is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+            record_rollout_status(
+                db_session,
+                rollout_id,  # rollout_id is now a UUID
+                status="running",
+                current_phase="agent_initialization",
+            )
+            db_session.commit()
+        except Exception as e:
+            logger.warning(f"[Rollout] Failed to update rollout status to running: {e}")
+            if db_session:
+                db_session.rollback()
+    
+    # Run rollout with proper error handling
+    # Use try-finally to ensure flush() is always called, even if there's an exception
+    rollout_result = None
+    rollout_error = None
+    try:
+        rollout_result = await env.run_rollout_with_tinker_model(
+            tinker_model_path=model_path,
+            tinker_api_key=env.tinker_api_key,  # Use Tinker API key (not gbox_api_key!)
+            base_model_name=base_model_name,
+            renderer_name=env.renderer.name if hasattr(env.renderer, 'name') else None,
+            rollout_logger=rollout_logger,
+            db_session=db_session,  # Pass db_session for turn/action/observation recording
+            rollout_id=rollout_id,  # rollout_id is now a UUID
+        )
+        
+        logger.info(f"[Rollout] Rollout completed for env {env_idx}")
+        sys.stdout.flush()
+    except Exception as e:
+        # Record rollout failure
+        rollout_error = e
+        logger.error(f"[Rollout] Rollout failed for env {env_idx}: {e}", exc_info=True)
+        if db_session is not None and rollout_id is not None:
+            try:
+                from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+                record_rollout_status(
+                    db_session,
+                    rollout_id,  # rollout_id is now a UUID
+                    status="failed",
+                    status_message=f"Rollout failed: {str(e)}",
+                    error_message=str(e),
+                    end_time=datetime.utcnow(),
+                )
+                db_session.commit()
+            except Exception as db_error:
+                logger.warning(f"[Rollout] Failed to record rollout failure in database: {db_error}")
+                if db_session:
+                    db_session.rollback()
+        # Log error to rollout logger before re-raising
+        if rollout_logger:
+            rollout_logger.log(f"✗ Rollout failed with exception: {str(e)}", color="RED")
+        # Re-raise the exception so it can be handled upstream
+        raise
+    finally:
+        # ALWAYS flush logs, even if there was an exception
+        # This ensures we see logs even when rollout fails
+        try:
+            # Debug: Check if we have logs before flushing - use print directly
+            if rollout_logger.log_buffer:
+                print(f"[Rollout] Flushing {len(rollout_logger.log_buffer)} log entries for rollout {rollout_logger.rollout_id}", file=sys.stderr, flush=True)
+                logger.info(f"[Rollout] Flushing {len(rollout_logger.log_buffer)} log entries for rollout {rollout_logger.rollout_id}")
+            else:
+                print(f"[Rollout] WARNING: No logs in buffer when flushing rollout {rollout_logger.rollout_id}", file=sys.stderr, flush=True)
+                logger.warning(f"[Rollout] WARNING: No logs in buffer when flushing rollout {rollout_logger.rollout_id}")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            rollout_logger.flush()
+        except Exception as flush_error:
+            # Even if flush fails, log it
+            logger.error(f"[Rollout] Failed to flush logs: {flush_error}", exc_info=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
     
     env_rollout_time = time.time() - env_rollout_start
     rollout_logger.log(f"✓ Environment rollout completed in {env_rollout_time:.2f}s")
     
-    # Extract results
+    # Extract results (rollout_result should never be None here due to exception handling above)
+    if rollout_result is None:
+        # This should not happen, but handle it gracefully
+        logger.error(f"[Rollout] rollout_result is None for env {env_idx}, this indicates a bug")
+        rollout_result = {}
+    
     task_success = rollout_result.get("task_success", False)
     task_completed = rollout_result.get("task_completed", False)
     num_turns = rollout_result.get("num_turns", 0)
@@ -197,8 +360,10 @@ async def _run_single_env_rollout(
     # Get ADB validation result from rollout_logger if available
     # (validation is performed in cua_env.py before agent is closed)
     adb_validation_result = None
+    validation_screenshot_uri = None
     if hasattr(rollout_logger, 'trajectory_data') and "adb_validation" in rollout_logger.trajectory_data:
         validation_data = rollout_logger.trajectory_data["adb_validation"]
+        validation_screenshot_uri = validation_data.get("screenshot_uri")
         from tinker_cookbook.recipes.cua_rl.reward import ADBValidationResult
         adb_validation_result = ADBValidationResult(
             command=validation_data.get("command", ""),
@@ -337,7 +502,7 @@ async def _run_single_env_rollout(
     }
     
     # Record rollout completion in database
-    if db_session is not None and db_rollout_id is not None:
+    if db_session is not None and rollout_id is not None:
         try:
             from tinker_cookbook.recipes.cua_rl.database_rollout import (
                 record_rollout_completion,
@@ -345,6 +510,11 @@ async def _run_single_env_rollout(
             )
             # Record validation if available
             if adb_validation_result:
+                # Include screenshot_uri in details if available
+                details = None
+                if validation_screenshot_uri:
+                    details = {"screenshot_uri": validation_screenshot_uri}
+                
                 record_validation(
                     db_session,
                     rollout_id,
@@ -353,6 +523,7 @@ async def _run_single_env_rollout(
                     expected_result=adb_validation_result.expected_result,
                     actual_result=adb_validation_result.actual_result,
                     execution_time=adb_validation_result.execution_time,
+                    details=details,
                 )
             
             # Extract metrics from rollout_result (it's a dict, not an object)
@@ -366,6 +537,10 @@ async def _run_single_env_rollout(
             attempted_completion = rollout_result.get('attempted_completion', False)
             turn_first_success = rollout_result.get('turn_first_success', -1)
             turn_task_completed = rollout_result.get('turn_task_completed', -1)
+            
+            # Prepare trajectory_data_json before recording completion
+            # (We'll update it after trajectory_turns is extracted)
+            trajectory_data_json = None
             
             # Record rollout completion
             record_rollout_completion(
@@ -400,6 +575,7 @@ async def _run_single_env_rollout(
                 db_session.rollback()
     
     # Save trajectory BEFORE flush (so logs are still in buffer)
+    # Note: flush() is now called in the finally block above, so we don't need to call it here
     if output_dir:
         from pathlib import Path
         output_path = Path(output_dir)
@@ -411,19 +587,110 @@ async def _run_single_env_rollout(
             is_eval=is_eval,
         )
     
-    # Flush all logs at once for this environment (after saving)
-    rollout_logger.flush()
-    
     # Extract full trajectory from env (token-level training)
     # Trajectory data is saved in env._trajectory_turns before agent cleanup
     trajectory_turns = getattr(env, '_trajectory_turns', [])
     
     if not trajectory_turns:
-        raise ValueError(
-            f"[Rollout] No trajectory data available from agent. "
+        # This can happen if:
+        # 1. Model inference timed out on the first turn (before any trajectory data was saved)
+        # 2. Model inference failed with exception on the first turn
+        # 3. Rollout was cancelled/interrupted before completing any turn
+        # 4. Some other early failure prevented any turns from completing
+        logger.warning(
+            f"[Rollout] No trajectory data available from agent (rollout_id={rollout_id}). "
             f"This indicates the rollout did not produce any turns or trajectory data was not saved. "
-            f"Task: {env.task_description[:100]}..."
+            f"Task: {env.task_description[:100]}... "
+            f"Num turns in result: {num_turns}, Task completed: {task_completed}, "
+            f"Result message: {rollout_result.get('result_message', 'N/A')[:200]}"
         )
+        # Log additional debug info to help diagnose the issue
+        if hasattr(env, '_agent') and env._agent:
+            agent_result_msg = getattr(env._agent, 'result_message', 'N/A')
+            logger.warning(
+                f"[Rollout] Agent result_message: {agent_result_msg[:200] if agent_result_msg else 'N/A'}"
+            )
+        # Return empty trajectory instead of raising error
+        # This allows the training loop to continue with other rollouts
+        # Create empty trajectory with no transitions
+        empty_trajectory = Trajectory(
+            transitions=[],
+            final_ob=tinker.ModelInput.empty(),
+        )
+        
+        # Create metrics dict
+        metrics = {
+            "task_success": float(actual_task_success),
+            "task_completed": float(task_completed),
+            "num_turns": num_turns,
+        }
+        
+        # Return 4-tuple to match expected format: (trajectory, final_reward, metrics, summary_dict)
+        return empty_trajectory, reward, metrics, summary_dict
+    
+    # Save trajectory_data_json to database
+    # Include both training data (trajectory_turns) and detailed execution info (rollout_logger.trajectory_data)
+    if db_session is not None and rollout_id is not None:
+        try:
+            import json
+            from tinker_cookbook.recipes.cua_rl.database_dao import update_rollout
+            from tinker_cookbook.recipes.cua_rl.database_rollout import get_rollout_by_rollout_id
+            
+            # Convert trajectory_turns to JSON-serializable format (for training)
+            trajectory_data_list = []
+            for turn_num, observation, action_tokens, action_logprobs in trajectory_turns:
+                # Convert observation (ModelInput) to dict
+                obs_dict = None
+                if observation:
+                    try:
+                        if hasattr(observation, 'to_dict'):
+                            obs_dict = observation.to_dict()
+                        elif isinstance(observation, dict):
+                            obs_dict = observation
+                        else:
+                            obs_dict = str(observation)
+                    except Exception as e:
+                        logger.warning(f"Failed to serialize observation for turn {turn_num}: {e}")
+                        obs_dict = str(observation)
+                
+                trajectory_data_list.append({
+                    "turn": turn_num,
+                    "observation": obs_dict,
+                    "action_tokens": action_tokens,
+                    "action_logprobs": action_logprobs,
+                })
+            
+            # Combine training data with detailed execution info from rollout_logger
+            combined_trajectory_data = {
+                "training_data": trajectory_data_list,  # For training (token-level)
+                "execution_details": None,  # Detailed execution info from RolloutLogger
+            }
+            
+            # Add RolloutLogger's trajectory_data if available (contains turns, action_results, tool_executions, etc.)
+            if hasattr(rollout_logger, 'trajectory_data') and rollout_logger.trajectory_data:
+                try:
+                    # Convert rollout_logger.trajectory_data to JSON-serializable format
+                    execution_details = json.loads(json.dumps(rollout_logger.trajectory_data, default=str))
+                    combined_trajectory_data["execution_details"] = execution_details
+                except Exception as e:
+                    logger.warning(f"Failed to serialize rollout_logger.trajectory_data: {e}")
+            
+            trajectory_data_json = json.dumps(combined_trajectory_data, default=str)
+            
+            # Update rollout with trajectory_data_json
+            db_rollout = get_rollout_by_rollout_id(db_session, rollout_id)
+            if db_rollout:
+                update_rollout(
+                    db_session,
+                    db_rollout.id,
+                    trajectory_data_json=trajectory_data_json,
+                )
+                db_session.commit()
+                logger.debug(f"Saved trajectory_data_json (with execution details) to database for rollout {rollout_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save trajectory_data_json to database: {e}")
+            if db_session:
+                db_session.rollback()
     
     transitions: list[Transition] = []
     
@@ -503,6 +770,12 @@ async def do_cua_group_rollout(
     eval_id: int | None = None,  # Database eval ID
     baseline_id: int | None = None,  # Database baseline ID
 ) -> TrajectoryGroup:
+    # Debug: Log function entry - use print directly to bypass logger
+    import sys
+    print(f"[Rollout DEBUG] do_cua_group_rollout called: step={step}, batch={batch}, group={group}, is_eval={is_eval}", file=sys.stderr, flush=True)
+    logger.info(f"[Rollout DEBUG] do_cua_group_rollout called: step={step}, batch={batch}, group={group}, is_eval={is_eval}")
+    sys.stdout.flush()
+    sys.stderr.flush()
     """
     Custom rollout function for CUA environments.
     
@@ -623,25 +896,49 @@ async def do_cua_group_rollout(
     
     # Determine source_type and IDs - this should work even if db_session is None
     # (we'll check db_session later when actually recording)
+    # Priority: step_id > eval_id > baseline_id > context lookup
     if step_id is not None:
         source_type = "step"
         step_id_db = step_id
+        logger.debug(f"[Rollout DB] Determined source_type='step' from step_id={step_id}")
     elif eval_id is not None:
         source_type = "eval"
         eval_id_db = eval_id
+        logger.debug(f"[Rollout DB] Determined source_type='eval' from eval_id={eval_id}")
     elif baseline_id is not None:
         source_type = "baseline"
         baseline_id_db = baseline_id
-    elif is_eval and step is None:
-        # This is a baseline evaluation - try to get baseline_id from context
-        from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
-        baseline_id_from_context = get_baseline_id()
-        if baseline_id_from_context:
-            source_type = "baseline"
-            baseline_id_db = baseline_id_from_context
-            logger.info(f"[Rollout DB] Using baseline_id={baseline_id_db} from context for baseline rollout")
+        logger.debug(f"[Rollout DB] Determined source_type='baseline' from baseline_id={baseline_id}")
+    elif is_eval:
+        # This is an evaluation - try to get IDs from context
+        # First try baseline (baseline evaluations happen before regular evaluations)
+        if step is None:
+            from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+            baseline_id_from_context = get_baseline_id()
+            if baseline_id_from_context:
+                source_type = "baseline"
+                baseline_id_db = baseline_id_from_context
+                logger.info(f"[Rollout DB] Using baseline_id={baseline_id_db} from context for baseline rollout")
+            else:
+                # Try eval_id as fallback
+                from tinker_cookbook.recipes.cua_rl.database_context import get_eval_id
+                eval_id_from_context = get_eval_id()
+                if eval_id_from_context:
+                    source_type = "eval"
+                    eval_id_db = eval_id_from_context
+                    logger.info(f"[Rollout DB] Using eval_id={eval_id_db} from context for evaluation rollout")
+                else:
+                    logger.warning(f"[Rollout DB] is_eval=True, step=None, but both baseline_id and eval_id are None in context. Rollout will use 'unknown' as source_type.")
         else:
-            logger.warning(f"[Rollout DB] is_eval=True, step=None, but baseline_id is None in context. This might be a baseline evaluation that hasn't been set up yet.")
+            # Regular evaluation - try to get eval_id from context
+            from tinker_cookbook.recipes.cua_rl.database_context import get_eval_id
+            eval_id_from_context = get_eval_id()
+            if eval_id_from_context:
+                source_type = "eval"
+                eval_id_db = eval_id_from_context
+                logger.info(f"[Rollout DB] Using eval_id={eval_id_db} from context for evaluation rollout")
+            else:
+                logger.warning(f"[Rollout DB] is_eval=True but eval_id is None and not found in context. Rollout will use 'unknown' as source_type.")
     
     # Now check if we have db_session for recording
     if db_session is None:
@@ -673,33 +970,176 @@ async def do_cua_group_rollout(
     
     # Run rollouts in parallel using asyncio.gather
     # This allows multiple GBox environments to execute simultaneously
+    # IMPORTANT: Each environment must use its own database session to avoid
+    # concurrent access issues (SQLAlchemy sessions are not thread-safe)
     rollout_tasks = []
     for env_idx, env in enumerate(envs):
-        # Use provided group number if available, otherwise fall back to env_idx
-        # group should represent the group index in the batch, not the env index within the group
-        group_num = group if group is not None else env_idx
-        task = _run_single_env_rollout(
-            env=env,
-            env_idx=env_idx,
-            total_envs=len(envs),
-            model_path=model_path,
-            policy=policy,
-            trajectory_step=trajectory_step,
-            trajectory_batch=trajectory_batch,
-            group_num=group_num,
-            output_dir=trajectory_output_dir,
-            is_eval=is_eval,
-            db_session=db_session,
-            source_type=source_type,
-            step_id=step_id_db,
-            eval_id=eval_id_db,
-            baseline_id=baseline_id_db,
-            group_id=group_id_db,  # Pass group_id so rollout belongs to the group
-        )
+        # Use provided group number if available
+        # group should represent the group index (e.g., 0, 1, 2, ... for different groups in evaluation)
+        # env_idx represents the environment index within this group (0, 1, 2, ... for environments in the same group)
+        # CRITICAL: group_num is the GROUP number, env_idx is the ENV index within that group
+        # They should NOT be confused - all envs in the same group share the same group_num
+        if group is not None:
+            group_num = group
+        else:
+            # Fallback: if group is None, we can't determine the correct group number
+            # This should only happen if the caller didn't provide group number
+            # Log a warning and use 0 as fallback (but this indicates a bug)
+            logger.warning(
+                f"[Rollout] group parameter is None for {len(envs)} environments. "
+                f"Using 0 as fallback, but this may cause incorrect group numbering. "
+                f"All environments will be recorded as group 0."
+            )
+            group_num = 0
+        
+        # Create a separate session for each environment to avoid concurrent access issues
+        # SQLAlchemy sessions are not thread-safe and sharing a session across
+        # parallel async tasks can cause data corruption and ID mismatches
+        env_db_session = None
+        session_created = False
+        if db_session is not None:
+            from tinker_cookbook.recipes.cua_rl.database import get_session_direct
+            try:
+                env_db_session = get_session_direct()
+                session_created = True
+                logger.debug(f"[Rollout] Created separate DB session for env {env_idx}")
+            except Exception as e:
+                logger.warning(f"[Rollout] Failed to create separate DB session for env {env_idx}: {e}, falling back to shared session")
+                env_db_session = db_session
+                session_created = False
+        
+        # Create a wrapper task that ensures session cleanup
+        # Capture variables in closure to avoid issues with loop variable capture
+        def make_rollout_task(env, env_idx, env_db_session, session_created_flag):
+            async def run_with_session_cleanup():
+                # Debug: Log task start - use print directly to bypass logger
+                print(f"[Rollout DEBUG] Rollout task started for env {env_idx}", file=sys.stderr, flush=True)
+                logger.info(f"[Rollout DEBUG] Rollout task started for env {env_idx}")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                try:
+                    return await _run_single_env_rollout(
+                        env=env,
+                        env_idx=env_idx,
+                        total_envs=len(envs),
+                        model_path=model_path,
+                        policy=policy,
+                        trajectory_step=trajectory_step,
+                        trajectory_batch=trajectory_batch,
+                        group_num=group_num,
+                        output_dir=trajectory_output_dir,
+                        is_eval=is_eval,
+                        db_session=env_db_session,  # Use separate session for each environment
+                        source_type=source_type,
+                        step_id=step_id_db,
+                        eval_id=eval_id_db,
+                        baseline_id=baseline_id_db,
+                        group_id=group_id_db,  # Pass group_id so rollout belongs to the group
+                    )
+                finally:
+                    # Close the session if it was created specifically for this environment
+                    if session_created_flag and env_db_session is not None:
+                        try:
+                            env_db_session.close()
+                            logger.debug(f"[Rollout] Closed DB session for env {env_idx}")
+                        except Exception as e:
+                            logger.warning(f"[Rollout] Error closing DB session for env {env_idx}: {e}")
+            return run_with_session_cleanup
+        
+        task = make_rollout_task(env, env_idx, env_db_session, session_created)()
         rollout_tasks.append(task)
     
     # Execute all rollouts in parallel
-    results = await asyncio.gather(*rollout_tasks)
+    print(f"[Rollout DEBUG] About to execute {len(rollout_tasks)} rollout tasks in parallel", file=sys.stderr, flush=True)
+    logger.info(f"[Rollout DEBUG] About to execute {len(rollout_tasks)} rollout tasks in parallel")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        results = await asyncio.gather(*rollout_tasks)
+        print(f"[Rollout DEBUG] All {len(results)} rollouts completed", file=sys.stderr, flush=True)
+        logger.info(f"[Rollout DEBUG] All {len(results)} rollouts completed")
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception as e:
+        # If any rollout fails, update group status to failed
+        if db_session is not None and group_id_db is not None:
+            try:
+                from tinker_cookbook.recipes.cua_rl.database_dao import update_group
+                update_group(
+                    db_session,
+                    group_id_db,
+                    status="failed",
+                    error_message=f"Group rollout failed: {str(e)}",
+                    end_time=datetime.utcnow(),
+                )
+                db_session.commit()
+            except Exception as db_error:
+                logger.warning(f"[Rollout DB] Failed to update group status to failed: {db_error}")
+                if db_session:
+                    db_session.rollback()
+        raise
+    
+    # Update group status after all rollouts complete
+    if db_session is not None and group_id_db is not None:
+        try:
+            from tinker_cookbook.recipes.cua_rl.database_dao import get_group, update_group
+            from datetime import datetime
+            
+            # Count successful and failed rollouts
+            successful_rollouts = 0
+            failed_rollouts = 0
+            total_rewards = []
+            
+            for trajectory, final_reward, metrics, summary_dict in results:
+                if summary_dict.get("task_success", False):
+                    successful_rollouts += 1
+                else:
+                    failed_rollouts += 1
+                if final_reward is not None:
+                    total_rewards.append(final_reward)
+            
+            # Calculate metrics
+            reward_mean = sum(total_rewards) / len(total_rewards) if total_rewards else 0.0
+            if len(total_rewards) > 1:
+                import statistics
+                reward_std = statistics.stdev(total_rewards)
+            else:
+                reward_std = 0.0
+            
+            # Update group with completion status
+            group = get_group(db_session, group_id_db)
+            if group:
+                completed_rollouts = (group.completed_rollouts or 0) + len(results)
+                
+                # If all expected rollouts are completed, mark group as completed
+                if completed_rollouts >= (group.num_rollouts or len(results)):
+                    update_group(
+                        db_session,
+                        group_id_db,
+                        status="completed",
+                        completed_rollouts=completed_rollouts,
+                        success_count=successful_rollouts,
+                        reward_mean=reward_mean,
+                        reward_std=reward_std,
+                        progress_percent=100.0,
+                        end_time=datetime.utcnow(),
+                    )
+                else:
+                    # Update progress but keep status as running
+                    update_group(
+                        db_session,
+                        group_id_db,
+                        completed_rollouts=completed_rollouts,
+                        success_count=successful_rollouts,
+                        reward_mean=reward_mean,
+                        reward_std=reward_std,
+                        progress_percent=(completed_rollouts / (group.num_rollouts or len(results))) * 100.0,
+                    )
+                db_session.commit()
+        except Exception as e:
+            logger.warning(f"[Rollout DB] Failed to update group completion status: {e}")
+            if db_session:
+                db_session.rollback()
     
     # Unpack results (results are already sorted by env_idx)
     trajectories = []

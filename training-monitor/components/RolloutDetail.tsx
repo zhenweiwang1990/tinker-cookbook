@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import styles from './RolloutDetail.module.css';
 
 interface RolloutDetailProps {
   rolloutId: number;
+  selectedTurnIndex?: number | null;
   onClose: () => void;
+  onTurnChange?: (turnIndex: number | null) => void;
 }
 
 interface Turn {
@@ -16,6 +18,7 @@ interface Turn {
   turn_time: number;
   start_time: string;
   end_time: string;
+  model_response: string | null;
   actions: any[];
   observations: any[];
 }
@@ -30,16 +33,66 @@ interface RolloutDetailData {
 
 export default function RolloutDetail({
   rolloutId,
+  selectedTurnIndex: propSelectedTurnIndex,
   onClose,
+  onTurnChange,
 }: RolloutDetailProps) {
   const [data, setData] = useState<RolloutDetailData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [expandedTurns, setExpandedTurns] = useState<Set<number>>(new Set());
+  // Use turns.length as the index for Validation tab
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number>(propSelectedTurnIndex !== null && propSelectedTurnIndex !== undefined ? propSelectedTurnIndex : 0);
+  const [showScreenshotModal, setShowScreenshotModal] = useState(false);
+  const [modalImageSrc, setModalImageSrc] = useState<string | null>(null);
+  const [showModelInputModal, setShowModelInputModal] = useState(false);
+  const [modelInputData, setModelInputData] = useState<any>(null);
+  const [loadingModelInput, setLoadingModelInput] = useState(false);
+  // Cache for loaded turn details, screenshots and model inputs
+  const [turnDetailsCache, setTurnDetailsCache] = useState<Map<number, { actions: any[], observations: any[] }>>(new Map());
+  const [loadingTurnDetails, setLoadingTurnDetails] = useState<Set<number>>(new Set());
+  const [screenshotCache, setScreenshotCache] = useState<Map<number, string>>(new Map());
+  const [modelInputCache, setModelInputCache] = useState<Map<number, any>>(new Map());
+  const [loadingScreenshots, setLoadingScreenshots] = useState<Set<number>>(new Set());
+  
+  // Use refs to access latest cache values in callbacks without dependencies
+  const turnDetailsCacheRef = useRef<Map<number, { actions: any[], observations: any[] }>>(new Map());
+  const modelInputCacheRef = useRef<Map<number, any>>(new Map());
+  const loadingTurnDetailsRef = useRef<Set<number>>(new Set());
+  const screenshotCacheRef = useRef<Map<number, string>>(new Map());
+  
+  // Keep refs in sync with state - update refs directly without useEffect to avoid loops
+  // We'll update refs in the callbacks that modify state instead
+  
+  const beforeScreenshotRef = useRef<HTMLImageElement | null>(null);
+  const beforeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  
+  // Calculate selectedTurnId using ref to track previous value and avoid loops
+  // MUST be before any conditional returns (React hooks rule)
+  const prevSelectedTurnIdRef = useRef<number | null>(null);
 
   const fetchDetails = async () => {
     try {
       const res = await fetch(`/api/rollouts/${rolloutId}`);
       const data = await res.json();
+      console.log('Fetched rollout data:', data);
+      console.log('Rollout object:', data.rollout);
+      console.log('Rollout keys:', data.rollout ? Object.keys(data.rollout) : 'no rollout');
+      console.log('trajectory_data_json exists:', !!data.rollout?.trajectory_data_json);
+      console.log('trajectory_data_json type:', typeof data.rollout?.trajectory_data_json);
+      if (data.rollout?.trajectory_data_json) {
+        try {
+          const parsed = typeof data.rollout.trajectory_data_json === 'string' 
+            ? JSON.parse(data.rollout.trajectory_data_json)
+            : data.rollout.trajectory_data_json;
+          console.log('Parsed trajectory_data_json:', parsed);
+          console.log('Has turns:', !!parsed.turns);
+          if (parsed.turns) {
+            console.log('Turns count:', parsed.turns.length);
+            console.log('First turn:', parsed.turns[0]);
+          }
+        } catch (e) {
+          console.error('Failed to parse trajectory_data_json:', e);
+        }
+      }
       setData(data);
     } catch (error) {
       console.error('Failed to fetch rollout details:', error);
@@ -48,22 +101,416 @@ export default function RolloutDetail({
     }
   };
 
-  useEffect(() => {
-    fetchDetails();
-    const interval = setInterval(fetchDetails, 2000);
-    return () => clearInterval(interval);
+  // Define ALL callbacks and functions BEFORE any conditional returns
+  // This is required by React - hooks must be called in the same order every render
+  
+  const handleScreenshotClick = useCallback((imageSrc: string) => {
+    setModalImageSrc(imageSrc);
+    setShowScreenshotModal(true);
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    setShowScreenshotModal(false);
+    setModalImageSrc(null);
+  }, []);
+
+  const handleOpenModelInputModal = useCallback(async (turnId: number) => {
+    // Check cache first using ref
+    const cached = modelInputCacheRef.current.get(turnId);
+    if (cached) {
+      setModelInputData(cached);
+      setShowModelInputModal(true);
+      return;
+    }
+
+    // Load from API
+    setLoadingModelInput(true);
+    try {
+      const res = await fetch(`/api/rollouts/${rolloutId}/model-input/${turnId}`);
+      if (!res.ok) {
+        throw new Error('Failed to load model input');
+      }
+      const data = await res.json();
+      const modelInput = data.modelInput;
+      
+      // Cache it using functional update
+      setModelInputCache(prev => new Map(prev).set(turnId, modelInput));
+      setModelInputData(modelInput);
+      setShowModelInputModal(true);
+    } catch (error) {
+      console.error('Failed to load model input:', error);
+      alert('Failed to load model input');
+    } finally {
+      setLoadingModelInput(false);
+    }
   }, [rolloutId]);
 
-  const toggleTurn = (turnNum: number) => {
-    const newExpanded = new Set(expandedTurns);
-    if (newExpanded.has(turnNum)) {
-      newExpanded.delete(turnNum);
-    } else {
-      newExpanded.add(turnNum);
-    }
-    setExpandedTurns(newExpanded);
-  };
+  const handleCloseModelInputModal = useCallback(() => {
+    setShowModelInputModal(false);
+    setModelInputData(null);
+  }, []);
 
+  // Function to load turn details on demand
+  const loadTurnDetails = useCallback(async (turnId: number) => {
+    // Load from API (cache check is done in useEffect)
+    setLoadingTurnDetails(prev => new Set(prev).add(turnId));
+    try {
+      const res = await fetch(`/api/rollouts/${rolloutId}/turns/${turnId}`);
+      if (!res.ok) {
+        throw new Error('Failed to load turn details');
+      }
+      const data = await res.json();
+      
+      // Cache it using functional update
+      setTurnDetailsCache(prev => new Map(prev).set(turnId, data));
+      return data;
+    } catch (error) {
+      console.error('Failed to load turn details:', error);
+      return null;
+    } finally {
+      setLoadingTurnDetails(prev => {
+        const next = new Set(prev);
+        next.delete(turnId);
+        return next;
+      });
+    }
+  }, [rolloutId]);
+
+  // Function to load screenshot URI for an observation
+  // Now screenshot_uri is a file path, so we can use it directly or load from static files
+  const loadScreenshot = useCallback(async (obsId: number, screenshotUri?: string | null): Promise<string | null> => {
+    // If we have a file path, use it directly (it's already a static file path)
+    if (screenshotUri && !screenshotUri.startsWith('data:') && !screenshotUri.startsWith('http')) {
+      // It's a file path, return it as-is (will be served as static file)
+      return screenshotUri;
+    }
+    
+    // Check cache first using ref
+    const cached = screenshotCacheRef.current.get(obsId);
+    if (cached) {
+      return cached;
+    }
+
+    // If it's a data URI or URL, cache it
+    if (screenshotUri) {
+      setScreenshotCache(prev => new Map(prev).set(obsId, screenshotUri));
+      return screenshotUri;
+    }
+
+    // Fallback: try to load from API (for old data)
+    setLoadingScreenshots(prev => new Set(prev).add(obsId));
+    try {
+      const res = await fetch(`/api/rollouts/${rolloutId}/screenshot/${obsId}`);
+      if (!res.ok) {
+        throw new Error('Failed to load screenshot');
+      }
+      const data = await res.json();
+      const uri = data.screenshot_uri;
+      
+      // Cache it
+      if (uri) {
+        setScreenshotCache(prev => new Map(prev).set(obsId, uri));
+      }
+      return uri || null;
+    } catch (error) {
+      console.error('Failed to load screenshot:', error);
+      return null;
+    } finally {
+      setLoadingScreenshots(prev => {
+        const next = new Set(prev);
+        next.delete(obsId);
+        return next;
+      });
+    }
+  }, [rolloutId]);
+
+  // All useEffect hooks must be before conditional returns
+  useEffect(() => {
+    fetchDetails();
+    // Auto-refresh disabled - use manual refresh button instead
+    // const interval = setInterval(fetchDetails, 2000);
+    // return () => clearInterval(interval);
+  }, [rolloutId]);
+
+  // Sync propSelectedTurnIndex to state
+  useEffect(() => {
+    if (propSelectedTurnIndex !== null && propSelectedTurnIndex !== undefined) {
+      setSelectedTurnIndex(propSelectedTurnIndex);
+    }
+  }, [propSelectedTurnIndex]);
+
+  // Validate selectedTurnIndex when turns data changes
+  // Use a stable reference to turns length
+  const turnsLength = data?.turns?.length ?? 0;
+  useEffect(() => {
+    if (turnsLength > 0) {
+      // If selectedTurnIndex is out of bounds (beyond turns.length, which is Validation tab), reset to 0
+      setSelectedTurnIndex((currentIndex) => {
+        // Allow turns.length for Validation tab, but anything beyond that is invalid
+        if (currentIndex > turnsLength) {
+          return 0;
+        }
+        return currentIndex;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnsLength]);
+
+  // Helper function to extract turn data from trajectory_data_json
+  const extractTurnData = useCallback((rollout: any, turn: any) => {
+    if (!rollout || !turn) {
+      console.log('extractTurnData: Missing rollout or turn', { rollout: !!rollout, turn: !!turn });
+      return null;
+    }
+    
+    if (!rollout.trajectory_data_json) {
+      console.log('extractTurnData: No trajectory_data_json in rollout', { rolloutKeys: Object.keys(rollout || {}) });
+      return null;
+    }
+    
+    try {
+      const trajectoryData = typeof rollout.trajectory_data_json === 'string'
+        ? JSON.parse(rollout.trajectory_data_json)
+        : rollout.trajectory_data_json;
+      
+      console.log('extractTurnData: Parsed trajectoryData', { 
+        hasExecutionDetails: !!trajectoryData.execution_details,
+        hasTurns: !!trajectoryData.execution_details?.turns,
+        turnsLength: trajectoryData.execution_details?.turns?.length,
+        lookingForTurn: turn.turn,
+        trajectoryDataKeys: Object.keys(trajectoryData || {})
+      });
+      
+      // New structure: { training_data: [...], execution_details: { turns: [...] } }
+      // Old structure (backward compatibility): { turns: [...] }
+      const executionDetails = trajectoryData.execution_details || trajectoryData;
+      
+      if (executionDetails.turns && Array.isArray(executionDetails.turns)) {
+        const turnData = executionDetails.turns.find((t: any) => t.turn_num === turn.turn);
+        console.log('extractTurnData: Found turnData', { 
+          found: !!turnData, 
+          turnDataKeys: turnData ? Object.keys(turnData) : null,
+          hasActionResults: turnData?.action_results?.length > 0,
+          hasToolExecutions: turnData?.tool_executions?.length > 0
+        });
+        return turnData || null;
+      }
+    } catch (e) {
+      console.error('extractTurnData: Parse error', e);
+    }
+    
+    return null;
+  }, []);
+
+  // Draw coordinates on screenshot
+  const drawCoordinatesOnScreenshot = useCallback((img: HTMLImageElement, canvas: HTMLCanvasElement, coordinates: any) => {
+    if (!img || !canvas || !coordinates) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    // Get displayed image dimensions
+    const displayedWidth = img.offsetWidth || img.clientWidth;
+    const displayedHeight = img.offsetHeight || img.clientHeight;
+    const naturalWidth = img.naturalWidth || img.width;
+    const naturalHeight = img.naturalHeight || img.height;
+    
+    // Set canvas size to match displayed image
+    canvas.width = displayedWidth;
+    canvas.height = displayedHeight;
+    
+    // Calculate scale factors
+    const scaleX = displayedWidth / naturalWidth;
+    const scaleY = displayedHeight / naturalHeight;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw coordinates
+    if (coordinates.x !== undefined && coordinates.y !== undefined) {
+      // Single point (tap, click, etc.)
+      const x = coordinates.x * scaleX;
+      const y = coordinates.y * scaleY;
+      
+      // Draw circle
+      ctx.strokeStyle = '#ff0000';
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw crosshair
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - 20 * scaleX, y);
+      ctx.lineTo(x + 20 * scaleX, y);
+      ctx.moveTo(x, y - 20 * scaleY);
+      ctx.lineTo(x, y + 20 * scaleY);
+      ctx.stroke();
+      
+      // Draw label
+      ctx.fillStyle = '#ff0000';
+      ctx.font = `bold ${Math.max(10, 14 * scaleX)}px Arial`;
+      ctx.fillText(`(${coordinates.x}, ${coordinates.y})`, x + 25 * scaleX, y - 10 * scaleY);
+    } else if (coordinates.start && coordinates.end) {
+      // Two points (swipe, drag, etc.)
+      const startX = coordinates.start.x * scaleX;
+      const startY = coordinates.start.y * scaleY;
+      const endX = coordinates.end.x * scaleX;
+      const endY = coordinates.end.y * scaleY;
+      
+      // Draw start point
+      ctx.strokeStyle = '#00ff00';
+      ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(startX, startY, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw end point
+      ctx.strokeStyle = '#ff0000';
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+      ctx.beginPath();
+      ctx.arc(endX, endY, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw line between points
+      ctx.strokeStyle = '#0000ff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      // Draw labels
+      ctx.fillStyle = '#00ff00';
+      ctx.font = `bold ${Math.max(10, 14 * scaleX)}px Arial`;
+      ctx.fillText(`Start (${coordinates.start.x}, ${coordinates.start.y})`, startX + 25 * scaleX, startY - 10 * scaleY);
+      ctx.fillStyle = '#ff0000';
+      ctx.fillText(`End (${coordinates.end.x}, ${coordinates.end.y})`, endX + 25 * scaleX, endY - 10 * scaleY);
+    }
+  }, []);
+
+  // Effect to draw coordinates when screenshot loads or coordinates change
+  useEffect(() => {
+    if (!data || !data.turns || data.turns.length === 0) return;
+    if (selectedTurnIndex >= data.turns.length) return;
+    
+    const currentTurn = data.turns[selectedTurnIndex];
+    if (!currentTurn) return;
+    
+    if (beforeScreenshotRef.current && beforeCanvasRef.current) {
+      // Get coordinates from action_results in trajectory_data_json
+      const turnData = extractTurnData(data.rollout, currentTurn);
+      const actionResults = turnData?.action_results || [];
+      const actionResult = actionResults.length > 0 ? actionResults[0] : null;
+      const coordinates = actionResult?.coordinates;
+      
+      if (coordinates) {
+        const img = beforeScreenshotRef.current;
+        const canvas = beforeCanvasRef.current;
+        
+        const drawWhenReady = () => {
+          // Use requestAnimationFrame to ensure layout is complete
+          requestAnimationFrame(() => {
+            drawCoordinatesOnScreenshot(img, canvas, coordinates);
+          });
+        };
+        
+        if (img.complete && img.naturalWidth > 0) {
+          drawWhenReady();
+        } else {
+          img.onload = drawWhenReady;
+        }
+      } else {
+        // Clear canvas if no coordinates
+        const ctx = beforeCanvasRef.current.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, beforeCanvasRef.current.width, beforeCanvasRef.current.height);
+        }
+      }
+    }
+    // extractTurnData and drawCoordinatesOnScreenshot are stable (empty deps), so we can omit them
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTurnIndex, data?.rollout?.id, data?.turns?.length]);
+  
+  // Also redraw when window resizes
+  useEffect(() => {
+    const handleResize = () => {
+      if (!data || !data.turns || data.turns.length === 0) return;
+      if (selectedTurnIndex >= data.turns.length) return;
+      
+      const currentTurn = data.turns[selectedTurnIndex];
+      if (!currentTurn) return;
+      
+      if (beforeScreenshotRef.current && beforeCanvasRef.current) {
+        // Get coordinates from action_results in trajectory_data_json
+        const turnData = extractTurnData(data.rollout, currentTurn);
+        const actionResults = turnData?.action_results || [];
+        const actionResult = actionResults.length > 0 ? actionResults[0] : null;
+        const coordinates = actionResult?.coordinates;
+        
+        if (coordinates) {
+          const img = beforeScreenshotRef.current;
+          const canvas = beforeCanvasRef.current;
+          drawCoordinatesOnScreenshot(img, canvas, coordinates);
+        }
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [selectedTurnIndex, data, extractTurnData, drawCoordinatesOnScreenshot]);
+
+
+  // Calculate selectedTurnId (before any conditional returns)
+  const selectedTurnId = (() => {
+    if (!data?.turns || data.turns.length === 0) return null;
+    if (selectedTurnIndex >= data.turns.length) return null;
+    return data.turns[selectedTurnIndex]?.id ?? null;
+  })();
+  
+  // Sync refs with state (only for reading, not as dependencies)
+  turnDetailsCacheRef.current = turnDetailsCache;
+  loadingTurnDetailsRef.current = loadingTurnDetails;
+  screenshotCacheRef.current = screenshotCache;
+  modelInputCacheRef.current = modelInputCache;
+  
+  // Load turn details when selectedTurnId actually changes (not just on every render)
+  useEffect(() => {
+    // Only load if the turn ID actually changed
+    if (selectedTurnId === prevSelectedTurnIdRef.current) {
+      return;
+    }
+    
+    // Update the ref
+    prevSelectedTurnIdRef.current = selectedTurnId;
+    
+    if (!selectedTurnId) return;
+    
+    // Check if already cached using ref (not state to avoid dependency)
+    if (turnDetailsCacheRef.current.has(selectedTurnId)) {
+      return;
+    }
+    
+    // Check if already loading using ref
+    if (loadingTurnDetailsRef.current.has(selectedTurnId)) {
+      return;
+    }
+    
+    // Load the turn details
+    loadTurnDetails(selectedTurnId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTurnId]);
+  
+  // NOW we can have conditional returns (all hooks are above)
   if (loading) {
     return <div className={styles.loading}>Loading...</div>;
   }
@@ -72,223 +519,894 @@ export default function RolloutDetail({
     return <div className={styles.error}>Rollout not found</div>;
   }
 
-  const { rollout, task, validation, environment, turns } = data;
+  const { rollout, task, validation, environment, turns = [] } = data || {};
+  
+  // Safety check: ensure rollout exists
+  if (!rollout) {
+    return <div className={styles.error}>Rollout data is invalid</div>;
+  }
+  
+  // Get selectedTurn directly from data
+  const selectedTurn = selectedTurnId && data?.turns 
+    ? data.turns.find((t: any) => t?.id === selectedTurnId) || null
+    : null;
+  
+  // Get turn details from cache (loaded on demand)
+  const selectedTurnDetails = selectedTurnId ? turnDetailsCache.get(selectedTurnId) : null;
+  const selectedTurnActions = selectedTurnDetails?.actions || [];
+  const selectedTurnObservations = selectedTurnDetails?.observations || [];
+  const isLoadingTurnDetails = selectedTurnId ? loadingTurnDetails.has(selectedTurnId) : false;
 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <h2 className={styles.title}>Rollout Details</h2>
-        <button className={styles.closeButton} onClick={onClose}>
-          ← Back
-        </button>
+        <div className={styles.headerButtons}>
+          <button 
+            className={styles.refreshButton} 
+            onClick={fetchDetails}
+            title="Refresh"
+          >
+            🔄
+          </button>
+          <button className={styles.closeButton} onClick={onClose}>
+            ← Back
+          </button>
+        </div>
       </div>
 
       <div className={styles.content}>
-        {/* Rollout Summary */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Summary</h3>
-          <div className={styles.summaryGrid}>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Status:</span>
-              <span className={styles.value}>{rollout.status}</span>
-            </div>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Task Success:</span>
-              <span
-                className={`${styles.value} ${
-                  rollout.task_success ? styles.success : styles.failed
-                }`}
-              >
-                {rollout.task_success ? 'Yes' : 'No'}
-              </span>
-            </div>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Validation:</span>
-              <span
-                className={`${styles.value} ${
-                  rollout.validation_passed ? styles.success : styles.failed
-                }`}
-              >
-                {rollout.validation_passed ? 'Passed' : 'Failed'}
-              </span>
-            </div>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Turns:</span>
-              <span className={styles.value}>{rollout.num_turns}</span>
-            </div>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Reward:</span>
-              <span className={styles.value}>
-                {rollout.reward !== null ? rollout.reward.toFixed(4) : 'N/A'}
-              </span>
-            </div>
-            <div className={styles.summaryItem}>
-              <span className={styles.label}>Rollout Time:</span>
-              <span className={styles.value}>
-                {rollout.rollout_time !== null
-                  ? `${rollout.rollout_time.toFixed(2)}s`
-                  : 'N/A'}
-              </span>
-            </div>
+        {/* Compact Summary Row */}
+        <div className={styles.summaryRow}>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Status:</span>
+            <span className={styles.summaryValue}>{rollout.status}</span>
           </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Task:</span>
+            <span className={`${styles.summaryValue} ${rollout.task_success === true ? styles.success : styles.failed}`}>
+              {rollout.task_success === true ? '✓' : '✗'}
+            </span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Validation:</span>
+            <span className={`${styles.summaryValue} ${rollout.validation_passed === true ? styles.success : styles.failed}`}>
+              {rollout.validation_passed === true ? '✓' : '✗'}
+            </span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Turns:</span>
+            <span className={styles.summaryValue}>{rollout.num_turns || turns.length}</span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Reward:</span>
+            <span className={styles.summaryValue}>
+              {rollout.reward !== null ? rollout.reward.toFixed(4) : 'N/A'}
+            </span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Time:</span>
+            <span className={styles.summaryValue}>
+              {rollout.rollout_time !== null ? `${rollout.rollout_time.toFixed(1)}s` : 'N/A'}
+            </span>
+          </div>
+          {task && (
+            <div className={styles.summaryItem}>
+              <span className={styles.summaryLabel}>Task:</span>
+              <span className={styles.summaryValue} title={task.description}>
+                {task.name.length > 30 ? task.name.substring(0, 30) + '...' : task.name}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Task Info */}
-        {task && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Task</h3>
-            <div className={styles.taskInfo}>
-              <div className={styles.taskName}>{task.name}</div>
-              <div className={styles.taskDescription}>{task.description}</div>
-            </div>
-          </div>
-        )}
-
-        {/* Validation */}
-        {validation && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Validation</h3>
-            <div className={styles.validationInfo}>
-              <div className={styles.validationResult}>
-                <span className={styles.label}>Result:</span>
-                <span
-                  className={`${styles.value} ${
-                    validation.success ? styles.success : styles.failed
-                  }`}
-                >
-                  {validation.success ? 'Passed' : 'Failed'}
-                </span>
+        {/* Task and Validation Details (if available) */}
+        {(task || validation) && (
+          <div className={styles.detailsRow}>
+            {task && (
+              <div className={styles.detailSection}>
+                <span className={styles.detailLabel}>Task:</span>
+                <span className={styles.detailValue}>{task.description}</span>
               </div>
-              {validation.validation_query && (
-                <div className={styles.validationQuery}>
-                  <span className={styles.label}>Query:</span>
-                  <code className={styles.code}>{validation.validation_query}</code>
-                </div>
-              )}
-              {validation.expected_result && (
-                <div className={styles.validationExpected}>
-                  <span className={styles.label}>Expected:</span>
-                  <code className={styles.code}>{validation.expected_result}</code>
-                </div>
-              )}
-              {validation.actual_result && (
-                <div className={styles.validationActual}>
-                  <span className={styles.label}>Actual:</span>
-                  <code className={styles.code}>{validation.actual_result}</code>
-                </div>
-              )}
-            </div>
+            )}
+            {validation && validation.validation_query && (
+              <div className={styles.detailSection}>
+                <span className={styles.detailLabel}>Validation:</span>
+                <code className={styles.detailCode}>{validation.validation_query}</code>
+                {validation.expected_result && (
+                  <>
+                    <span className={styles.detailLabel}>Expected:</span>
+                    <code className={styles.detailCode}>{validation.expected_result}</code>
+                  </>
+                )}
+                {validation.actual_result && (
+                  <>
+                    <span className={styles.detailLabel}>Actual:</span>
+                    <code className={styles.detailCode}>{validation.actual_result}</code>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Turns */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Turns ({turns.length})</h3>
-          <div className={styles.turnsList}>
-            {turns.map((turn) => {
-              const isExpanded = expandedTurns.has(turn.turn);
-              return (
-                <div key={turn.id} className={styles.turn}>
-                  <div
-                    className={styles.turnHeader}
-                    onClick={() => toggleTurn(turn.turn)}
+        {/* Turns Tabs */}
+        {turns.length > 0 && (
+          <div className={styles.turnsSection}>
+            <div className={styles.tabsContainer}>
+              <div className={styles.tabs}>
+                {turns.map((turn, index) => (
+                  <button
+                    key={turn.id}
+                    className={`${styles.tab} ${selectedTurnIndex === index ? styles.tabActive : ''}`}
+                    onClick={() => {
+                      setSelectedTurnIndex(index);
+                      if (onTurnChange) {
+                        onTurnChange(index);
+                      }
+                    }}
                   >
-                    <span className={styles.expandIcon}>
-                      {isExpanded ? '▼' : '▶'}
-                    </span>
-                    <span className={styles.turnNumber}>Turn {turn.turn}</span>
-                    <div className={styles.turnMetrics}>
-                      <span className={styles.turnMetric}>
-                        Reward: {turn.reward !== null ? turn.reward.toFixed(4) : 'N/A'}
-                      </span>
-                      {turn.turn_time !== null && (
-                        <span className={styles.turnMetric}>
-                          Time: {turn.turn_time.toFixed(2)}s
-                        </span>
+                    <span className={styles.tabNumber}>Turn {turn.turn}</span>
+                    {turn.episode_done && <span className={styles.tabBadge}>Final</span>}
+                  </button>
+                ))}
+                {validation && (
+                  <button
+                    className={`${styles.tab} ${selectedTurnIndex === turns.length ? styles.tabActive : ''}`}
+                    onClick={() => {
+                      setSelectedTurnIndex(turns.length);
+                      if (onTurnChange) {
+                        onTurnChange(turns.length);
+                      }
+                    }}
+                  >
+                    <span className={styles.tabNumber}>Validation</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Selected Turn Content or Validation Content */}
+            {selectedTurnIndex < turns.length && selectedTurn ? (
+              <div className={styles.turnContent}>
+                {/* Top Summary Bar: Model Input Button, Reward, Token Stats, Time, Action Parse Info */}
+                {(() => {
+                  const turnData = extractTurnData(rollout, selectedTurn);
+                  const action = selectedTurnActions?.[0];
+                  // Check if there's a model input observation (we only have id and obs_type now)
+                  const modelInputObs = selectedTurnObservations?.find(
+                    (obs: any) => obs && obs.obs_type === 'screenshot_before'
+                  );
+                  const hasModelInput = !!modelInputObs;
+                  
+                  return (
+                    <div className={styles.turnMetrics} style={{ 
+                      display: 'flex', 
+                      flexWrap: 'wrap', 
+                      gap: '12px', 
+                      alignItems: 'center',
+                      marginBottom: '16px',
+                      padding: '12px',
+                      backgroundColor: '#f8f9fa',
+                      borderRadius: '4px',
+                      border: '1px solid #dee2e6'
+                    }}>
+                      {/* Model Input Button */}
+                      {hasModelInput && (
+                        <button
+                          onClick={() => handleOpenModelInputModal(selectedTurn.id)}
+                          disabled={loadingModelInput}
+                          style={{
+                            padding: '6px 12px',
+                            backgroundColor: loadingModelInput ? '#6c757d' : '#007bff',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: loadingModelInput ? 'not-allowed' : 'pointer',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            transition: 'background-color 0.2s',
+                            opacity: loadingModelInput ? 0.6 : 1,
+                          }}
+                          onMouseOver={(e) => {
+                            if (!loadingModelInput) {
+                              e.currentTarget.style.backgroundColor = '#0056b3';
+                            }
+                          }}
+                          onMouseOut={(e) => {
+                            if (!loadingModelInput) {
+                              e.currentTarget.style.backgroundColor = '#007bff';
+                            }
+                          }}
+                        >
+                          {loadingModelInput ? '⏳ Loading...' : '📝 Model Input'}
+                        </button>
                       )}
-                      {turn.episode_done && (
-                        <span className={styles.episodeDone}>Final</span>
+                      
+                      {/* Reward */}
+                      <div className={styles.turnMetric}>
+                        <span className={styles.turnMetricLabel}>Reward:</span>
+                        <span className={styles.turnMetricValue}>
+                          {selectedTurn.reward !== null ? selectedTurn.reward.toFixed(4) : 'N/A'}
+                        </span>
+                      </div>
+                      
+                      {/* Token Stats */}
+                      {action && action.num_tokens !== null && action.num_tokens !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Tokens:</span>
+                          <span className={styles.turnMetricValue}>{action.num_tokens}</span>
+                        </div>
+                      )}
+                      
+                      {/* Time */}
+                      {selectedTurn.turn_time !== null && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Time:</span>
+                          <span className={styles.turnMetricValue}>{selectedTurn.turn_time.toFixed(2)}s</span>
+                        </div>
+                      )}
+                      
+                      {/* Action Parse Info */}
+                      {turnData && turnData.parse_success !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Parse:</span>
+                          <span style={{ 
+                            color: turnData.parse_success ? '#28a745' : '#dc3545',
+                            fontWeight: 600
+                          }}>
+                            {turnData.parse_success ? '✓ Success' : '✗ Failed'}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* Model Inference Time */}
+                      {turnData && turnData.model_inference_time !== null && turnData.model_inference_time !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Inference:</span>
+                          <span className={styles.turnMetricValue}>{turnData.model_inference_time.toFixed(3)}s</span>
+                        </div>
                       )}
                     </div>
-                  </div>
-                  {isExpanded && (
-                    <div className={styles.turnDetails}>
-                      {/* Actions */}
-                      {turn.actions.length > 0 && (
-                        <div className={styles.turnSection}>
-                          <h4 className={styles.turnSectionTitle}>
-                            Actions ({turn.actions.length})
-                          </h4>
-                          {turn.actions.map((action: any, idx: number) => (
-                            <div key={action.id || idx} className={styles.action}>
-                              <div className={styles.actionHeader}>
-                                <span className={styles.actionType}>
-                                  {action.tool_name || action.action_type || 'Action'}
-                                </span>
-                                {action.num_tokens !== null && (
-                                  <span className={styles.tokenCount}>
-                                    {action.num_tokens} tokens
-                                  </span>
+                  );
+                })()}
+
+                {/* Turn Content: Left (Screenshots) and Right (Model Response) */}
+                <div className={styles.turnContentLayout}>
+                  {/* Left: Screenshots (Before and After) */}
+                  <div className={styles.turnLeftPanel}>
+                    {(() => {
+                      if (isLoadingTurnDetails) {
+                        return (
+                          <div className={styles.turnSection}>
+                            <h4 className={styles.turnSectionTitle}>Screenshots</h4>
+                            <div className={styles.emptyScreenshot}>Loading turn details...</div>
+                          </div>
+                        );
+                      }
+                      
+                      if (!selectedTurn || !selectedTurnObservations || !Array.isArray(selectedTurnObservations)) {
+                        return (
+                          <div className={styles.turnSection}>
+                            <h4 className={styles.turnSectionTitle}>Screenshots</h4>
+                            <div className={styles.emptyScreenshot}>No screenshots available</div>
+                          </div>
+                        );
+                      }
+                      
+                      // Find Before screenshot observation (from current turn)
+                      const beforeObs = selectedTurnObservations.find(
+                        (obs: any) => obs && obs.obs_type === 'screenshot_before'
+                      );
+                      
+                      // Find After screenshot (from next turn's Before screenshot, or from Validation if this is the last turn)
+                      const currentTurnIndex = turns.findIndex((t: any) => t && t.id === selectedTurn.id);
+                      const nextTurn = currentTurnIndex >= 0 && currentTurnIndex < turns.length - 1 ? turns[currentTurnIndex + 1] : null;
+                      const isLastTurn = currentTurnIndex >= 0 && currentTurnIndex === turns.length - 1;
+                      
+                      // For last turn, use Validation screenshot if available
+                      let afterObs = null;
+                      let afterObsId: number | null = null;
+                      if (isLastTurn && validation) {
+                        // Try to get screenshot from validation details_json
+                        try {
+                          const details = typeof validation.details_json === 'string' 
+                            ? JSON.parse(validation.details_json) 
+                            : validation.details_json;
+                          if (details && details.screenshot_uri) {
+                            afterObs = { screenshot_uri: details.screenshot_uri };
+                          }
+                        } catch (e) {
+                          // Ignore parse errors
+                        }
+                      }
+                      
+                      // If not last turn or no validation screenshot, use next turn's Before screenshot
+                      if (!afterObs && nextTurn) {
+                        const nextTurnDetails = turnDetailsCache.get(nextTurn.id);
+                        afterObs = nextTurnDetails?.observations?.find(
+                          (obs: any) => obs && obs.obs_type === 'screenshot_before'
+                        );
+                        if (afterObs) {
+                          afterObsId = afterObs.id;
+                        }
+                      }
+                      
+                      if (!beforeObs) {
+                        return (
+                          <div className={styles.turnSection}>
+                            <h4 className={styles.turnSectionTitle}>Screenshots</h4>
+                            <div className={styles.emptyScreenshot}>No screenshots available</div>
+                          </div>
+                        );
+                      }
+                      
+                      // Get screenshot URIs (now they're file paths, not base64)
+                      const beforeUri = beforeObs?.screenshot_uri || null;
+                      const afterUri = afterObs?.screenshot_uri || null;
+                      
+                      // If screenshot_uri is a file path (not data URI or URL), prepend static path
+                      const getScreenshotUrl = (uri: string | null) => {
+                        if (!uri) return null;
+                        // If it's already a data URI or full URL, return as-is
+                        if (uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
+                          return uri;
+                        }
+                        // Otherwise, it's a file path - serve from static files
+                        // Remove leading slash if present, then prepend /screenshots/
+                        const cleanPath = uri.startsWith('/') ? uri.slice(1) : uri;
+                        return `/screenshots/${cleanPath}`;
+                      };
+                      
+                      const beforeUrl = getScreenshotUrl(beforeUri);
+                      const afterUrl = getScreenshotUrl(afterUri);
+                      
+                      // Check if we have coordinates to show
+                      const turnData = extractTurnData(rollout, selectedTurn);
+                      const actionResults = turnData?.action_results || [];
+                      const actionResult = actionResults.length > 0 ? actionResults[0] : null;
+                      const coordinates = actionResult?.coordinates;
+                      const hasCoordinates = coordinates !== null;
+                      
+                      const renderScreenshot = (url: string | null, label: string, alt: string, isLoading: boolean, showCoordinates: boolean = false) => {
+                        const isBefore = label === 'Before';
+                        
+                        if (isLoading) {
+                          return (
+                            <div style={{ flex: '1', minWidth: 0 }}>
+                              <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                                {label}
+                              </h5>
+                              <div className={styles.emptyScreenshot} style={{ maxHeight: '600px' }}>
+                                Loading screenshot...
+                              </div>
+                            </div>
+                          );
+                        }
+                        
+                        if (!url) {
+                          return (
+                            <div style={{ flex: '1', minWidth: 0 }}>
+                              <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                                {label}
+                              </h5>
+                              <div className={styles.emptyScreenshot} style={{ maxHeight: '600px' }}>
+                                No screenshot available
+                              </div>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <div style={{ flex: '1', minWidth: 0 }}>
+                            <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                              {label}
+                            </h5>
+                            <div 
+                              className={styles.screenshotContainer}
+                              onClick={() => handleScreenshotClick(url)}
+                              style={{ cursor: 'pointer', position: 'relative' }}
+                            >
+                              <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+                                <img
+                                  ref={isBefore ? beforeScreenshotRef : null}
+                                  src={url}
+                                  alt={alt}
+                                  className={styles.screenshotImg}
+                                  style={{
+                                    maxWidth: '100%',
+                                    maxHeight: '600px',
+                                    width: 'auto',
+                                    height: 'auto',
+                                    objectFit: 'contain',
+                                    display: 'block',
+                                  }}
+                                />
+                                {isBefore && showCoordinates && (
+                                  <canvas
+                                    ref={beforeCanvasRef}
+                                    style={{
+                                      position: 'absolute',
+                                      top: 0,
+                                      left: 0,
+                                      pointerEvents: 'none',
+                                      maxWidth: '100%',
+                                      maxHeight: '600px',
+                                    }}
+                                  />
                                 )}
                               </div>
-                              {action.tool_args && (
-                                <div className={styles.actionArgs}>
-                                  <code className={styles.code}>
-                                    {typeof action.tool_args === 'string'
-                                      ? action.tool_args
-                                      : JSON.stringify(action.tool_args, null, 2)}
-                                  </code>
-                                </div>
-                              )}
                             </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Observations */}
-                      {turn.observations.length > 0 && (
+                          </div>
+                        );
+                      };
+                      
+                      return (
                         <div className={styles.turnSection}>
-                          <h4 className={styles.turnSectionTitle}>
-                            Observations ({turn.observations.length})
-                          </h4>
-                          {turn.observations.map((obs: any, idx: number) => (
-                            <div key={obs.id || idx} className={styles.observation}>
-                              <div className={styles.obsHeader}>
-                                <span className={styles.obsType}>
-                                  {obs.obs_type || 'Observation'}
-                                </span>
+                          <h4 className={styles.turnSectionTitle}>Screenshots</h4>
+                          <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                            {renderScreenshot(
+                              beforeUrl,
+                              'Before',
+                              `Turn ${selectedTurn.turn} Before screenshot`,
+                              false,
+                              hasCoordinates
+                            )}
+                            {afterObs || afterObsId ? (
+                              renderScreenshot(
+                                afterUrl,
+                                'After',
+                                `Turn ${selectedTurn.turn} After screenshot`,
+                                false,
+                                false
+                              )
+                            ) : (
+                              <div style={{ flex: '1', minWidth: 0 }}>
+                                <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                                  After
+                                </h5>
+                                <div className={styles.emptyScreenshot} style={{ maxHeight: '600px' }}>
+                                  {isLastTurn ? 'No After screenshot available' : 'No After screenshot (this is the last turn)'}
+                                </div>
                               </div>
-                              {obs.screenshot_uri && (
-                                <div className={styles.screenshot}>
-                                  <img
-                                    src={obs.screenshot_uri}
-                                    alt={`Turn ${turn.turn} screenshot`}
-                                    className={styles.screenshotImg}
-                                  />
-                                </div>
-                              )}
-                              {obs.text_content && (
-                                <div className={styles.textContent}>
-                                  {obs.text_content}
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                            )}
+                          </div>
                         </div>
-                      )}
+                      );
+                    })()}
+                  </div>
 
-                      {turn.actions.length === 0 && turn.observations.length === 0 && (
-                        <div className={styles.empty}>No actions or observations</div>
-                      )}
+                  {/* Right: Model Response */}
+                  <div className={styles.turnRightPanel}>
+                    {isLoadingTurnDetails ? (
+                      <div className={styles.turnSection}>
+                        <h4 className={styles.turnSectionTitle}>Loading turn details...</h4>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Model Response */}
+                        {selectedTurn.model_response && (
+                          <div className={styles.turnSection}>
+                            <h4 className={styles.turnSectionTitle}>Model Response</h4>
+                            <div className={styles.modelResponseContainer}>
+                              <pre className={styles.modelResponseText}>{selectedTurn.model_response}</pre>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : selectedTurnIndex === turns.length && validation ? (
+              /* Validation Content */
+              <div className={styles.turnContent}>
+                {/* Validation Status */}
+                <div style={{ marginBottom: '20px' }}>
+                  <div style={{ 
+                    display: 'inline-block', 
+                    padding: '4px 12px', 
+                    borderRadius: '4px',
+                    backgroundColor: validation.success ? '#d4edda' : '#f8d7da',
+                    color: validation.success ? '#155724' : '#721c24',
+                    fontWeight: 600,
+                    fontSize: '14px'
+                  }}>
+                    {validation.success ? '✓ Passed' : '✗ Failed'}
+                  </div>
+                </div>
+                
+                {/* Validation Details */}
+                <div style={{ marginBottom: '20px' }}>
+                  {validation.validation_query && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Query:</strong> <code>{validation.validation_query}</code>
+                    </div>
+                  )}
+                  {validation.expected_result && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Expected:</strong> <code>{validation.expected_result}</code>
+                    </div>
+                  )}
+                  {validation.actual_result && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Actual:</strong> <code>{validation.actual_result}</code>
+                    </div>
+                  )}
+                  {validation.execution_time !== null && validation.execution_time !== undefined && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <strong>Execution Time:</strong> {validation.execution_time.toFixed(3)}s
+                    </div>
+                  )}
+                  {validation.error_message && (
+                    <div style={{ marginBottom: '10px', color: '#dc3545' }}>
+                      <strong>Error:</strong> {validation.error_message}
                     </div>
                   )}
                 </div>
-              );
-            })}
+
+                {/* Validation Screenshot */}
+                {(() => {
+                  try {
+                    const details = typeof validation.details_json === 'string' 
+                      ? JSON.parse(validation.details_json) 
+                      : validation.details_json;
+                    const screenshotUri = details?.screenshot_uri;
+                    if (screenshotUri) {
+                      return (
+                        <div>
+                          <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                            Screenshot
+                          </h5>
+                          <div 
+                            className={styles.screenshotContainer}
+                            onClick={() => handleScreenshotClick(screenshotUri)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <img
+                              src={screenshotUri}
+                              alt="Validation screenshot"
+                              className={styles.screenshotImg}
+                              style={{
+                                maxWidth: '100%',
+                                maxHeight: '600px',
+                                width: 'auto',
+                                height: 'auto',
+                                objectFit: 'contain',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                  return null;
+                })()}
+              </div>
+            ) : null}
+
+            {/* Trajectory Data Section (after all turns, before validation) */}
+            {rollout?.trajectory_data_json && (
+              <div className={styles.turnsSection} style={{ marginTop: '40px' }}>
+                <div className={styles.turnSection}>
+                  <h3 className={styles.turnSectionTitle} style={{ fontSize: '18px', marginBottom: '20px' }}>
+                    Trajectory Data (for Training)
+                  </h3>
+                  <div className={styles.modelResponseContainer}>
+                    <pre className={styles.modelResponseText} style={{ maxHeight: '600px', overflow: 'auto' }}>
+                      {(() => {
+                        try {
+                          const trajectoryData = typeof rollout.trajectory_data_json === 'string'
+                            ? JSON.parse(rollout.trajectory_data_json)
+                            : rollout.trajectory_data_json;
+                          return JSON.stringify(trajectoryData, null, 2);
+                        } catch (e) {
+                          return String(rollout.trajectory_data_json);
+                        }
+                      })()}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+      </div>
+
+      {/* Screenshot Modal */}
+      {showScreenshotModal && modalImageSrc && (
+        <div 
+          className={styles.modalOverlay}
+          onClick={handleCloseModal}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            cursor: 'pointer',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '95vw',
+              maxHeight: '95vh',
+              position: 'relative',
+            }}
+          >
+            <button
+              onClick={handleCloseModal}
+              style={{
+                position: 'absolute',
+                top: '-40px',
+                right: '0',
+                background: 'rgba(255, 255, 255, 0.2)',
+                border: 'none',
+                color: 'white',
+                fontSize: '24px',
+                width: '32px',
+                height: '32px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+            <img
+              src={modalImageSrc}
+              alt="Full screenshot"
+              style={{
+                maxWidth: '95vw',
+                maxHeight: '95vh',
+                width: 'auto',
+                height: 'auto',
+                objectFit: 'contain',
+              }}
+            />
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Model Input Modal */}
+      {showModelInputModal && modelInputData && (
+        <div 
+          onClick={handleCloseModelInputModal}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            cursor: 'pointer',
+            padding: '20px',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '8px',
+              padding: '24px',
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              width: '100%',
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, color: '#333' }}>Model Input</h3>
+              <button
+                onClick={handleCloseModelInputModal}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#666',
+                  fontSize: '28px',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  lineHeight: '1',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f0f0f0';
+                  e.currentTarget.style.color = '#333';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#666';
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div 
+              style={{
+                flex: 1,
+                overflow: 'auto',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '4px',
+                padding: '16px',
+                border: '1px solid #dee2e6',
+              }}
+            >
+              {(() => {
+                // Try to parse ModelInput structure and display as messages
+                try {
+                  // Check if we have the new format with messages
+                  if (modelInputData && typeof modelInputData === 'object' && modelInputData.messages && Array.isArray(modelInputData.messages)) {
+                    // New format: has readable messages
+                    const messages = modelInputData.messages;
+                    
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {messages.map((msg: any, idx: number) => (
+                          <div
+                            key={idx}
+                            style={{
+                              backgroundColor: 'white',
+                              borderRadius: '8px',
+                              padding: '16px',
+                              border: '1px solid #e0e0e0',
+                              boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                            }}
+                          >
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              marginBottom: '12px',
+                              paddingBottom: '8px',
+                              borderBottom: '1px solid #e0e0e0',
+                            }}>
+                              <span style={{
+                                fontWeight: 600,
+                                color: msg.role === 'user' ? '#0066cc' : msg.role === 'assistant' ? '#00aa00' : msg.role === 'system' ? '#9900cc' : '#666',
+                                fontSize: '14px',
+                                textTransform: 'capitalize',
+                                padding: '4px 12px',
+                                backgroundColor: msg.role === 'user' ? '#e6f2ff' : msg.role === 'assistant' ? '#e6ffe6' : msg.role === 'system' ? '#f0e6ff' : '#f5f5f5',
+                                borderRadius: '4px',
+                              }}>
+                                {msg.role}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              {msg.content && Array.isArray(msg.content) ? (
+                                msg.content.map((content: any, contentIdx: number) => {
+                                  if (content.type === 'image' && (content.url || content.image || content.image_url)) {
+                                    const imageUrl = content.url || content.image || content.image_url;
+                                    return (
+                                      <div key={contentIdx} style={{ marginBottom: '8px' }}>
+                                        <img
+                                          src={imageUrl}
+                                          alt={`Message ${idx} image ${contentIdx}`}
+                                          style={{
+                                            maxWidth: '100%',
+                                            maxHeight: '400px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #ddd',
+                                            objectFit: 'contain',
+                                          }}
+                                        />
+                                      </div>
+                                    );
+                                  } else if (content.type === 'text' && content.text) {
+                                    return (
+                                      <div key={contentIdx} style={{ 
+                                        fontSize: '14px', 
+                                        lineHeight: '1.7', 
+                                        color: '#333',
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                      }}>
+                                        {content.text}
+                                      </div>
+                                    );
+                                  } else {
+                                    return (
+                                      <div key={contentIdx} style={{ fontSize: '12px', color: '#999' }}>
+                                        Unknown content: {JSON.stringify(content)}
+                                      </div>
+                                    );
+                                  }
+                                })
+                              ) : typeof msg.content === 'string' ? (
+                                <div style={{ 
+                                  fontSize: '14px', 
+                                  lineHeight: '1.7', 
+                                  color: '#333',
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                }}>
+                                  {msg.content}
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '12px', color: '#999' }}>
+                                  No content
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+                  
+                  // Fallback: try to parse chunks structure (old format)
+                  let chunks: any[] = [];
+                  if (modelInputData && typeof modelInputData === 'object') {
+                    if (modelInputData.model_input && modelInputData.model_input.chunks) {
+                      chunks = modelInputData.model_input.chunks;
+                    } else if (modelInputData.chunks && Array.isArray(modelInputData.chunks)) {
+                      chunks = modelInputData.chunks;
+                    } else if (Array.isArray(modelInputData)) {
+                      chunks = modelInputData;
+                    }
+                  }
+                  
+                  if (chunks.length > 0) {
+                    return (
+                      <div style={{ color: '#666', fontSize: '13px', padding: '12px', backgroundColor: '#fff3cd', borderRadius: '4px', border: '1px solid #ffc107' }}>
+                        ⚠️ ModelInput format detected but messages not available. Showing raw structure.
+                        <pre style={{ marginTop: '8px', fontSize: '11px', color: '#333' }}>
+                          {JSON.stringify(modelInputData, null, 2)}
+                        </pre>
+                      </div>
+                    );
+                  }
+                  
+                  // Final fallback: JSON display
+                  return (
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontSize: '13px',
+                        lineHeight: '1.6',
+                        fontFamily: 'Monaco, "Courier New", monospace',
+                        color: '#212529',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {JSON.stringify(modelInputData, null, 2)}
+                    </pre>
+                  );
+                } catch (e) {
+                  return (
+                    <div style={{ color: '#dc3545', fontSize: '14px' }}>
+                      Error parsing ModelInput: {String(e)}
+                      <pre style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                        {JSON.stringify(modelInputData, null, 2)}
+                      </pre>
+                    </div>
+                  );
+                }
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-

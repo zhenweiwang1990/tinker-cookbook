@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _db_session: Optional[Session] = None
 _training_id: Optional[int] = None
 _baseline_id: Optional[int] = None  # Current baseline ID for baseline evaluation
+_eval_id: Optional[int] = None  # Current eval ID for evaluation
 
 
 def set_database_context(session: Session, training_id: int) -> None:
@@ -33,6 +34,13 @@ def set_baseline_id(baseline_id: Optional[int]) -> None:
     logger.debug(f"Baseline ID set: {baseline_id}")
 
 
+def set_eval_id(eval_id: Optional[int]) -> None:
+    """Set the current eval ID for evaluation."""
+    global _eval_id
+    _eval_id = eval_id
+    logger.debug(f"Eval ID set: {eval_id}")
+
+
 def get_database_session() -> Optional[Session]:
     """Get the global database session."""
     return _db_session
@@ -48,10 +56,16 @@ def get_baseline_id() -> Optional[int]:
     return _baseline_id
 
 
+def get_eval_id() -> Optional[int]:
+    """Get the current eval ID."""
+    return _eval_id
+
+
 def clear_database_context() -> None:
     """Clear the global database context."""
-    global _db_session, _training_id, _baseline_id
+    global _db_session, _training_id, _baseline_id, _eval_id
     _db_session = None
     _training_id = None
     _baseline_id = None
+    _eval_id = None
 

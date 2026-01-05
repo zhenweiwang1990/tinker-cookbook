@@ -134,19 +134,34 @@ def record_baseline_start(
     """
     Record the start of a baseline evaluation.
     
+    Creates baseline with status="pending", then immediately updates to "running"
+    since evaluation starts right after this function is called.
+    
     Returns:
         Database baseline ID
     """
+    from tinker_cookbook.recipes.cua_rl.database_dao import update_baseline
+    
     baseline = create_baseline(
         session,
         training_id=training_id,
         model_path=model_path,
-        status="pending",
+        status="pending",  # Initial status, will be updated immediately
         total_tasks=total_tasks,
         completed_tasks=0,
         start_time=datetime.utcnow(),
         **kwargs
     )
+    
+    # Immediately update status to "running" since evaluation starts right away
+    update_baseline(
+        session,
+        baseline.id,
+        status="running",
+        current_phase="evaluation",
+        progress_percent=0.0,
+    )
+    
     return baseline.id
 
 

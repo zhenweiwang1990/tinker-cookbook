@@ -83,8 +83,9 @@ export default function TimelineList({
     if (trainingId) {
       fetchTimeline();
       fetchTrainingParams();
-      const interval = setInterval(fetchTimeline, 2000);
-      return () => clearInterval(interval);
+      // Auto-refresh disabled - use manual refresh button instead
+      // const interval = setInterval(fetchTimeline, 2000);
+      // return () => clearInterval(interval);
     }
   }, [trainingId]);
 
@@ -94,13 +95,25 @@ export default function TimelineList({
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>Timeline</div>
+      <div className={styles.header}>
+        <span>Timeline</span>
+        <button 
+          className={styles.refreshButton} 
+          onClick={() => {
+            fetchTimeline();
+            fetchTrainingParams();
+          }}
+          title="刷新"
+        >
+          🔄
+        </button>
+      </div>
       {trainingParams && (
         <div className={styles.paramsPanel}>
           <div className={styles.paramsGrid}>
             {trainingParams.model_name && (
               <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>模型:</span>
+                <span className={styles.paramLabel}>Model:</span>
                 <span className={styles.paramValue}>{trainingParams.model_name}</span>
               </div>
             )}
@@ -112,7 +125,7 @@ export default function TimelineList({
             )}
             {trainingParams.learning_rate !== null && (
               <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>学习率:</span>
+                <span className={styles.paramLabel}>Learning Rate:</span>
                 <span className={styles.paramValue}>{trainingParams.learning_rate.toExponential(2)}</span>
               </div>
             )}

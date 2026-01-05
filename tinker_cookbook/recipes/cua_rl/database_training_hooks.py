@@ -15,7 +15,7 @@ from tinker_cookbook.recipes.cua_rl.database_step import (
     record_step_training_start,
     record_step_completion,
 )
-from tinker_cookbook.recipes.cua_rl.database_rollout import list_rollouts_by_step
+from tinker_cookbook.recipes.cua_rl.database_dao import list_rollouts_by_step
 
 logger = logging.getLogger(__name__)
 

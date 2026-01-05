@@ -10,8 +10,9 @@ interface Rollout {
   status: string;
   task_success: boolean;
   validation_passed: boolean;
-  num_turns: number;
-  reward: number;
+  num_turns: number | null;
+  current_turn: number | null;
+  reward: number | null;
   created_at: string;
   group_number?: number;
   group_status?: string;
@@ -79,11 +80,16 @@ export default function RolloutList({ rollouts, onSelect }: RolloutListProps) {
               </div>
               <div className={styles.metrics}>
                 <span className={styles.metric}>
-                  Turns: {rollout.num_turns}
+                  Turns: {rollout.num_turns !== null && rollout.num_turns !== undefined ? rollout.num_turns : rollout.current_turn !== null && rollout.current_turn !== undefined ? rollout.current_turn : 0}
                 </span>
                 {rollout.reward !== null && (
                   <span className={styles.metric}>
                     Reward: {rollout.reward.toFixed(2)}
+                  </span>
+                )}
+                {rollout.current_turn !== null && rollout.current_turn !== undefined && (
+                  <span className={styles.metric}>
+                    Current: {rollout.current_turn}
                   </span>
                 )}
               </div>
@@ -108,7 +114,16 @@ export default function RolloutList({ rollouts, onSelect }: RolloutListProps) {
                 </div>
                 <button
                   className={styles.viewButton}
-                  onClick={() => onSelect(rollout.id)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('View Full Details clicked, rollout.id:', rollout.id);
+                    console.log('onSelect function:', onSelect);
+                    onSelect(rollout.id);
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                  }}
                 >
                   View Full Details →
                 </button>

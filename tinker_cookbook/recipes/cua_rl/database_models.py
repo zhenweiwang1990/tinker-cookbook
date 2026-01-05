@@ -294,7 +294,8 @@ class Rollout(Base):
     eval_id = Column(Integer, ForeignKey("eval.id"), index=True)
     baseline_id = Column(Integer, ForeignKey("baseline.id"), index=True)
     group_id = Column(Integer, ForeignKey("group.id"), index=True)  # Reference to group table
-    rollout_id = Column(String, unique=True, nullable=False, index=True)
+    env_id = Column(Integer, ForeignKey("environment.id"), nullable=False, index=True)  # Reference to environment table
+    rollout_id = Column(String, unique=True, nullable=False, index=True)  # UUID identifier for unique tracking
     batch = Column(Integer)
     group_num = Column(Integer)  # Group number (kept for backward compatibility, renamed from 'group' to avoid conflict)
     env_index = Column(Integer)
@@ -336,6 +337,7 @@ class Rollout(Base):
     errors = Column(Text)  # JSON array
     summary_json = Column(Text)
     trajectory_path = Column(Text)
+    trajectory_data_json = Column(Text)  # Full trajectory data for training (JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -345,9 +347,9 @@ class Rollout(Base):
     baseline = relationship("Baseline", back_populates="rollouts")
     group = relationship("Group", back_populates="rollouts")
     task = relationship("Task", back_populates="rollouts")
+    environment = relationship("Environment", back_populates="rollouts")  # One-to-many: one env can have multiple rollouts (if reused)
     turns = relationship("Turn", back_populates="rollout", cascade="all, delete-orphan")
     validation = relationship("Validation", back_populates="rollout", uselist=False, cascade="all, delete-orphan")
-    environment = relationship("Environment", back_populates="rollout", uselist=False, cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -376,6 +378,7 @@ class Turn(Base):
     reward = Column(Float)
     episode_done = Column(Boolean)
     metrics_json = Column(Text)
+    model_response = Column(Text)  # Full LLM output text for this turn
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -451,7 +454,7 @@ class Environment(Base):
     __tablename__ = "environment"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    rollout_id = Column(Integer, ForeignKey("rollout.id"), nullable=False, index=True)
+    # Removed rollout_id - Environment is created first, then Rollout references it via env_id
     env_type = Column(String, nullable=False)
     status = Column(String, default="pending", index=True)
     gbox_id = Column(String)
@@ -465,7 +468,7 @@ class Environment(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    rollout = relationship("Rollout", back_populates="environment")
+    rollouts = relationship("Rollout", back_populates="environment")  # One-to-many: one env can have multiple rollouts
 
 
 class StatusHistory(Base):

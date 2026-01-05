@@ -37,9 +37,13 @@ export async function GET(
         `, [itemId]);
         const groups = groupsResult.rows.map(serializeRow);
         
-        // Get rollouts with group information
+        // Get rollouts with group information (exclude large fields like trajectory_data_json)
         const rolloutsResult = await query(`
-          SELECT r.*, g.group_num as group_number, g.status as group_status
+          SELECT 
+            r.id, r.rollout_id, r.task_id, r.status, r.task_success, 
+            r.validation_passed, r.num_turns, r.current_turn, r.reward, 
+            r.rollout_time, r.env_index, r.created_at,
+            g.group_num as group_number, g.status as group_status
           FROM rollout r
           LEFT JOIN "group" g ON r.group_id = g.id
           WHERE r.source_type = 'baseline' AND r.baseline_id = $1
@@ -63,9 +67,13 @@ export async function GET(
         `, [itemId]);
         const groups = groupsResult.rows.map(serializeRow);
         
-        // Get rollouts with group information
+        // Get rollouts with group information (exclude large fields like trajectory_data_json)
         const rolloutsResult = await query(`
-          SELECT r.*, g.group_num as group_number, g.status as group_status
+          SELECT 
+            r.id, r.rollout_id, r.task_id, r.status, r.task_success, 
+            r.validation_passed, r.num_turns, r.current_turn, r.reward, 
+            r.rollout_time, r.env_index, r.created_at,
+            g.group_num as group_number, g.status as group_status
           FROM rollout r
           LEFT JOIN "group" g ON r.group_id = g.id
           WHERE r.source_type = 'step' AND r.step_id = $1
@@ -89,9 +97,13 @@ export async function GET(
         `, [itemId]);
         const groups = groupsResult.rows.map(serializeRow);
         
-        // Get rollouts with group information
+        // Get rollouts with group information (exclude large fields like trajectory_data_json)
         const rolloutsResult = await query(`
-          SELECT r.*, g.group_num as group_number, g.status as group_status
+          SELECT 
+            r.id, r.rollout_id, r.task_id, r.status, r.task_success, 
+            r.validation_passed, r.num_turns, r.current_turn, r.reward, 
+            r.rollout_time, r.env_index, r.created_at,
+            g.group_num as group_number, g.status as group_status
           FROM rollout r
           LEFT JOIN "group" g ON r.group_id = g.id
           WHERE r.source_type = 'eval' AND r.eval_id = $1

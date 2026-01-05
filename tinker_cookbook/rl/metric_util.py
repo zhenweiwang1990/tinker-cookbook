@@ -70,19 +70,20 @@ def _compute_trajectory_metrics(trajectory_groups_P: List[TrajectoryGroup]) -> D
         transition.ob.length for traj in flat_trajs_PG for transition in traj.transitions
     ]
     turns_by_trajectory = [len(traj.transitions) for traj in flat_trajs_PG]
-    # Compute metrics
+    total_turns = sum(turns_by_trajectory)
+    num_episodes = len(flat_trajs_PG)
+    # Compute metrics with guards against division by zero
     metrics = {
-        "ac_tokens_per_turn": sum(ac_tokens_by_turn) / sum(turns_by_trajectory),
-        "ob_tokens_per_turn": sum(ob_tokens_by_turn) / sum(turns_by_trajectory),
-        "turns_per_episode": sum(turns_by_trajectory) / len(flat_trajs_PG),
-        "total_episodes": len(flat_trajs_PG),
-        "total_turns": sum(turns_by_trajectory),
+        "ac_tokens_per_turn": sum(ac_tokens_by_turn) / total_turns if total_turns > 0 else 0.0,
+        "ob_tokens_per_turn": sum(ob_tokens_by_turn) / total_turns if total_turns > 0 else 0.0,
+        "turns_per_episode": total_turns / num_episodes if num_episodes > 0 else 0.0,
+        "total_episodes": num_episodes,
+        "total_turns": total_turns,
         "total_ac_tokens": sum(ac_tokens_by_turn),
         "total_ob_tokens": sum(ob_tokens_by_turn),
     }
-    metrics["reward/total"] = np.mean(
-        [reward for tg in trajectory_groups_P for reward in tg.get_total_rewards()]
-    ).item()
+    all_rewards = [reward for tg in trajectory_groups_P for reward in tg.get_total_rewards()]
+    metrics["reward/total"] = np.mean(all_rewards).item() if len(all_rewards) > 0 else 0.0
     # Per-transition metrics
     transition_metrics = [
         transition.metrics

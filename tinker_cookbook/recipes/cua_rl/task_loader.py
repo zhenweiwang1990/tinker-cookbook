@@ -60,7 +60,7 @@ class TaskSourceConfig:
     
     # For "task_adapter": configuration
     tasks_dir: Optional[str] = None  # Path to tasks directory (default: auto-detect)
-    train_ratio: float = 0.8  # Ratio for train/eval split (only used if split_type is specified)
+    train_ratio: float = 0.95  # Ratio for train/eval split (only used if split_type is specified)
     split_type: Optional[str] = None  # "train" or "eval" - which split to use. If None, uses all tasks.
     
     # Limit number of tasks (for sampling)
@@ -149,8 +149,8 @@ def load_tasks_from_config(
     elif config.source_type == "task_adapter":
         # Load tasks from task adapter (discovers tasks from tasks directory)
         adapter = TaskAdapter(
-            tasks_dir=config.tasks_dir,
             train_ratio=config.train_ratio,
+            tasks_dir=config.tasks_dir,
             seed=config.seed or 42,
         )
         

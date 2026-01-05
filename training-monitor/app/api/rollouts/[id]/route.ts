@@ -32,6 +32,7 @@ export async function GET(
 
     const rollout = serializeRow(rolloutResult.rows[0]);
     const taskId = (rollout as any).task_id;
+    const envId = (rollout as any).env_id;
 
     // Get task
     let task = null;
@@ -44,48 +45,30 @@ export async function GET(
     const validationResult = await query('SELECT * FROM validation WHERE rollout_id = $1', [rolloutId]);
     const validation = validationResult.rows[0] ? serializeRow(validationResult.rows[0]) : null;
 
-    // Get environment
-    const environmentResult = await query('SELECT * FROM environment WHERE rollout_id = $1', [rolloutId]);
-    const environment = environmentResult.rows[0] ? serializeRow(environmentResult.rows[0]) : null;
+    // Get environment (now using env_id from rollout)
+    let environment = null;
+    if (envId) {
+      const environmentResult = await query('SELECT * FROM environment WHERE id = $1', [envId]);
+      environment = environmentResult.rows[0] ? serializeRow(environmentResult.rows[0]) : null;
+    }
 
-    // Get turns with actions and observations
+    // Get turns - only basic info, details will be loaded on demand
     const turnsResult = await query(`
-      SELECT * FROM turn 
+      SELECT id, rollout_id, turn, start_time, end_time, turn_time, reward, 
+             episode_done, metrics_json, model_response, created_at
+      FROM turn 
       WHERE rollout_id = $1
       ORDER BY turn ASC
     `, [rolloutId]);
 
     const turns = turnsResult.rows.map(serializeRow);
 
-    // For each turn, get actions and observations
-    const turnsWithDetails = await Promise.all(
-      turns.map(async (turn: any) => {
-        const actionsResult = await query(
-          'SELECT * FROM action WHERE turn_id = $1 ORDER BY created_at ASC',
-          [turn.id]
-        );
-        const actions = actionsResult.rows.map(serializeRow);
-
-        const observationsResult = await query(
-          'SELECT * FROM obs WHERE turn_id = $1 ORDER BY created_at ASC',
-          [turn.id]
-        );
-        const observations = observationsResult.rows.map(serializeRow);
-
-        return {
-          ...turn,
-          actions,
-          observations,
-        };
-      })
-    );
-
     return NextResponse.json({
       rollout,
       task,
       validation,
       environment,
-      turns: turnsWithDetails,
+      turns,
     });
   } catch (error: any) {
     console.error('Error fetching rollout:', error);

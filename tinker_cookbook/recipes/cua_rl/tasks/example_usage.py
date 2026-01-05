@@ -55,7 +55,7 @@ def example_local_adb():
 def example_task_adapter():
     """Example: Using TaskAdapter to split tasks."""
     # Create adapter with default settings (80% train, 20% eval, seed=42)
-    adapter = TaskAdapter()
+    adapter = TaskAdapter(train_ratio=0.8)
     
     # Get task descriptions
     train_descriptions = adapter.get_train_descriptions()
@@ -83,7 +83,7 @@ def example_task_adapter():
 def example_convenience_function():
     """Example: Using convenience function."""
     train_descriptions, eval_descriptions = get_tasks_train_eval(
-        train_ratio=0.8,
+        train_ratio=0.95,
         seed=42
     )
     

@@ -31,10 +31,21 @@ logger = logging.getLogger(__name__)
 _current_eval_model_path: str | None = None
 
 
+# Global variables for evaluation
+_current_eval_model_path: str | None = None
+_eval_group_counter: dict | None = None
+
 def set_eval_model_path(model_path: str | None):
     """Set the current model_path for evaluation rollouts."""
-    global _current_eval_model_path
+    global _current_eval_model_path, _eval_group_counter
     _current_eval_model_path = model_path
+    # Reset group counter when setting new eval model path
+    _eval_group_counter = None
+
+def reset_eval_group_counter():
+    """Reset the evaluation group counter. Call this at the start of each evaluation."""
+    global _eval_group_counter
+    _eval_group_counter = None
 
 
 async def _cua_group_rollout_for_eval(
@@ -44,11 +55,33 @@ async def _cua_group_rollout_for_eval(
     """
     Wrapper for do_cua_group_rollout that sets is_eval=True for evaluation.
     This is used when RLTestSetEvaluator calls do_group_rollout.
+    
+    Note: group number cannot be determined from env_group_builder alone.
+    We use a global counter to track group numbers across parallel evaluations.
     """
-    global _current_eval_model_path
+    global _current_eval_model_path, _eval_group_counter
     
     # Use the global model_path if available, otherwise try to extract from policy
     model_path = _current_eval_model_path
+    
+    # Use a global counter to track group numbers across parallel evaluations
+    # This is a workaround since do_group_rollout doesn't accept group parameter
+    if _eval_group_counter is None:
+        _eval_group_counter = {'value': 0, 'lock': asyncio.Lock()}
+    
+    async with _eval_group_counter['lock']:
+        current_group = _eval_group_counter['value']
+        _eval_group_counter['value'] += 1
+    
+    # Try to get eval_id from context to pass to do_cua_group_rollout
+    eval_id = None
+    try:
+        from tinker_cookbook.recipes.cua_rl.database_context import get_eval_id
+        eval_id = get_eval_id()
+        if eval_id:
+            logger.debug(f"[Eval Rollout] Retrieved eval_id={eval_id} from context for group {current_group}")
+    except Exception as e:
+        logger.warning(f"[Eval Rollout] Failed to get eval_id from context: {e}")
     
     return await do_cua_group_rollout(
         env_group_builder=env_group_builder,
@@ -56,9 +89,10 @@ async def _cua_group_rollout_for_eval(
         model_path=model_path,  # Use global model_path if set, otherwise will try to extract from policy
         step=None,
         batch=None,
-        group=None,
+        group=current_group,  # Use counter-based group number
         output_dir=None,
         is_eval=True,  # Always True for evaluation
+        eval_id=eval_id,  # Pass eval_id explicitly
     )
 
 # Override rollouts.do_group_rollout BEFORE importing train module
@@ -98,7 +132,7 @@ class CLIConfig:
     eval_tasks: dict | list[dict] | None = None  # Optional TaskSourceConfig dict(s) for evaluation. If None and use_default_eval_tasks=True, will use default (10 random tasks from demo_eval)
     use_default_eval_tasks: bool = True  # If True and eval_tasks is None, will use default: 10 random tasks from demo_eval
     seed: int = 0
-    max_turns: int = 20
+    max_turns: int = 3
     
     # Training hyperparameters
     group_size: int = 4
@@ -359,13 +393,37 @@ async def cli_main(cli_config: CLIConfig) -> None:
             eval_id = None
             baseline_id = None
             
+            # Write debug info to file
+            import os
+            from datetime import datetime
+            debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+            try:
+                os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+                with open(debug_file, "a") as f:
+                    f.write(f"[{datetime.now().isoformat()}] [Rollout DB] do_cua_group_rollout_with_db: is_eval={is_eval}, step={step}, db_session={db_session is not None}\n")
+                    f.flush()
+            except Exception:
+                pass
+            
             # If this is baseline evaluation (is_eval=True but no step), get baseline_id from context
             if is_eval and step is None:
                 baseline_id = baseline_id_from_context or get_baseline_id()
                 if baseline_id:
                     logger.info(f"[Rollout DB] Using baseline_id={baseline_id} for baseline evaluation rollout")
+                    try:
+                        with open(debug_file, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] [Rollout DB] Using baseline_id={baseline_id} for baseline evaluation rollout\n")
+                            f.flush()
+                    except Exception:
+                        pass
                 else:
                     logger.warning(f"[Rollout DB] Baseline evaluation rollout but baseline_id is None! is_eval={is_eval}, step={step}")
+                    try:
+                        with open(debug_file, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] [Rollout DB] WARNING: Baseline evaluation rollout but baseline_id is None! is_eval={is_eval}, step={step}\n")
+                            f.flush()
+                    except Exception:
+                        pass
             
             # If this is regular eval (is_eval=True and step is not None), try to get eval_id
             elif is_eval and step is not None:
@@ -531,6 +589,11 @@ async def cli_main(cli_config: CLIConfig) -> None:
                     total_tasks=total_tasks,
                 )
                 session.commit()
+                
+                # Set eval_id in context so _cua_group_rollout_for_eval can access it
+                from tinker_cookbook.recipes.cua_rl.database_context import set_eval_id
+                set_eval_id(eval_id)
+                logger.info(f"[Eval DB] Set eval_id={eval_id} in context for evaluation rollout")
             except Exception as e:
                 logger.warning(f"Failed to create eval record: {e}")
                 session.rollback()
@@ -585,6 +648,10 @@ async def cli_main(cli_config: CLIConfig) -> None:
                 except:
                     session.rollback()
             raise
+        finally:
+            # Clear eval_id from context after evaluation completes
+            from tinker_cookbook.recipes.cua_rl.database_context import set_eval_id
+            set_eval_id(None)
     
     async def run_baseline_evaluations_with_db(
         evaluators,
@@ -603,6 +670,18 @@ async def cli_main(cli_config: CLIConfig) -> None:
         session = get_database_session()
         training_id = get_training_id()
         logger.info(f"[Baseline DB] session={session is not None}, training_id={training_id}, model_path={model_path is not None}")
+        
+        # Write debug info to file
+        import os
+        from datetime import datetime
+        debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+        try:
+            os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+            with open(debug_file, "a") as f:
+                f.write(f"[{datetime.now().isoformat()}] [Baseline DB] run_baseline_evaluations_with_db: session={session is not None}, training_id={training_id}, model_path={model_path is not None}\n")
+                f.flush()
+        except Exception:
+            pass
         
         # Create baseline record
         baseline_id = None
@@ -644,6 +723,14 @@ async def cli_main(cli_config: CLIConfig) -> None:
                     from tinker_cookbook.recipes.cua_rl.database_context import set_baseline_id
                     set_baseline_id(baseline_id)
                     logger.info(f"[Baseline DB] Created baseline record: baseline_id={baseline_id}, total_tasks={total_tasks}")
+                    
+                    # Write to debug file
+                    try:
+                        with open(debug_file, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] [Baseline DB] Created baseline record: baseline_id={baseline_id}, total_tasks={total_tasks}\n")
+                            f.flush()
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"[Baseline DB] Failed to create baseline record: {e}", exc_info=True)
                 session.rollback()
@@ -766,8 +853,18 @@ async def cli_main(cli_config: CLIConfig) -> None:
     
     rl_train.save_checkpoint_and_get_sampling_client = save_checkpoint_with_db_recording
     
+    # Force flush before starting training
+    import sys
+    logger.info("=" * 80)
+    logger.info("About to call train.main(config)...")
+    logger.info(f"Config: model={config.model_name}, log_path={config.log_path}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     try:
         # Run training
+        logger.info("Calling train.main(config) now...")
+        sys.stdout.flush()
         await train.main(config)
         
         # Restore original get_last_checkpoint if we overrode it

@@ -9,14 +9,18 @@ interface DetailPanelProps {
   type: 'baseline' | 'step' | 'eval';
   id: number;
   selectedRolloutId: number | null;
+  selectedTurnIndex: number | null;
   onSelectRollout: (id: number | null) => void;
+  onTurnChange: (turnIndex: number | null) => void;
 }
 
 export default function DetailPanel({
   type,
   id,
   selectedRolloutId,
+  selectedTurnIndex,
   onSelectRollout,
+  onTurnChange,
 }: DetailPanelProps) {
   const [item, setItem] = useState<any>(null);
   const [rollouts, setRollouts] = useState<any[]>([]);
@@ -37,8 +41,9 @@ export default function DetailPanel({
 
   useEffect(() => {
     fetchDetails();
-    const interval = setInterval(fetchDetails, 2000); // Auto-refresh every 2 seconds
-    return () => clearInterval(interval);
+    // Auto-refresh disabled - use manual refresh button instead
+    // const interval = setInterval(fetchDetails, 2000); // Auto-refresh every 2 seconds
+    // return () => clearInterval(interval);
   }, [type, id]);
 
   if (loading) {
@@ -49,22 +54,43 @@ export default function DetailPanel({
     return <div className={styles.error}>Item not found</div>;
   }
 
+  // If a rollout is selected, show only RolloutDetail (full height)
+  if (selectedRolloutId) {
+    return (
+      <RolloutDetail
+        rolloutId={selectedRolloutId}
+        selectedTurnIndex={selectedTurnIndex}
+        onClose={() => onSelectRollout(null)}
+        onTurnChange={onTurnChange}
+      />
+    );
+  }
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <h2 className={styles.title}>
-          {type === 'baseline' && '📊 Baseline Evaluation'}
-          {type === 'step' && `⚙️ Step ${item.step}`}
-          {type === 'eval' && `📈 Evaluation @ Step ${item.step}`}
-        </h2>
-        <div className={styles.meta}>
-          <span className={styles.status}>{item.status}</span>
-          {item.progress_percent !== null && (
-            <span className={styles.progress}>
-              {item.progress_percent.toFixed(1)}%
-            </span>
-          )}
+        <div className={styles.headerLeft}>
+          <h2 className={styles.title}>
+            {type === 'baseline' && '📊 Baseline Evaluation'}
+            {type === 'step' && `⚙️ Step ${item.step}`}
+            {type === 'eval' && `📈 Evaluation @ Step ${item.step}`}
+          </h2>
+          <div className={styles.meta}>
+            <span className={styles.status}>{item.status}</span>
+            {item.progress_percent !== null && (
+              <span className={styles.progress}>
+                {item.progress_percent.toFixed(1)}%
+              </span>
+            )}
+          </div>
         </div>
+        <button 
+          className={styles.refreshButton} 
+          onClick={fetchDetails}
+          title="刷新"
+        >
+          🔄
+        </button>
       </div>
 
       <div className={styles.content}>
@@ -168,17 +194,14 @@ export default function DetailPanel({
 
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Rollouts ({rollouts.length})</h3>
-          {selectedRolloutId ? (
-            <RolloutDetail
-              rolloutId={selectedRolloutId}
-              onClose={() => onSelectRollout(null)}
-            />
-          ) : (
-            <RolloutList
-              rollouts={rollouts}
-              onSelect={onSelectRollout}
-            />
-          )}
+          <RolloutList
+            rollouts={rollouts}
+            onSelect={(id) => {
+              console.log('RolloutList onSelect called with id:', id);
+              console.log('onSelectRollout function:', onSelectRollout);
+              onSelectRollout(id);
+            }}
+          />
         </div>
       </div>
     </div>

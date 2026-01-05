@@ -57,7 +57,10 @@ class TinkerCuaAgent:
         box_type: str = "android",
         max_tokens: int = 2048,
         temperature: float = 0.7,
+        max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
         rollout_logger: Optional[RolloutLogger] = None,
+        db_session = None,  # Optional database session for recording turns/actions/observations
+        rollout_id: Optional[str] = None,  # Rollout ID for database recording
     ):
         """
         Initialize Tinker CUA Agent.
@@ -81,7 +84,10 @@ class TinkerCuaAgent:
         self.box_type = box_type
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.max_recent_turns = max_recent_turns
         self.rollout_logger = rollout_logger
+        self.db_session = db_session
+        self.rollout_id = rollout_id
         
         # Initialize Tinker service client
         import os
@@ -429,7 +435,7 @@ class TinkerCuaAgent:
     def _truncate_messages_to_recent_turns(
         self,
         messages: List[renderers.Message],
-        max_turns: int = 5,
+        max_turns: int,  # Must be provided explicitly (use self.max_recent_turns)
     ) -> List[renderers.Message]:
         """
         Truncate messages to keep only system prompt and recent N turns of conversation.
@@ -513,8 +519,8 @@ class TinkerCuaAgent:
         # Ensure checkpoint is loaded
         self._ensure_checkpoint_loaded()
         
-        # Truncate messages to keep only system prompt and recent 5 turns
-        truncated_messages = self._truncate_messages_to_recent_turns(messages, max_turns=5)
+        # Truncate messages to keep only system prompt and recent N turns
+        truncated_messages = self._truncate_messages_to_recent_turns(messages, max_turns=self.max_recent_turns)
         
         # Build ModelInput
         model_input = self.renderer.build_generation_prompt(truncated_messages)
@@ -531,11 +537,13 @@ class TinkerCuaAgent:
         # Note: If checkpoint loading is needed, it should be handled by Tinker SDK
         # For now, we'll use the sampling client directly
         # The checkpoint path in tinker_model_path should be handled by Tinker service
+        logger.info(f"[_sample_with_tinker] About to call sampling_client.sample_async()...")
         sample_resp = await self.sampling_client.sample_async(
             prompt=model_input,
             num_samples=1,
             sampling_params=sampling_params,
         )
+        logger.info(f"[_sample_with_tinker] sample_async() returned")
         
         # Parse response using renderer (includes tool call parsing)
         seq = sample_resp.sequences[0]
@@ -585,6 +593,11 @@ class TinkerCuaAgent:
             if task_name:
                 task_name_str = f"Task: {task_name} | "
         
+        # Force flush before starting task execution
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
         logger.info("")
         logger.info("╔" + "=" * 118 + "╗")
         if context_str:
@@ -595,6 +608,9 @@ class TinkerCuaAgent:
             padding_left = (118 - total_len) // 2
             padding_right = 118 - total_len - padding_left
             logger.info(f"║{' ' * padding_left}{title}{' ' * padding_right}║")
+            # Force flush after logging
+            sys.stdout.flush()
+            sys.stderr.flush()
         else:
             # If no context but have task name, show it
             if task_name_str:
@@ -670,15 +686,28 @@ class TinkerCuaAgent:
                 logger.warning(f"[Task Setup] Could not identify app from task, defaulting to airbnb APK")
             
             # Create box without installing APK (we'll do it manually)
+            # Always use logger.info (not rollout_logger) for critical debug messages
+            import sys
+            logger.info(f"[Task Setup] Creating box (this may take a while)...")
+            sys.stdout.flush()
+            sys.stderr.flush()
             box_info = await self.gbox_client.create_box(box_type=self.box_type, apk_paths=None)
             box_id = box_info.get("id") or self.gbox_client.box_id
+            logger.info(f"[Task Setup] ✓ Box created: {box_id}")
+            sys.stdout.flush()
+            sys.stderr.flush()
             
             # Install APK
+            # Always use logger.info for critical debug messages to ensure real-time output
+            logger.info(f"[Task Setup] Installing APK from {apk_path}...")
+            sys.stdout.flush()
+            sys.stderr.flush()
             if self.rollout_logger:
                 self.rollout_logger.log(f"[Task Setup] Installing APK...")
-            else:
-                logger.info(f"[Task Setup] Installing APK...")
             await self.gbox_client.install_apk(apk_path, open_app=True)
+            logger.info(f"[Task Setup] ✓ APK installed and app opened")
+            sys.stdout.flush()
+            sys.stderr.flush()
             
             box_creation_time = time.time() - box_creation_start
             if self.rollout_logger:
@@ -778,10 +807,98 @@ class TinkerCuaAgent:
 
             # Run task in turns
             turn = 0
+            MAX_TASK_TIME = 30 * 60  # 30 minutes in seconds
             
             while turn < self.max_turns and not self.task_completed:
+                # Check for timeout (30 minutes total)
+                elapsed_time = time.time() - task_start_time
+                if elapsed_time > MAX_TASK_TIME:
+                    logger.warning(f"[Task Timeout] Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout after {elapsed_time/60:.1f} minutes. Ending rollout.")
+                    self.result_message = f"Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout"
+                    self.task_completed = False
+                    self.task_success = False
+                    break
+                
                 turn += 1
+                # Debug: Log turn start
+                logger.info(f"[Turn {turn}] Starting turn {turn}/{self.max_turns}, task_completed={self.task_completed}, elapsed_time={elapsed_time:.1f}s")
                 turn_start_time = time.time()
+                
+                # Record turn start in database
+                db_turn_id = None
+                if self.db_session is not None and self.rollout_id is not None:
+                    try:
+                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn_start, record_rollout_status
+                        from datetime import datetime
+                        import os
+                        debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+                        try:
+                            with open(debug_file, "a") as f:
+                                f.write(f"[{datetime.now().isoformat()}] [Turn Start] Recording turn {turn} for rollout_id={self.rollout_id}, task={getattr(self.task, 'id', 'no_task') if hasattr(self, 'task') else 'no_task'}, agent_id={id(self)}\n")
+                                f.flush()
+                        except Exception:
+                            pass
+                        
+                        # CRITICAL: Verify rollout_id matches before recording
+                        if not self.rollout_id:
+                            logger.error(f"[Turn {turn}] CRITICAL: rollout_id is None! Cannot record turn. Agent ID: {id(self)}")
+                            raise ValueError(f"[Turn {turn}] rollout_id is None - this should never happen")
+                        
+                        # Get current task ID for verification
+                        current_task_id_str = getattr(self.task, 'id', None) if hasattr(self, 'task') and self.task else None
+                        logger.debug(f"[Turn {turn}] Recording turn start: rollout_id={self.rollout_id}, agent_id={id(self)}, task_id={current_task_id_str}")
+                        
+                        db_turn_id = record_turn_start(
+                            self.db_session,
+                            self.rollout_id,
+                            turn,
+                            start_time=datetime.utcnow(),
+                            expected_task_id_str=current_task_id_str,  # Pass task ID for verification
+                        )
+                        
+                        if not db_turn_id:
+                            logger.error(f"[Turn {turn}] CRITICAL: Failed to record turn start. rollout_id={self.rollout_id}, agent_id={id(self)}, task_id={current_task_id_str}")
+                            raise ValueError(f"[Turn {turn}] Failed to record turn start in database")
+                        # Update rollout status to running and current_turn
+                        record_rollout_status(
+                            self.db_session,
+                            self.rollout_id,
+                            status="running",
+                            current_turn=turn,
+                            progress_percent=(turn / self.max_turns) * 100.0,
+                        )
+                        self.db_session.commit()
+                        
+                        try:
+                            with open(debug_file, "a") as f:
+                                f.write(f"[{datetime.now().isoformat()}] [Turn Start] Successfully recorded turn {turn}, db_turn_id={db_turn_id}\n")
+                                f.flush()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning(f"[Turn {turn}] Failed to record turn start in database: {e}", exc_info=True)
+                        import os
+                        from datetime import datetime
+                        debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+                        try:
+                            with open(debug_file, "a") as f:
+                                f.write(f"[{datetime.now().isoformat()}] [Turn Start] ERROR: Failed to record turn {turn}: {e}\n")
+                                f.flush()
+                        except Exception:
+                            pass
+                        if self.db_session:
+                            self.db_session.rollback()
+                else:
+                    # Debug: log if db_session or rollout_id is missing
+                    import os
+                    from datetime import datetime
+                    debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
+                    try:
+                        with open(debug_file, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] [Turn Start] WARNING: db_session={self.db_session is not None}, rollout_id={self.rollout_id}, skipping turn {turn} recording\n")
+                            f.flush()
+                    except Exception:
+                        pass
                 
                 # Start turn logging (includes turn header)
                 if self.rollout_logger:
@@ -792,12 +909,14 @@ class TinkerCuaAgent:
                     logger.info(f"│ Turn {turn}/{self.max_turns}" + " " * (118 - 12 - len(str(self.max_turns)) - len(str(turn)) - 1) + "│")
                     logger.info("└" + "─" * 118 + "┘")
                 
-                # Take screenshot
+                # Take screenshot (Before screenshot - what the model sees before making a decision)
                 screenshot_start = time.time()
                 if not self.rollout_logger:
                     logger.info(f"[Turn {turn}] Taking screenshot...")
                 await asyncio.sleep(0.3)  # Small delay for stability
+                logger.info(f"[Turn {turn}] About to call take_screenshot()...")
                 screenshot_bytes, screenshot_uri = await self.gbox_client.take_screenshot()
+                logger.info(f"[Turn {turn}] Screenshot call returned")
                 self.current_screenshot_uri = screenshot_uri
                 screenshot_time = time.time() - screenshot_start
                 if self.rollout_logger:
@@ -819,14 +938,120 @@ class TinkerCuaAgent:
                     logger.info(f"[Turn {turn}] Calling model for inference...")
                     logger.info(f"[Turn {turn}] Model input - Conversation length: {len(self.messages)} messages")
                 
-                # Build ModelInput for this turn (before truncation) to store in trajectory
-                # We need the full observation including screenshot
-                turn_observation = self.renderer.build_generation_prompt(self.messages)
+                # Build ModelInput for this turn (with message history truncation)
+                # Only keep system prompt and recent N turns to match what the model actually sees
+                truncated_messages_for_observation = self._truncate_messages_to_recent_turns(
+                    self.messages, max_turns=self.max_recent_turns
+                )
+                turn_observation = self.renderer.build_generation_prompt(truncated_messages_for_observation)
                 
-                response_message, parse_success, action_tokens, action_logprobs = await self._sample_with_tinker(self.messages)
+                # Record Before screenshot and model_input in database (right after turn start)
+                if db_turn_id is not None and self.db_session is not None:
+                    try:
+                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_observation
+                        # Convert ModelInput to dict for JSON serialization
+                        model_input_dict = None
+                        if turn_observation:
+                            try:
+                                if hasattr(turn_observation, 'to_dict'):
+                                    model_input_dict = turn_observation.to_dict()
+                                elif isinstance(turn_observation, dict):
+                                    model_input_dict = turn_observation
+                                else:
+                                    model_input_dict = str(turn_observation)
+                            except Exception as e:
+                                logger.warning(f"[Turn {turn}] Failed to serialize model_input: {e}")
+                                model_input_dict = str(turn_observation)
+                        
+                        # Also save readable messages format for display
+                        # Use truncated messages to match what the model actually sees
+                        readable_messages = None
+                        if truncated_messages_for_observation:
+                            try:
+                                # Convert truncated messages to readable format
+                                readable_messages_list = []
+                                for msg in truncated_messages_for_observation:
+                                    msg_dict = {
+                                        "role": msg.get("role", "unknown"),
+                                        "content": [],
+                                    }
+                                    
+                                    # Handle content - could be string, list, or dict
+                                    content = msg.get("content", "")
+                                    if isinstance(content, str):
+                                        msg_dict["content"].append({"type": "text", "text": content})
+                                    elif isinstance(content, list):
+                                        for item in content:
+                                            if isinstance(item, dict):
+                                                if item.get("type") == "image_url" or "image_url" in item:
+                                                    img_url = item.get("image_url") or (isinstance(item.get("image_url"), dict) and item.get("image_url", {}).get("url"))
+                                                    if img_url:
+                                                        msg_dict["content"].append({"type": "image", "url": img_url})
+                                                elif item.get("type") == "text" or "text" in item:
+                                                    msg_dict["content"].append({"type": "text", "text": item.get("text", "")})
+                                                else:
+                                                    msg_dict["content"].append(item)
+                                            elif isinstance(item, str):
+                                                msg_dict["content"].append({"type": "text", "text": item})
+                                    elif isinstance(content, dict):
+                                        msg_dict["content"].append(content)
+                                    
+                                    readable_messages_list.append(msg_dict)
+                                
+                                readable_messages = {
+                                    "model_input": model_input_dict,
+                                    "messages": readable_messages_list,
+                                }
+                            except Exception as e:
+                                logger.warning(f"[Turn {turn}] Failed to create readable messages format: {e}")
+                                readable_messages = {
+                                    "model_input": model_input_dict,
+                                    "messages": None,
+                                }
+                        
+                        record_observation(
+                            self.db_session,
+                            db_turn_id,
+                            obs_type="screenshot_before",
+                            screenshot_uri=screenshot_uri,
+                            model_input=readable_messages if readable_messages else model_input_dict,
+                            rollout_id=self.rollout_id,
+                        )
+                        self.db_session.commit()
+                        logger.debug(f"[Turn {turn}] Recorded Before screenshot and model_input for turn {turn}")
+                    except Exception as e:
+                        logger.warning(f"[Turn {turn}] Failed to record Before screenshot/model_input: {e}")
+                        if self.db_session:
+                            self.db_session.rollback()
+                
+                logger.info(f"[Turn {turn}] About to call _sample_with_tinker()...")
+                # Add timeout for model inference (5 minutes per turn)
+                try:
+                    response_message, parse_success, action_tokens, action_logprobs = await asyncio.wait_for(
+                        self._sample_with_tinker(self.messages),
+                        timeout=5 * 60  # 5 minutes per turn
+                    )
+                    logger.info(f"[Turn {turn}] _sample_with_tinker() returned")
+                except asyncio.TimeoutError:
+                    logger.error(f"[Turn {turn}] Model inference timed out after 5 minutes. Ending rollout.")
+                    self.result_message = f"Model inference timed out on turn {turn}"
+                    self.task_completed = False
+                    self.task_success = False
+                    # Don't add trajectory data for this turn since we didn't get a response
+                    # But we should still save any previous turns' trajectory data
+                    break
+                except Exception as e:
+                    logger.error(f"[Turn {turn}] Model inference failed with exception: {e}", exc_info=True)
+                    self.result_message = f"Model inference failed on turn {turn}: {str(e)}"
+                    self.task_completed = False
+                    self.task_success = False
+                    # Don't add trajectory data for this turn since we didn't get a valid response
+                    break
+                
+                # If we get here, we have a valid response
                 response_text = response_message.get("content", "")
                 
-                # Store trajectory data for this turn
+                # Store trajectory data for this turn (only if we got a valid response)
                 self.trajectory_turns.append((
                     turn,
                     turn_observation,
@@ -1077,6 +1302,64 @@ class TinkerCuaAgent:
                     # If task completed, break from the while loop immediately
                     if self.task_completed:
                         turn_time = time.time() - turn_start_time
+                        
+                        # Record turn, actions, and observations in database
+                        if self.db_session is not None and self.rollout_id is not None:
+                            try:
+                                from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_action, record_observation
+                                from datetime import datetime
+                                
+                                # CRITICAL: Verify rollout_id before recording
+                                if not self.rollout_id:
+                                    logger.error(f"[Turn {turn}] CRITICAL: rollout_id is None when recording turn! Agent ID: {id(self)}")
+                                    raise ValueError(f"[Turn {turn}] rollout_id is None - cannot record turn")
+                                
+                                logger.debug(f"[Turn {turn}] Recording turn end: rollout_id={self.rollout_id}, agent_id={id(self)}, response_length={len(response_text) if response_text else 0}")
+                                
+                                # Record turn end (this will create the turn if it doesn't exist)
+                                final_turn_id = record_turn(
+                                    self.db_session,
+                                    self.rollout_id,
+                                    turn,
+                                    reward=0.0,  # Reward will be calculated later
+                                    episode_done=self.task_completed,
+                                    end_time=datetime.utcnow(),
+                                    turn_time=turn_time,
+                                    model_response=response_text,  # Store full LLM output
+                                    expected_task_id_str=current_task_id_str,  # Pass task ID for verification
+                                )
+                                
+                                if not final_turn_id:
+                                    logger.error(f"[Turn {turn}] CRITICAL: Failed to record turn. rollout_id={self.rollout_id}, agent_id={id(self)}")
+                                    raise ValueError(f"[Turn {turn}] Failed to record turn in database")
+                                
+                                if final_turn_id is not None:
+                                    # Note: After screenshot is handled in frontend by using next turn's Before screenshot
+                                    
+                                    # Record action (only the first tool_call - each turn should have exactly one action)
+                                    if tool_calls:
+                                        tool_call = tool_calls[0]  # Only record the first tool_call
+                                        tool_name = tool_call.get("name")
+                                        tool_args = tool_call.get("args", {})
+                                        record_action(
+                                            self.db_session,
+                                            final_turn_id,
+                                            action_type="tool_call",
+                                            tool_name=tool_name,
+                                            tool_args=tool_args,
+                                            tokens=action_tokens,
+                                            logprobs=action_logprobs,
+                                        )
+                                        # Log warning if multiple tool_calls are found (should not happen normally)
+                                        if len(tool_calls) > 1:
+                                            logger.warning(f"[Turn {turn}] WARNING: Model returned {len(tool_calls)} tool_calls, but only recording the first one. This should not happen for CUA tasks.")
+                                
+                                self.db_session.commit()
+                            except Exception as e:
+                                logger.warning(f"[Turn {turn}] Failed to record turn/action/observation in database: {e}")
+                                if self.db_session:
+                                    self.db_session.rollback()
+                        
                         if self.rollout_logger:
                             self.rollout_logger.end_turn(turn)
                         if not self.rollout_logger:
@@ -1106,6 +1389,36 @@ class TinkerCuaAgent:
                     
                     # Continue to next iteration instead of breaking
                     turn_time = time.time() - turn_start_time
+                    
+                    # Record turn, actions, and observations in database
+                    if self.db_session is not None and self.rollout_id is not None:
+                        try:
+                            from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_observation
+                            from datetime import datetime
+                            
+                            # Record turn end (this will create the turn if it doesn't exist)
+                            final_turn_id = record_turn(
+                                self.db_session,
+                                self.rollout_id,
+                                turn,
+                                reward=0.0,  # Reward will be calculated later
+                                episode_done=False,
+                                end_time=datetime.utcnow(),
+                                turn_time=turn_time,
+                                model_response=response_text,  # Store full LLM output
+                                expected_task_id_str=current_task_id_str,  # Pass task ID for verification
+                            )
+                            
+                            if final_turn_id is not None:
+                                # Note: Screenshot is already recorded as "screenshot_before" at turn start
+                                pass
+                            
+                            self.db_session.commit()
+                        except Exception as e:
+                            logger.warning(f"[Turn {turn}] Failed to record turn/observation in database: {e}")
+                            if self.db_session:
+                                self.db_session.rollback()
+                    
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
                     if not self.rollout_logger:
@@ -1113,9 +1426,66 @@ class TinkerCuaAgent:
                     
                     # Small delay before next turn
                     await asyncio.sleep(0.5)
+                    # Debug: Log before continue
+                    logger.info(f"[Turn {turn}] Completed turn {turn}/{self.max_turns}, task_completed={self.task_completed}, continuing to next turn...")
                     continue
                 
                 turn_time = time.time() - turn_start_time
+                
+                # Record turn, actions, and observations in database
+                if self.db_session is not None and self.rollout_id is not None:
+                    try:
+                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_action, record_observation
+                        from datetime import datetime
+                        
+                        # CRITICAL: Log rollout_id and task info before recording turn
+                        task_id = getattr(self.task, 'id', 'no_task') if hasattr(self, 'task') and self.task else 'no_task'
+                        task_desc = getattr(self.task, 'description', 'no_description')[:100] if hasattr(self, 'task') and self.task else 'no_description'
+                        logger.debug(
+                            f"[Turn {turn}] Recording turn end (error case): rollout_id={self.rollout_id}, "
+                            f"agent_id={id(self)}, task_id={task_id}, response_preview={response_text[:100] if response_text else 'None'}"
+                        )
+                        
+                        # Record turn end (this will create the turn if it doesn't exist)
+                        final_turn_id = record_turn(
+                            self.db_session,
+                            self.rollout_id,
+                            turn,
+                            reward=0.0,  # Reward will be calculated later
+                            episode_done=False,
+                            end_time=datetime.utcnow(),
+                            turn_time=turn_time,
+                            model_response=response_text,  # Store full LLM output
+                            expected_task_id_str=current_task_id_str,  # Pass task ID for verification
+                        )
+                        
+                        if final_turn_id is not None:
+                            # Note: Screenshot is already recorded as "screenshot_before" at turn start
+                            
+                            # Record action (only the first tool_call - each turn should have exactly one action)
+                            if tool_calls:
+                                tool_call = tool_calls[0]  # Only record the first tool_call
+                                tool_name = tool_call.get("name")
+                                tool_args = tool_call.get("args", {})
+                                record_action(
+                                    self.db_session,
+                                    final_turn_id,
+                                    action_type="tool_call",
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    tokens=action_tokens,
+                                    logprobs=action_logprobs,
+                                )
+                                # Log warning if multiple tool_calls are found (should not happen normally)
+                                if len(tool_calls) > 1:
+                                    logger.warning(f"[Turn {turn}] WARNING: Model returned {len(tool_calls)} tool_calls, but only recording the first one. This should not happen for CUA tasks.")
+                        
+                        self.db_session.commit()
+                    except Exception as e:
+                        logger.warning(f"[Turn {turn}] Failed to record turn/action/observation in database: {e}")
+                        if self.db_session:
+                            self.db_session.rollback()
+                
                 if self.rollout_logger:
                     self.rollout_logger.end_turn(turn)
                 if not self.rollout_logger:
@@ -1123,7 +1493,11 @@ class TinkerCuaAgent:
                 
                 # Small delay between turns
                 await asyncio.sleep(0.5)
+                # Debug: Log after turn completion, before next iteration
+                logger.info(f"[Turn {turn}] Turn {turn}/{self.max_turns} finished, checking loop condition: turn < max_turns = {turn} < {self.max_turns} = {turn < self.max_turns}, task_completed={self.task_completed}")
             
+            # Debug: Log loop exit
+            logger.info(f"[Task End] Exited while loop: turn={turn}, max_turns={self.max_turns}, task_completed={self.task_completed}")
             if not self.task_completed:
                 self.result_message = f"Task not completed within {self.max_turns} turns"
                 logger.warning(f"[Task End] Task did not complete within {self.max_turns} turns")
@@ -1142,6 +1516,19 @@ class TinkerCuaAgent:
                 # Check for validation_query
                 if not has_validation and self.task.validation_query:
                     has_validation = True
+            
+            # Take validation screenshot before performing validation
+            validation_screenshot_uri = None
+            if has_validation:
+                try:
+                    # Take screenshot for validation
+                    logger.info(f"[Task Validation] Taking screenshot for validation...")
+                    await asyncio.sleep(0.3)  # Small delay for stability
+                    validation_screenshot_bytes, validation_screenshot_uri = await self.gbox_client.take_screenshot()
+                    self.validation_screenshot_uri = validation_screenshot_uri
+                    logger.info(f"[Task Validation] ✓ Validation screenshot taken")
+                except Exception as e:
+                    logger.warning(f"[Task Validation] Failed to take validation screenshot: {e}")
             
             if has_validation:
                 try:
@@ -1162,6 +1549,7 @@ class TinkerCuaAgent:
                             success=validation_result.success,
                             execution_time=validation_result.execution_time,
                             validation_query=validation_result.validation_query,
+                            screenshot_uri=self.validation_screenshot_uri,
                         )
                     else:
                         validation_query_str = self.task.validation_query or "task_validator"
@@ -1231,6 +1619,7 @@ class TinkerCuaAgent:
                             success=validation_result.success,
                             execution_time=validation_result.execution_time,
                             validation_query=validation_result.validation_query,
+                            screenshot_uri=self.validation_screenshot_uri,
                         )
                     else:
                         self.rollout_logger.log_adb_validation_error(
@@ -1302,7 +1691,7 @@ class TinkerCuaAgent:
             cleanup_start = time.time()
             try:
                 # DO NOT TERMINATE THE BOX HERE, FOR DEBUGGING PURPOSES
-                # await self.gbox_client.terminate_box()
+                await self.gbox_client.terminate_box()
                 cleanup_time = time.time() - cleanup_start
                 logger.info(f"[Task Cleanup] ✓ GBox environment terminated in {cleanup_time:.3f}s")
             except Exception as cleanup_error:

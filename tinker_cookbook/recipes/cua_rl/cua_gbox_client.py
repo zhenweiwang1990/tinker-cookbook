@@ -18,7 +18,7 @@ class CuaGBoxClient:
         box_type: str = "android",
         timeout: str = "60s",
         wait: bool = True,
-        expires_in: str = "15m",
+        expires_in: str = "60m",
         labels: Optional[Dict[str, Any]] = None,
         envs: Optional[Dict[str, Any]] = None,
     ):

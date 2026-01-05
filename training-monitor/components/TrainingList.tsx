@@ -37,8 +37,9 @@ export default function TrainingList({ selectedId, onSelect }: TrainingListProps
 
   useEffect(() => {
     fetchTrainings();
-    const interval = setInterval(fetchTrainings, 2000);
-    return () => clearInterval(interval);
+    // Auto-refresh disabled - use manual refresh button instead
+    // const interval = setInterval(fetchTrainings, 2000);
+    // return () => clearInterval(interval);
   }, []);
 
   if (loading) {
@@ -47,7 +48,16 @@ export default function TrainingList({ selectedId, onSelect }: TrainingListProps
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>Trainings</div>
+      <div className={styles.header}>
+        <span>Trainings</span>
+        <button 
+          className={styles.refreshButton} 
+          onClick={fetchTrainings}
+          title="刷新"
+        >
+          🔄
+        </button>
+      </div>
       <div className={styles.list}>
         {trainings.map((training) => (
           <div

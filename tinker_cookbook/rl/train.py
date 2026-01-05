@@ -430,7 +430,8 @@ async def do_sync_training_with_stream_minibatch(
         t_start = time.time()
 
         # Run evaluations
-        if (cfg.eval_every > 0 and i_batch % cfg.eval_every == 0) or i_batch == end_batch - 1:
+        # Skip step 0 evaluation if baseline was run (start_batch == 0 means baseline ran)
+        if ((cfg.eval_every > 0 and i_batch % cfg.eval_every == 0) or i_batch == end_batch - 1) and not (i_batch == 0 and start_batch == 0):
             eval_start = time.time()
             with timed("run_evals", metrics):
                 eval_metrics = await run_evaluations_parallel(
@@ -745,7 +746,8 @@ async def do_async_training(
             # while we're running the evals
             sampling_client_eval_step = sampling_client_step
             sampling_client_eval = sampling_client
-            if cfg.eval_every > 0 and sampling_client_eval_step % cfg.eval_every == 0:
+            # Skip step 0 evaluation if baseline was run (start_batch == 0 means baseline ran)
+            if cfg.eval_every > 0 and sampling_client_eval_step % cfg.eval_every == 0 and not (sampling_client_eval_step == 0 and start_batch == 0):
                 logger.info("")
                 logger.info("╔" + "=" * 78 + "╗")
                 logger.info(f"║ EVALUATION - Step {sampling_client_eval_step}" + " " * (78 - len(f"EVALUATION - Step {sampling_client_eval_step}")) + "║")
@@ -1152,7 +1154,8 @@ async def do_sync_training(
         t_start = time.time()
 
         # Run evaluations
-        if cfg.eval_every > 0 and i_batch % cfg.eval_every == 0:
+        # Skip step 0 evaluation if baseline was run (start_batch == 0 means baseline ran)
+        if cfg.eval_every > 0 and i_batch % cfg.eval_every == 0 and not (i_batch == 0 and start_batch == 0):
             if len(evaluators) == 0:
                 warning_text1 = "⚠ WARNING: No evaluators configured. Skipping evaluation. "
                 logger.warning(f"║ {warning_text1}" + " " * (78 - len(warning_text1)) + "║")
@@ -1288,10 +1291,17 @@ async def main(
     cfg: Config,
 ):
     """Main training loop for MDP RL."""
+    # Force flush at the very beginning
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     logger.info("")
     logger.info("=" * 80)
     logger.info("TRAINING INITIALIZATION")
     logger.info("=" * 80)
+    sys.stdout.flush()
+    sys.stderr.flush()
     logger.info(f"Model: {cfg.model_name}")
     logger.info(f"LoRA rank: {cfg.lora_rank}")
     logger.info(f"Learning rate: {cfg.learning_rate}")

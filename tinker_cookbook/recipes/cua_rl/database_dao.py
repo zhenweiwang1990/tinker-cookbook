@@ -316,9 +316,10 @@ def create_rollout(
     rollout_id: str,
     task_id: int,
     model_path: str,
+    env_id: int,  # Required: Environment must be created first
     **kwargs
 ) -> Rollout:
-    """Create a new rollout."""
+    """Create a new rollout. Environment must be created first and passed via env_id."""
     # Validate source_type and set appropriate ID
     if source_type == "step":
         if "step_id" not in kwargs:
@@ -348,6 +349,7 @@ def create_rollout(
         rollout_id=rollout_id,
         task_id=task_id,
         model_path=model_path,
+        env_id=env_id,  # Required field
         **kwargs
     )
     session.add(rollout)
@@ -370,7 +372,11 @@ def get_rollout(session: Session, rollout_id: int) -> Optional[Rollout]:
 
 
 def get_rollout_by_rollout_id(session: Session, rollout_id: str) -> Optional[Rollout]:
-    """Get a rollout by rollout_id string."""
+    """
+    Get a rollout by rollout_id string.
+    
+    NOTE: rollout_id is now a unique UUID string for reliable tracking.
+    """
     return session.query(Rollout).filter(Rollout.rollout_id == rollout_id).first()
 
 
@@ -383,9 +389,13 @@ def update_rollout(session: Session, rollout_id: int, **kwargs) -> Optional[Roll
     old_status = rollout.status
     
     # Serialize JSON fields
-    for field in ["errors", "summary_json"]:
-        if field in kwargs and isinstance(kwargs[field], (dict, list)):
-            kwargs[field] = json_serialize(kwargs[field])
+    for field in ["errors", "summary_json", "trajectory_data_json"]:
+        if field in kwargs:
+            if isinstance(kwargs[field], (dict, list)):
+                kwargs[field] = json_serialize(kwargs[field])
+            elif kwargs[field] is not None and not isinstance(kwargs[field], str):
+                # If it's not a string and not None, try to serialize
+                kwargs[field] = json_serialize(kwargs[field])
     
     for key, value in kwargs.items():
         if hasattr(rollout, key):
@@ -750,12 +760,12 @@ def get_validation_by_rollout(session: Session, rollout_id: int) -> Optional[Val
 # Environment DAO
 # ============================================================================
 
-def create_environment(session: Session, rollout_id: int, env_type: str, **kwargs) -> Environment:
-    """Create a new environment."""
+def create_environment(session: Session, env_type: str, **kwargs) -> Environment:
+    """Create a new environment. Environment is created before Rollout, and Rollout references it via env_id."""
     if "config_json" in kwargs and isinstance(kwargs["config_json"], (dict, list)):
         kwargs["config_json"] = json_serialize(kwargs["config_json"])
     
-    env = Environment(rollout_id=rollout_id, env_type=env_type, **kwargs)
+    env = Environment(env_type=env_type, **kwargs)
     session.add(env)
     session.flush()
     
@@ -772,7 +782,11 @@ def create_environment(session: Session, rollout_id: int, env_type: str, **kwarg
 
 def get_environment_by_rollout(session: Session, rollout_id: int) -> Optional[Environment]:
     """Get environment for a rollout."""
-    return session.query(Environment).filter(Environment.rollout_id == rollout_id).first()
+    from tinker_cookbook.recipes.cua_rl.database_models import Rollout
+    rollout = session.query(Rollout).filter(Rollout.id == rollout_id).first()
+    if rollout and rollout.env_id:
+        return session.query(Environment).filter(Environment.id == rollout.env_id).first()
+    return None
 
 
 def update_environment(session: Session, env_id: int, **kwargs) -> Optional[Environment]:

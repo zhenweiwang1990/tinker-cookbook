@@ -79,7 +79,7 @@ def discover_all_tasks(tasks_dir: Optional[str] = None) -> List[Dict[str, Any]]:
 
 def split_tasks_train_eval(
     tasks: List[Dict[str, Any]],
-    train_ratio: float = 0.8,
+    train_ratio: float,
     seed: int = 42,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Split tasks into training and evaluation sets.
@@ -143,8 +143,8 @@ class TaskAdapter:
     
     def __init__(
         self,
+        train_ratio: float,
         tasks_dir: Optional[str] = None,
-        train_ratio: float = 0.8,
         seed: int = 42,
     ):
         """Initialize task adapter.
@@ -204,8 +204,8 @@ class TaskAdapter:
 
 # Convenience function for easy usage
 def get_tasks_train_eval(
+    train_ratio: float,
     tasks_dir: Optional[str] = None,
-    train_ratio: float = 0.8,
     seed: int = 42,
 ) -> Tuple[List[str], List[str]]:
     """Get training and evaluation task descriptions.
@@ -218,6 +218,6 @@ def get_tasks_train_eval(
     Returns:
         Tuple of (train_descriptions, eval_descriptions)
     """
-    adapter = TaskAdapter(tasks_dir=tasks_dir, train_ratio=train_ratio, seed=seed)
+    adapter = TaskAdapter(train_ratio=train_ratio, tasks_dir=tasks_dir, seed=seed)
     return adapter.get_train_descriptions(), adapter.get_eval_descriptions()
 

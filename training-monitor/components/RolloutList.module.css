@@ -81,6 +81,8 @@
   padding: 15px;
   background-color: #fafafa;
   border-top: 1px solid #e0e0e0;
+  position: relative;
+  z-index: 1;
 }
 
 .detailRow {
@@ -110,6 +112,9 @@
   font-size: 12px;
   font-weight: 500;
   transition: background-color 0.2s;
+  position: relative;
+  z-index: 10;
+  pointer-events: auto;
 }
 
 .viewButton:hover {

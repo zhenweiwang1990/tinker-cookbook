@@ -61,31 +61,82 @@ export function serializeRow(row: any): any {
     'attempted_completion', 'success'
   ];
   
+  // Fields that contain JSON strings that need parsing
+  const jsonFields = [
+    'tool_args', 'tokens', 'logprobs', 'model_input_json',
+    'metrics_json', 'summary_json', 'errors', 'config_json',
+    'details_json', 'rollout_progress', 'training_progress'
+  ];
+  
   for (const [key, value] of Object.entries(row)) {
     if (value === null || value === undefined) {
       result[key] = value;
-    } else if (typeof value === 'string') {
+      continue;
+    }
+    
+    // Handle boolean fields - PostgreSQL may return boolean, number (0/1), or string ('t'/'f')
+    if (booleanFields.includes(key)) {
+      if (typeof value === 'boolean') {
+        result[key] = value;
+      } else if (typeof value === 'number') {
+        result[key] = value === 1;
+      } else if (typeof value === 'string') {
+        // PostgreSQL boolean as string: 't' or 'f'
+        result[key] = value === 't' || value === 'true' || value === '1';
+      } else {
+        result[key] = Boolean(value);
+      }
+      continue;
+    }
+    
+    // Handle JSON fields
+    if (jsonFields.includes(key) && typeof value === 'string') {
       // Try to parse JSON fields
-      if (key.includes('_json') && (value.startsWith('{') || value.startsWith('['))) {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          result[key] = JSON.parse(value);
+        } catch (e) {
+          // If parsing fails, keep as string
+          result[key] = value;
+        }
+      } else if (value.trim() === '' || value.trim() === 'null') {
+        result[key] = null;
+      } else {
+        result[key] = value;
+      }
+      continue;
+    }
+    
+    // Handle _json suffix fields
+    if (key.includes('_json') && typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
         try {
           result[key] = JSON.parse(value);
         } catch {
           result[key] = value;
         }
+      } else if (value.trim() === '' || value.trim() === 'null') {
+        result[key] = null;
       } else {
         result[key] = value;
       }
-    } else if (typeof value === 'boolean') {
-      result[key] = value;
-    } else if (typeof value === 'number' && booleanFields.includes(key)) {
-      // Convert PostgreSQL boolean or integer (0/1) to boolean
-      result[key] = value === 1;
-    } else if (value instanceof Date) {
-      // Convert Date to ISO string
-      result[key] = value.toISOString();
-    } else {
-      result[key] = value;
+      continue;
     }
+    
+    // Handle dates
+    if (value instanceof Date) {
+      result[key] = value.toISOString();
+      continue;
+    }
+    
+    // Handle strings
+    if (typeof value === 'string') {
+      result[key] = value;
+      continue;
+    }
+    
+    // Handle everything else
+    result[key] = value;
   }
   return result;
 }

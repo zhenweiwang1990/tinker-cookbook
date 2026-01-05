@@ -15,6 +15,25 @@
   position: sticky;
   top: 0;
   z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.refreshButton {
+  padding: 4px 8px;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.refreshButton:hover {
+  background-color: #e0e0e0;
+  transform: rotate(180deg);
 }
 
 .list {

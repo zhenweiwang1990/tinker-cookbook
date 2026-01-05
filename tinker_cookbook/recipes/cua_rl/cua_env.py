@@ -47,6 +47,7 @@ class CUAEnv(ProblemEnv):
         box_type: str = "android",
         format_coef: float = 0.0,  # No format penalty for CUA
         task: Optional[CUATask] = None,  # Optional task object for validation
+        max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
     ):
         """
         Initialize CUA Environment.
@@ -70,6 +71,7 @@ class CUAEnv(ProblemEnv):
         self.tinker_api_key = tinker_api_key
         self.max_turns = max_turns
         self.box_type = box_type
+        self.max_recent_turns = max_recent_turns
         self.task = task  # Store task object for validation
         
         # TinkerCuaAgent instance (created lazily during rollout)
@@ -110,6 +112,8 @@ class CUAEnv(ProblemEnv):
         base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
         renderer_name: Optional[str] = None,
         rollout_logger = None,
+        db_session = None,  # Optional database session for recording turns/actions/observations
+        rollout_id: Optional[str] = None,  # Rollout ID (UUID) for database recording
     ) -> Dict[str, Any]:
         """
         Run a rollout using TinkerCuaAgent with Tinker's native API.
@@ -162,7 +166,10 @@ class CUAEnv(ProblemEnv):
             renderer_name=renderer_name,
             max_turns=self.max_turns,
             box_type=self.box_type,
+            max_recent_turns=self.max_recent_turns,  # Pass max_recent_turns to agent
             rollout_logger=rollout_logger,
+            db_session=db_session,  # Pass db_session for database recording
+            rollout_id=rollout_id,  # rollout_id is now a UUID
         )
         # Pass task object to agent for validation
         if self.task:
@@ -172,6 +179,13 @@ class CUAEnv(ProblemEnv):
             rollout_logger.log(f"[CUAEnv] ✓ TinkerCuaAgent created in {agent_init_time:.3f}s")
         else:
             logger.info(f"[CUAEnv] ✓ TinkerCuaAgent created in {agent_init_time:.3f}s")
+        
+        # Force flush before starting task
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        logger.info(f"[CUAEnv] About to call run_task()...")
+        sys.stdout.flush()
         
         try:
             # Run task with current training model
@@ -280,6 +294,7 @@ class CUADataset(RLDataset):
         max_turns: int = 20,
         box_type: str = "android",
         seed: int = 0,
+        max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
     ):
         self.tasks = tasks
         self.batch_size = batch_size
@@ -292,6 +307,7 @@ class CUADataset(RLDataset):
         self.max_turns = max_turns
         self.box_type = box_type
         self.seed = seed
+        self.max_recent_turns = max_recent_turns
         
         # Shuffle tasks with seed
         import random
@@ -340,6 +356,7 @@ class CUADataset(RLDataset):
                 max_turns=self.max_turns,
                 box_type=self.box_type,
                 task=task_obj,  # Pass task object for validation (None if task is string)
+                max_recent_turns=self.max_recent_turns,  # Pass max_recent_turns to environment
             ),
             num_envs=group_size,
             dataset_name="cua",
@@ -370,6 +387,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
     max_turns: int = 20
     box_type: str = "android"
     seed: int = 0
+    max_recent_turns: int = 5  # Maximum number of recent turns to keep in message history
     db_session: Optional[Session] = None  # Database session for saving tasks
     training_id: Optional[int] = None  # Training ID for database records
     
@@ -439,6 +457,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
             max_turns=self.max_turns,
             box_type=self.box_type,
             seed=self.seed,
+            max_recent_turns=self.max_recent_turns,
         )
         
         # Load evaluation tasks if provided
@@ -480,8 +499,15 @@ class CUADatasetBuilder(RLDatasetBuilder):
                 convo_prefix=self.convo_prefix,
                 max_turns=self.max_turns,
                 box_type=self.box_type,
+                max_recent_turns=self.max_recent_turns,
                 seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
             )
+        
+        # Force flush before returning
+        import sys
+        logger.info(f"[Dataset Builder] Returning dataset with {len(tasks)} tasks, eval_dataset={'with tasks' if eval_dataset else None}")
+        sys.stdout.flush()
+        sys.stderr.flush()
         
         return dataset, eval_dataset
 

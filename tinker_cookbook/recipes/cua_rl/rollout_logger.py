@@ -22,10 +22,12 @@ _rollout_logger = logging.getLogger("rollout")
 _rollout_logger.setLevel(logging.INFO)
 # Remove existing handlers to avoid duplication
 _rollout_logger.handlers.clear()
-# Add a simple handler with minimal format
-_handler = logging.StreamHandler()
+# Add a simple handler with minimal format - explicitly use stdout
+import sys
+_handler = logging.StreamHandler(sys.stdout)
 _formatter = logging.Formatter("%(message)s")
 _handler.setFormatter(_formatter)
+_handler.setLevel(logging.INFO)  # Ensure handler level is set
 _rollout_logger.addHandler(_handler)
 _rollout_logger.propagate = False  # Don't propagate to root logger
 
@@ -681,6 +683,7 @@ class RolloutLogger:
         success: bool,
         execution_time: float,
         validation_query: str = "",
+        screenshot_uri: Optional[str] = None,
     ):
         """Log ADB validation information.
         
@@ -691,6 +694,7 @@ class RolloutLogger:
             success: Whether validation passed
             execution_time: Time taken to execute (seconds)
             validation_query: Type of validation query (e.g., "wifi_enabled")
+            screenshot_uri: Screenshot URI taken at validation time
         """
         # Store ADB validation info for later logging
         self.trajectory_data["adb_validation"] = {
@@ -701,6 +705,7 @@ class RolloutLogger:
             "execution_time": execution_time,
             "validation_query": validation_query,
             "error": None,  # No error
+            "screenshot_uri": screenshot_uri,  # Screenshot taken at validation time
         }
     
     def log_adb_validation_error(
@@ -921,9 +926,43 @@ class RolloutLogger:
     
     def flush(self):
         """Output all buffered logs using a simple logger without package name prefix."""
-        # Output all logs at once using the simple logger
-        for log_entry in self.log_buffer:
-            _rollout_logger.info(log_entry)
+        import sys
+        
+        # Debug: Check if buffer has content
+        if not self.log_buffer:
+            # No logs to output - this might indicate logs weren't being buffered
+            print(f"[RolloutLogger DEBUG] flush() called but log_buffer is empty (rollout_id={self.rollout_id})", file=sys.stderr)
+            sys.stderr.flush()
+            return
+        
+        # Ensure logger is properly configured (in case it was modified elsewhere)
+        # Reconfigure logger every time to ensure it works
+        _rollout_logger.handlers.clear()
+        _handler = logging.StreamHandler(sys.stdout)
+        _formatter = logging.Formatter("%(message)s")
+        _handler.setFormatter(_formatter)
+        _handler.setLevel(logging.INFO)
+        _rollout_logger.addHandler(_handler)
+        _rollout_logger.setLevel(logging.INFO)
+        _rollout_logger.propagate = False
+        
+        # Output all logs at once - use direct print for reliability
+        # Only print to stdout to avoid duplication (stderr is for debug messages only)
+        print(f"[RolloutLogger] Starting to flush {len(self.log_buffer)} log entries for rollout {self.rollout_id}...", file=sys.stderr, flush=True)
+        try:
+            for i, log_entry in enumerate(self.log_buffer):
+                # Print to stdout only (avoid duplication)
+                print(log_entry, file=sys.stdout, flush=True)
+            print(f"[RolloutLogger] Finished flushing {len(self.log_buffer)} log entries for rollout {self.rollout_id}", file=sys.stderr, flush=True)
+        except Exception as e:
+            # Complete fallback: print directly if everything fails
+            print(f"[RolloutLogger ERROR] Failed to log: {e}", file=sys.stderr, flush=True)
+            for log_entry in self.log_buffer:
+                print(log_entry, file=sys.stdout, flush=True)
+        
+        # Force flush stdout to ensure logs are written immediately
+        sys.stdout.flush()
+        sys.stderr.flush()
         
         # Clear buffer
         self.log_buffer.clear()
