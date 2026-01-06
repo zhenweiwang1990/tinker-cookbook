@@ -158,47 +158,10 @@
   position: relative;
 }
 
-.rolloutCard::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 3px;
-  height: 100%;
-  border-radius: 6px 0 0 6px;
-}
-
 .rolloutCard:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   border-color: #bbb;
-}
-
-.rolloutRunning {
-  border-color: #ff9800;
-  background-color: #fffbf5;
-}
-
-.rolloutRunning::before {
-  background: #ff9800;
-}
-
-.rolloutSuccess {
-  border-color: #4caf50;
-  background-color: #f9fdf9;
-}
-
-.rolloutSuccess::before {
-  background: #4caf50;
-}
-
-.rolloutFailed {
-  border-color: #f44336;
-  background-color: #fffafa;
-}
-
-.rolloutFailed::before {
-  background: #f44336;
 }
 
 .rolloutHeader {
@@ -230,8 +193,8 @@
 }
 
 .badge {
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: 3px 8px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
 }

@@ -134,6 +134,7 @@ async def _run_single_env_rollout(
     eval_id: int | None = None,
     baseline_id: int | None = None,
     group_id: int | None = None,  # Database group ID
+    max_turns: int | None = None,  # Maximum number of turns for this rollout
 ) -> tuple[Trajectory, float, dict, dict]:
     """
     Run rollout for a single environment.
@@ -206,6 +207,7 @@ async def _run_single_env_rollout(
                         is_eval=is_eval,
                         group_id=group_id,
                         box_type=getattr(env, 'box_type', 'android'),
+                        max_turns=max_turns or getattr(env, 'max_turns', 20),
                     )
                     
                     if success:
@@ -1026,6 +1028,7 @@ async def do_cua_group_rollout(
                         eval_id=eval_id_db,
                         baseline_id=baseline_id_db,
                         group_id=group_id_db,  # Pass group_id so rollout belongs to the group
+                        max_turns=getattr(env, 'max_turns', 20),  # Get max_turns from env
                     )
                 finally:
                     # Close the session if it was created specifically for this environment

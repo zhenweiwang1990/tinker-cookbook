@@ -61,6 +61,8 @@ class TinkerCuaAgent:
         rollout_logger: Optional[RolloutLogger] = None,
         rollout_recorder = None,  # RolloutRecorder instance for database recording
         rollout_id: Optional[str] = None,  # Rollout ID for database recording
+        max_task_time_seconds: int = 60 * 60,  # Maximum total time for task execution (default: 60 minutes)
+        max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
     ):
         """
         Initialize Tinker CUA Agent.
@@ -75,6 +77,8 @@ class TinkerCuaAgent:
             box_type: Type of GBox environment (android or linux)
             max_tokens: Maximum tokens per response
             temperature: Sampling temperature
+            max_task_time_seconds: Maximum total time for task execution (default: 30 minutes)
+            max_turn_time_seconds: Maximum time per turn for model inference (default: 5 minutes)
         """
         self.gbox_api_key = gbox_api_key
         self.tinker_api_key = tinker_api_key
@@ -88,6 +92,8 @@ class TinkerCuaAgent:
         self.rollout_logger = rollout_logger
         self.rollout_recorder = rollout_recorder  # RolloutRecorder instance
         self.rollout_id = rollout_id
+        self.max_task_time_seconds = max_task_time_seconds
+        self.max_turn_time_seconds = max_turn_time_seconds
         
         # Track termination reason for reporting
         self.termination_reason = None  # Will be set when task ends
@@ -1017,15 +1023,14 @@ class TinkerCuaAgent:
 
             # Run task in turns
             turn = 0
-            MAX_TASK_TIME = 30 * 60  # 30 minutes in seconds
             
             while turn < self.max_turns and not self.task_completed:
-                # Check for timeout (30 minutes total)
+                # Check for timeout (configurable total task time)
                 elapsed_time = time.time() - task_start_time
-                if elapsed_time > MAX_TASK_TIME:
-                    self.termination_reason = f"timeout_30min"
-                    logger.warning(f"[Task Timeout] Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout after {elapsed_time/60:.1f} minutes. Ending rollout.")
-                    self.result_message = f"Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout"
+                if elapsed_time > self.max_task_time_seconds:
+                    self.termination_reason = f"timeout_{self.max_task_time_seconds//60}min"
+                    logger.warning(f"[Task Timeout] Task exceeded {self.max_task_time_seconds/60:.0f} minute timeout after {elapsed_time/60:.1f} minutes. Ending rollout.")
+                    self.result_message = f"Task exceeded {self.max_task_time_seconds/60:.0f} minute timeout"
                     self.task_completed = False
                     self.task_success = False
                     break
@@ -1188,16 +1193,16 @@ class TinkerCuaAgent:
                             self.db_session.rollback()
                 
                 logger.info(f"[Turn {turn}] About to call _sample_with_tinker()...")
-                # Add timeout for model inference (5 minutes per turn)
+                # Add timeout for model inference (configurable per turn)
                 try:
                     response_message, parse_success, action_tokens, action_logprobs = await asyncio.wait_for(
                         self._sample_with_tinker(self.messages),
-                        timeout=5 * 60  # 5 minutes per turn
+                        timeout=self.max_turn_time_seconds
                     )
                     logger.info(f"[Turn {turn}] _sample_with_tinker() returned")
                 except asyncio.TimeoutError:
                     self.termination_reason = f"model_timeout_turn_{turn}"
-                    logger.error(f"[Turn {turn}] Model inference timed out after 5 minutes. Ending rollout.")
+                    logger.error(f"[Turn {turn}] Model inference timed out after {self.max_turn_time_seconds/60:.0f} minutes. Ending rollout.")
                     self.result_message = f"Model inference timed out on turn {turn}"
                     self.task_completed = False
                     self.task_success = False

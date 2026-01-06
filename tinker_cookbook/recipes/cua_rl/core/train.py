@@ -179,6 +179,10 @@ class CLIConfig:
     # Async rollout configuration
     max_steps_off_policy: int | None = None
     max_concurrent_rollouts: int = 8  # Global rollout concurrency control (for baseline, train, and eval)
+    
+    # Rollout timeout configuration
+    max_task_time_seconds: int = 30 * 60  # Maximum total time for task execution (default: 30 minutes)
+    max_turn_time_seconds: int = 5 * 60  # Maximum time per turn for model inference (default: 5 minutes)
 
 
 async def cli_main(cli_config: CLIConfig) -> None:
@@ -351,6 +355,8 @@ async def cli_main(cli_config: CLIConfig) -> None:
         seed=cli_config.seed,
         db_session=db_session,  # Pass database session for task saving (will be used in __call__)
         training_id=training_id,  # Pass training ID
+        max_task_time_seconds=cli_config.max_task_time_seconds,
+        max_turn_time_seconds=cli_config.max_turn_time_seconds,
     )
     # Don't close db_session here - it will be used when dataset_builder.__call__() is invoked
     # The session will be managed by the global database context
@@ -595,8 +601,13 @@ async def cli_main(cli_config: CLIConfig) -> None:
     
     # Set global database context for training loop
     from tinker_cookbook.recipes.cua_rl.database.database_context import set_database_context
+    from tinker_cookbook.recipes.cua_rl.database.progress_tracker import ProgressTracker
     db_session_for_training = get_session_direct()
     set_database_context(db_session_for_training, training_id)
+    
+    # Initialize progress tracker for training
+    progress_tracker = ProgressTracker(db_session_for_training)
+    logger.info(f"[Progress] Initialized progress tracker for training {training_id}")
     
     # Hook evaluation functions to record to database
     from tinker_cookbook.rl import train as rl_train

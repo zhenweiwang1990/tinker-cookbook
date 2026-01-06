@@ -62,6 +62,9 @@ class Training(Base):
     end_time = Column(DateTime)
     last_heartbeat = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     config_json = Column(Text)
+    avg_turn_time = Column(Float)  # Average time per turn in seconds
+    estimated_total_time = Column(Float)  # Estimated total time in seconds
+    estimated_remaining_time = Column(Float)  # Estimated remaining time in seconds
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -99,6 +102,9 @@ class Baseline(Base):
     avg_turns = Column(Float)
     successful_tasks = Column(Integer)
     metrics_json = Column(Text)
+    avg_turn_time = Column(Float)  # Average time per turn in seconds
+    estimated_total_time = Column(Float)  # Estimated total time in seconds
+    estimated_remaining_time = Column(Float)  # Estimated remaining time in seconds
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -132,6 +138,9 @@ class Eval(Base):
     avg_turns = Column(Float)
     successful_tasks = Column(Integer)
     metrics_json = Column(Text)
+    avg_turn_time = Column(Float)  # Average time per turn in seconds
+    estimated_total_time = Column(Float)  # Estimated total time in seconds
+    estimated_remaining_time = Column(Float)  # Estimated remaining time in seconds
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -222,6 +231,9 @@ class Step(Base):
     num_trajectories = Column(Integer)
     num_tokens = Column(Integer)
     metrics_json = Column(Text)
+    avg_turn_time = Column(Float)  # Average time per turn in seconds
+    estimated_total_time = Column(Float)  # Estimated total time in seconds
+    estimated_remaining_time = Column(Float)  # Estimated remaining time in seconds
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -261,6 +273,9 @@ class Group(Base):
     reward_std = Column(Float)
     success_count = Column(Integer, default=0)
     metrics_json = Column(Text)
+    avg_turn_time = Column(Float)  # Average time per turn in seconds
+    estimated_total_time = Column(Float)  # Estimated total time in seconds
+    estimated_remaining_time = Column(Float)  # Estimated remaining time in seconds
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

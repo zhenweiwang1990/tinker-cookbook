@@ -48,6 +48,8 @@ class CUAEnv(ProblemEnv):
         format_coef: float = 0.0,  # No format penalty for CUA
         task: Optional[CUATask] = None,  # Optional task object for validation
         max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
+        max_task_time_seconds: int = 30 * 60,  # Maximum total time for task execution (default: 30 minutes)
+        max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
     ):
         """
         Initialize CUA Environment.
@@ -62,6 +64,8 @@ class CUAEnv(ProblemEnv):
             max_turns: Maximum number of turns
             box_type: Type of GBox environment (android or linux)
             format_coef: Format coefficient (not used for CUA)
+            max_task_time_seconds: Maximum total time for task execution (default: 30 minutes)
+            max_turn_time_seconds: Maximum time per turn for model inference (default: 5 minutes)
         """
         # Initialize parent with renderer (needed for training conversion)
         super().__init__(renderer or renderers.RoleColonRenderer(None), convo_prefix, format_coef=format_coef)
@@ -73,6 +77,8 @@ class CUAEnv(ProblemEnv):
         self.box_type = box_type
         self.max_recent_turns = max_recent_turns
         self.task = task  # Store task object for validation
+        self.max_task_time_seconds = max_task_time_seconds
+        self.max_turn_time_seconds = max_turn_time_seconds
         
         # TinkerCuaAgent instance (created lazily during rollout)
         self._agent: Optional[TinkerCuaAgent] = None
@@ -170,6 +176,8 @@ class CUAEnv(ProblemEnv):
             rollout_logger=rollout_logger,
             rollout_recorder=rollout_recorder,  # Pass rollout_recorder for database recording
             rollout_id=rollout_id,  # rollout_id is now a UUID
+            max_task_time_seconds=self.max_task_time_seconds,
+            max_turn_time_seconds=self.max_turn_time_seconds,
         )
         # Pass task object to agent for validation
         if self.task:
@@ -361,6 +369,8 @@ class CUADataset(RLDataset):
                 box_type=self.box_type,
                 task=_captured_task,
                 max_recent_turns=self.max_recent_turns,
+                max_task_time_seconds=self.max_task_time_seconds,
+                max_turn_time_seconds=self.max_turn_time_seconds,
             )
         
         return ProblemGroupBuilder(
@@ -397,6 +407,8 @@ class CUADatasetBuilder(RLDatasetBuilder):
     max_recent_turns: int = 5  # Maximum number of recent turns to keep in message history
     db_session: Optional[Session] = None  # Database session for saving tasks
     training_id: Optional[int] = None  # Training ID for database records
+    max_task_time_seconds: int = 30 * 60  # Maximum total time for task execution (default: 30 minutes)
+    max_turn_time_seconds: int = 5 * 60  # Maximum time per turn for model inference (default: 5 minutes)
     
     async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
         from tinker_cookbook.tokenizer_utils import get_tokenizer

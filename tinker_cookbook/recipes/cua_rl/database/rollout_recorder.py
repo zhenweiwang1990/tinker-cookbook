@@ -9,6 +9,7 @@ Key principles:
 2. All queries include explicit verification
 3. Task lookups are session-isolated
 4. Clear logging for debugging
+5. Integrates with ProgressTracker for consistent progress updates
 """
 
 import logging
@@ -34,6 +35,7 @@ from tinker_cookbook.recipes.cua_rl.database.database_dao import (
     create_validation as dao_create_validation,
     get_validation_by_rollout as dao_get_validation_by_rollout,
 )
+from tinker_cookbook.recipes.cua_rl.database.progress_tracker import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,10 @@ class RolloutRecorder:
         self.rollout_db_id: Optional[int] = None
         self.task_db_id: Optional[int] = None
         self.task_id_str: Optional[str] = None
+        self.max_turns: Optional[int] = None
+        
+        # Initialize progress tracker
+        self.progress_tracker = ProgressTracker(session)
         
     def start_rollout(
         self,
@@ -76,6 +82,7 @@ class RolloutRecorder:
         is_eval: bool = False,
         group_id: Optional[int] = None,
         box_type: Optional[str] = None,
+        max_turns: Optional[int] = None,
     ) -> bool:
         """
         Record the start of a rollout.
@@ -160,9 +167,11 @@ class RolloutRecorder:
                 is_eval=is_eval,
                 status="pending",
                 start_time=datetime.utcnow(),
+                max_turns=max_turns or 20,  # Default 20 turns
             )
             
             self.rollout_db_id = rollout.id
+            self.max_turns = max_turns or 20
             
             # Step 5: Update group num_rollouts
             if group_id is not None:
@@ -224,7 +233,7 @@ class RolloutRecorder:
     
     def start_turn(self, turn_num: int) -> Optional[int]:
         """
-        Record the start of a turn.
+        Record the start of a turn and update progress.
         
         Returns:
             Turn database ID, or None if failed
@@ -260,17 +269,22 @@ class RolloutRecorder:
                 start_time=datetime.utcnow(),
             )
             
-            # Update rollout current_turn
-            dao_update_rollout(
-                self.session,
-                self.rollout_db_id,
+            # Update rollout progress using ProgressTracker
+            max_turns = self.max_turns or rollout.max_turns or 20
+            progress_stats = self.progress_tracker.update_rollout_progress(
+                rollout_id=self.rollout_db_id,
                 current_turn=turn_num,
+                max_turns=max_turns,
                 status="running",
             )
             
             self.session.commit()
             
-            logger.debug(f"[RolloutRecorder] Started turn {turn_num} (ID={turn_obj.id})")
+            logger.debug(
+                f"[RolloutRecorder] Started turn {turn_num} (ID={turn_obj.id}), "
+                f"progress={progress_stats.progress_percent:.1f}%, "
+                f"ETA={self.progress_tracker.format_time_estimate(progress_stats.estimated_remaining_time)}"
+            )
             return turn_obj.id
             
         except Exception as e:
@@ -288,7 +302,7 @@ class RolloutRecorder:
         metrics: Optional[Dict[str, Any]] = None,
     ) -> Optional[int]:
         """
-        Record the end of a turn.
+        Record the end of a turn and update progress.
         
         Returns:
             Turn database ID, or None if failed
