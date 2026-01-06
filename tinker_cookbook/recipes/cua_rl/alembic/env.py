@@ -29,8 +29,8 @@ def get_database_url():
     """Get database URL from environment variables."""
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        postgres_host = os.getenv("POSTGRES_HOST", "localhost")
-        postgres_port = os.getenv("POSTGRES_PORT", "5432")
+        postgres_host = os.getenv("POSTGRES_HOST", "127.0.0.1")
+        postgres_port = os.getenv("POSTGRES_PORT", "5433")  # Use 5433 to avoid conflict with Cursor
         postgres_db = os.getenv("POSTGRES_DB", "training_db")
         postgres_user = os.getenv("POSTGRES_USER", "training_user")
         postgres_password = os.getenv("POSTGRES_PASSWORD", "training_password")

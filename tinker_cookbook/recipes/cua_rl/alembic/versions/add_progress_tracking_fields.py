@@ -1,7 +1,7 @@
 """add_progress_tracking_fields
 
 Revision ID: add_progress_tracking
-Revises: e8e01da37736
+Revises: make_rollout_id_unique
 Create Date: 2025-01-06
 
 Adds progress tracking fields to support turn-based progress calculation
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'add_progress_tracking'
-down_revision = 'e8e01da37736'
+down_revision = 'make_rollout_id_unique'
 branch_labels = None
 depends_on = None
 

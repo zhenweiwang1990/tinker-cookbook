@@ -299,6 +299,8 @@ class CUADataset(RLDataset):
         box_type: str = "android",
         seed: int = 0,
         max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
+        max_task_time_seconds: int = 30 * 60,  # Maximum total time for task execution (default: 30 minutes)
+        max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
     ):
         self.tasks = tasks
         self.batch_size = batch_size
@@ -312,6 +314,8 @@ class CUADataset(RLDataset):
         self.box_type = box_type
         self.seed = seed
         self.max_recent_turns = max_recent_turns
+        self.max_task_time_seconds = max_task_time_seconds
+        self.max_turn_time_seconds = max_turn_time_seconds
         
         # Shuffle tasks with seed
         import random
@@ -477,6 +481,8 @@ class CUADatasetBuilder(RLDatasetBuilder):
             box_type=self.box_type,
             seed=self.seed,
             max_recent_turns=self.max_recent_turns,
+            max_task_time_seconds=self.max_task_time_seconds,
+            max_turn_time_seconds=self.max_turn_time_seconds,
         )
         
         # Load evaluation tasks if provided
@@ -520,6 +526,8 @@ class CUADatasetBuilder(RLDatasetBuilder):
                 box_type=self.box_type,
                 max_recent_turns=self.max_recent_turns,
                 seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
+                max_task_time_seconds=self.max_task_time_seconds,
+                max_turn_time_seconds=self.max_turn_time_seconds,
             )
         
         # Force flush before returning

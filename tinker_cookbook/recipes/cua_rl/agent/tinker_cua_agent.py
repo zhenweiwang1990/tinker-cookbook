@@ -51,7 +51,8 @@ class TinkerCuaAgent:
         gbox_api_key: str,
         tinker_api_key: str,
         tinker_model_path: str,  # e.g., "tinker://.../sampler_weights/000080"
-        base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        # base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        base_model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct",
         renderer_name: Optional[str] = None,
         max_turns: int = 20,
         box_type: str = "android",
