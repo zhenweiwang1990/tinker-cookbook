@@ -18,8 +18,8 @@ from tinker_cookbook import renderers
 from tinker_cookbook.completers import StopCondition
 from tinker_cookbook.rl.problem_env import ProblemEnv, ProblemGroupBuilder
 from tinker_cookbook.rl.types import Action, EnvGroupBuilder, RLDataset, RLDatasetBuilder, StepResult
-from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
-from tinker_cookbook.recipes.cua_rl.tinker_cua_agent import TinkerCuaAgent
+from tinker_cookbook.recipes.cua_rl.utils.vision_utils import convert_openai_responses_to_message
+from tinker_cookbook.recipes.cua_rl.agent.tinker_cua_agent import TinkerCuaAgent
 from tinker_cookbook.recipes.cua_rl.demo_tasks import CUATask
 
 logger = logging.getLogger(__name__)
@@ -406,7 +406,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
         # If db_session is None or closed, try to get from global context
         db_session = self.db_session
         if db_session is None:
-            from tinker_cookbook.recipes.cua_rl.database_context import get_database_session
+            from tinker_cookbook.recipes.cua_rl.database.database_context import get_database_session
             db_session = get_database_session()
         
         save_to_db = db_session is not None

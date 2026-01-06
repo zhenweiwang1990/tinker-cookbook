@@ -408,7 +408,7 @@ uv run python -m tinker_cookbook.recipes.cua_rl.rebuild_database
 **Create new migration** (when models change):
 ```bash
 cd tinker_cookbook/recipes/cua_rl
-uv run alembic revision --autogenerate -m "描述更改"
+uv run alembic revision --autogenerate -m "describe changes"
 uv run alembic upgrade head
 ```
 

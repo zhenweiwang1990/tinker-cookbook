@@ -249,13 +249,21 @@ class RolloutLogger:
         
         return lines if lines else [message]
     
-    def log(self, message: str, level: str = "INFO", color: Optional[str] = None):
-        """Add a log message to the buffer. Long messages will be wrapped automatically."""
+    def log(self, message: str, level: str = "INFO", color: Optional[str] = None, flush_immediately: bool = False):
+        """Add a log message to the buffer. Long messages will be wrapped automatically.
+        
+        Args:
+            message: Log message to add
+            level: Log level (INFO, ERROR, etc.)
+            color: Optional color for the message
+            flush_immediately: If True, also print immediately to stdout (for critical messages)
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         # Auto-detect error messages and apply red color if not explicitly specified
         # Check for common error indicators: ⚠, ✗, or "error" (case-insensitive)
         if color is None and ("⚠" in message or "✗" in message or " error" in message.lower() or message.lower().startswith("error")):
             color = "RED"
+            flush_immediately = True  # Always flush error messages immediately
         
         # Wrap long messages (max ~150 chars for message part, timestamp is ~26 chars)
         # Wrap before applying color to avoid counting color codes in length
@@ -273,6 +281,11 @@ class RolloutLogger:
                 # Indent continuation lines (timestamp width + 1 space = ~27 chars)
                 log_entry = " " * 28 + line
             self.log_buffer.append(log_entry)
+            
+            # Optionally flush immediately for critical messages
+            if flush_immediately:
+                import sys
+                print(log_entry, file=sys.stdout, flush=True)
         
         # Also add to trajectory data (store original message, not wrapped)
         if "logs" not in self.trajectory_data:

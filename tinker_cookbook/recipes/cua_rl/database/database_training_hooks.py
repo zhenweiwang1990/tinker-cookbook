@@ -7,15 +7,15 @@ This module provides hooks to record training step information to the database.
 import logging
 from typing import Any, Dict, Optional
 
-from tinker_cookbook.recipes.cua_rl.database_context import get_database_session, get_training_id
-from tinker_cookbook.recipes.cua_rl.database_step import (
+from tinker_cookbook.recipes.cua_rl.database.database_context import get_database_session, get_training_id
+from tinker_cookbook.recipes.cua_rl.database.database_step import (
     get_or_create_step,
     record_step_rollout_start,
     record_step_rollout_complete,
     record_step_training_start,
     record_step_completion,
 )
-from tinker_cookbook.recipes.cua_rl.database_dao import list_rollouts_by_step
+from tinker_cookbook.recipes.cua_rl.database.database_dao import list_rollouts_by_step
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def record_step_after_rollout(step: int, model_path: Optional[str] = None) -> Op
         return None
     
     try:
-        from tinker_cookbook.recipes.cua_rl.database_dao import get_step_by_training_and_step
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import get_step_by_training_and_step
         step_obj = get_step_by_training_and_step(session, training_id, step)
         if not step_obj:
             return None
@@ -97,7 +97,7 @@ def record_step_before_training(step: int) -> Optional[int]:
         return None
     
     try:
-        from tinker_cookbook.recipes.cua_rl.database_dao import get_step_by_training_and_step
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import get_step_by_training_and_step
         step_obj = get_step_by_training_and_step(session, training_id, step)
         if not step_obj:
             return None
@@ -131,7 +131,7 @@ def record_step_after_training(
         return None
     
     try:
-        from tinker_cookbook.recipes.cua_rl.database_dao import get_step_by_training_and_step
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import get_step_by_training_and_step
         step_obj = get_step_by_training_and_step(session, training_id, step)
         if not step_obj:
             return None
@@ -184,7 +184,7 @@ def update_training_progress(step: int, total_steps: Optional[int] = None) -> No
         return
     
     try:
-        from tinker_cookbook.recipes.cua_rl.database_dao import update_training
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import update_training
         progress_percent = (step / total_steps * 100.0) if total_steps else None
         update_training(
             session,

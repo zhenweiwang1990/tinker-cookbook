@@ -1,14 +1,14 @@
-# 使用任务适配器进行训练
+# Training with Task Adapter
 
-本指南说明如何使用任务适配器自动发现所有任务并开始训练。
+This guide explains how to use the task adapter to automatically discover all tasks and start training.
 
-## 快速开始
+## Quick Start
 
-### 1. 使用任务适配器自动分割任务（推荐）
+### 1. Using Task Adapter with Automatic Split (Recommended)
 
-任务适配器会自动发现 `tasks/` 目录下的所有任务，并按固定种子（seed=42）随机分为 80% 训练集和 20% 评估集。
+The task adapter automatically discovers all tasks in the `tasks/` directory and randomly splits them into 80% training set and 20% evaluation set using a fixed seed (seed=42).
 
-#### 训练命令
+#### Training Command
 
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
@@ -22,11 +22,11 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --save_every 10
 ```
 
-#### 使用环境变量设置 API Key
+#### Setting API Keys via Environment Variables
 
 ```bash
 export GBOX_API_KEY="your-gbox-api-key"
-export TINKER_API_KEY="your-tinker-api-key"  # 通常与 GBOX_API_KEY 相同
+export TINKER_API_KEY="your-tinker-api-key"  # Usually same as GBOX_API_KEY
 
 python -m tinker_cookbook.recipes.cua_rl.train \
     --model_name "Qwen/Qwen3-VL-30B-A3B-Instruct" \
@@ -36,9 +36,9 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --groups_per_batch 10
 ```
 
-### 2. 使用所有任务（不分割）
+### 2. Using All Tasks (No Split)
 
-如果你想使用所有任务进行训练（不分割为训练/评估集）：
+If you want to use all tasks for training (without splitting into train/eval sets):
 
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
@@ -48,7 +48,7 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --groups_per_batch 10
 ```
 
-### 3. 自定义分割比例和种子
+### 3. Custom Split Ratio and Seed
 
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
@@ -59,9 +59,9 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --groups_per_batch 10
 ```
 
-### 4. 指定任务目录
+### 4. Specifying Task Directory
 
-如果任务不在默认位置：
+If tasks are not in the default location:
 
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
@@ -72,9 +72,9 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --groups_per_batch 10
 ```
 
-## 完整训练示例
+## Complete Training Examples
 
-### 基本训练配置
+### Basic Training Configuration
 
 ```bash
 export GBOX_API_KEY="your-gbox-api-key"
@@ -95,7 +95,7 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --log_dir "./logs"
 ```
 
-### 高级配置
+### Advanced Configuration
 
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
@@ -117,18 +117,18 @@ python -m tinker_cookbook.recipes.cua_rl.train \
     --log_dir "./logs"
 ```
 
-## 任务适配器配置选项
+## Task Adapter Configuration Options
 
-### TaskSourceConfig 参数
+### TaskSourceConfig Parameters
 
-- `source_type`: 必须为 `"task_adapter"`
-- `split_type`: `"train"` (训练集) 或 `"eval"` (评估集)，如果为 `None` 则使用所有任务
-- `tasks_dir`: 任务目录路径（可选，默认自动检测）
-- `train_ratio`: 训练集比例（默认 0.8，即 80% 训练，20% 评估）
-- `seed`: 随机种子（默认 42，用于可重复的分割）
-- `limit`: 限制任务数量（可选）
+- `source_type`: Must be `"task_adapter"`
+- `split_type`: `"train"` (training set) or `"eval"` (evaluation set), or `None` to use all tasks
+- `tasks_dir`: Task directory path (optional, defaults to auto-detection)
+- `train_ratio`: Training set ratio (default 0.8, i.e., 80% train, 20% eval)
+- `seed`: Random seed (default 42, for reproducible splits)
+- `limit`: Limit number of tasks (optional)
 
-### 示例配置
+### Example Configuration
 
 ```json
 {
@@ -139,9 +139,9 @@ python -m tinker_cookbook.recipes.cua_rl.train \
 }
 ```
 
-## 验证任务加载
+## Verifying Task Loading
 
-在开始训练前，你可以先验证任务是否正确加载：
+Before starting training, you can verify that tasks are loaded correctly:
 
 ```python
 from tinker_cookbook.recipes.cua_rl.tasks.task_adapter import TaskAdapter
@@ -150,44 +150,43 @@ adapter = TaskAdapter(seed=42)
 train_tasks = adapter.get_train_tasks()
 eval_tasks = adapter.get_eval_tasks()
 
-print(f"训练任务: {len(train_tasks)}")
-print(f"评估任务: {len(eval_tasks)}")
+print(f"Training tasks: {len(train_tasks)}")
+print(f"Evaluation tasks: {len(eval_tasks)}")
 
-# 查看前几个训练任务
+# View first few training tasks
 for i, task_info in enumerate(train_tasks[:5], 1):
     task = task_info["task_instance"]
     print(f"{i}. {task.name}: {task.description[:80]}...")
 ```
 
-## 注意事项
+## Notes
 
-1. **固定种子**: 使用相同的 `seed` 值可以确保每次运行都得到相同的训练/评估分割
-2. **任务发现**: 任务适配器会自动发现所有包含 `create_task()` 函数的 `task.py` 文件
-3. **验证**: 当前任务适配器加载的任务没有验证逻辑（`validation_query=None`），如果需要验证，需要在任务定义中实现
-4. **GBox 模式**: 确保 `AdbClient` 使用 GBox 模式时，传入正确的 `gbox_client` 或 `gbox_box` 参数
+1. **Fixed Seed**: Using the same `seed` value ensures you get the same train/eval split on every run
+2. **Task Discovery**: The task adapter automatically discovers all `task.py` files containing a `create_task()` function
+3. **Validation**: Currently, tasks loaded by the task adapter have no validation logic (`validation_query=None`). If validation is needed, it must be implemented in the task definition
+4. **GBox Mode**: Ensure `AdbClient` uses GBox mode by passing the correct `gbox_client` or `gbox_box` parameters
 
-## 故障排除
+## Troubleshooting
 
-### 任务未发现
+### Tasks Not Discovered
 
-如果任务未被发现，检查：
-1. 任务目录结构是否正确（每个任务应该有 `task.py` 文件）
-2. `task.py` 中是否有 `create_task()` 函数
-3. 模块路径是否正确
+If tasks are not discovered, check:
+1. Task directory structure is correct (each task should have a `task.py` file)
+2. `task.py` contains a `create_task()` function
+3. Module paths are correct
 
-### API Key 错误
+### API Key Errors
 
-确保设置了环境变量：
+Make sure environment variables are set:
 ```bash
 export GBOX_API_KEY="your-key"
 export TINKER_API_KEY="your-key"
 ```
 
-或在命令中直接指定：
+Or specify directly in the command:
 ```bash
 python -m tinker_cookbook.recipes.cua_rl.train \
     --gbox_api_key "your-key" \
     --tinker_api_key "your-key" \
     ...
 ```
-

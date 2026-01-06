@@ -7,9 +7,9 @@ import time
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
-from tinker_cookbook.recipes.cua_rl.cua_gbox_client import CuaGBoxClient
-from tinker_cookbook.recipes.cua_rl.cua_gbox_coordinate import CuaGBoxCoordinateGenerator
-from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.gbox.client import CuaGBoxClient
+from tinker_cookbook.recipes.cua_rl.gbox.coordinate import CuaGBoxCoordinateGenerator
+from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
 
 logger = logging.getLogger(__name__)
 

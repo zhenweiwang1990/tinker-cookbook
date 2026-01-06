@@ -11,7 +11,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from tinker_cookbook.recipes.cua_rl.demo_tasks import CUATask
-from tinker_cookbook.recipes.cua_rl.database_dao import (
+from tinker_cookbook.recipes.cua_rl.database.database_dao import (
     create_or_get_task,
     create_or_get_validator,
     get_task_by_task_id,
@@ -165,7 +165,7 @@ def load_tasks_from_database(session: Session, task_ids: Optional[List[str]] = N
         List of CUATask objects
     """
     from tinker_cookbook.recipes.cua_rl.demo_tasks import TaskDifficulty, TaskCategory
-    from tinker_cookbook.recipes.cua_rl.database_dao import list_tasks, get_task_by_task_id
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import list_tasks, get_task_by_task_id
     from tinker_cookbook.recipes.cua_rl.database import json_deserialize
     
     if task_ids:

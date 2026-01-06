@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from tinker_cookbook.recipes.cua_rl.database_dao import (
+from tinker_cookbook.recipes.cua_rl.database.database_dao import (
     create_rollout,
     create_turn,
     create_action,
@@ -26,7 +26,7 @@ from tinker_cookbook.recipes.cua_rl.database_dao import (
     get_rollout_by_rollout_id,
     get_task_by_task_id,
 )
-from tinker_cookbook.recipes.cua_rl.database_models import Task
+from tinker_cookbook.recipes.cua_rl.database.database_models import Task
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def record_rollout_start(
         Rollout ID (UUID string)
     """
     # First, create Environment record (without box_id, it will be updated later)
-    from tinker_cookbook.recipes.cua_rl.database_dao import create_environment
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import create_environment
     env = create_environment(
         session,
         env_type=env_type,
@@ -140,7 +140,7 @@ def record_rollout_start(
     
     # Create or get group if not provided
     if group_id is None and group is not None:
-        from tinker_cookbook.recipes.cua_rl.database_dao import get_or_create_group
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import get_or_create_group
         group_obj = get_or_create_group(
             session,
             source_type=source_type,
@@ -180,7 +180,7 @@ def record_rollout_start(
     # This avoids any session state issues
     if group_id is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_dao import get_group, update_group
+            from tinker_cookbook.recipes.cua_rl.database.database_dao import get_group, update_group
             group_obj = get_group(session, group_id)
             if group_obj:
                 update_group(
@@ -333,7 +333,7 @@ def record_turn_start(
             )
     
     # Check if turn already exists
-    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn_by_rollout_and_turn
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import get_turn_by_rollout_and_turn
     existing_turn = get_turn_by_rollout_and_turn(session, db_rollout.id, turn)
     if existing_turn:
         # CRITICAL: Verify that existing turn belongs to the correct rollout
@@ -454,7 +454,7 @@ def record_turn(
     # CRITICAL: Verify task_id matches if expected_task_id_str is provided
     if expected_task_id_str is not None:
         # Get the task from rollout to verify it matches
-        from tinker_cookbook.recipes.cua_rl.database_models import Task
+        from tinker_cookbook.recipes.cua_rl.database.database_models import Task
         rollout_task = session.query(Task).filter(Task.id == db_rollout.task_id).first()
         if rollout_task:
             if rollout_task.task_id != expected_task_id_str:
@@ -474,7 +474,7 @@ def record_turn(
     # Check if turn already exists
     # Use fresh query to avoid session cache issues
     # CRITICAL: Always query by database rollout.id (integer) to ensure we get the correct Turn
-    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn_by_rollout_and_turn, update_turn
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import get_turn_by_rollout_and_turn, update_turn
     existing_turn = get_turn_by_rollout_and_turn(session, db_rollout.id, turn)
     
     if existing_turn:
@@ -518,9 +518,29 @@ def record_turn(
                 turn_time=turn_time,
                 model_response=model_response,
             )
-            logger.debug(
-                f"Updated existing Turn {turn} (ID: {existing_turn.id}) for Rollout {rollout_id} "
-                f"(DB ID: {db_rollout.id}, Task ID: {db_rollout.task_id})"
+            
+            # Get task info for detailed logging
+            task_id_str = "unknown"
+            task_desc_preview = "unknown"
+            try:
+                rollout_task = session.query(Task).filter(Task.id == db_rollout.task_id).first()
+                if rollout_task:
+                    task_id_str = rollout_task.task_id
+                    task_desc = rollout_task.description or ""
+                    task_desc_preview = task_desc[:50] + "..." if len(task_desc) > 50 else task_desc
+            except Exception:
+                pass
+            
+            # Log with comprehensive info including model_response preview
+            model_response_preview = ""
+            if model_response:
+                preview_text = model_response[:100] + "..." if len(model_response) > 100 else model_response
+                model_response_preview = f" | Model response preview: {preview_text}"
+            
+            logger.info(
+                f"Updated Turn {turn} (Turn DB ID: {existing_turn.id}) for Rollout {rollout_id} "
+                f"(Rollout DB ID: {db_rollout.id}) | Task: {task_id_str} | "
+                f"Task desc: {task_desc_preview}{model_response_preview}"
             )
             return existing_turn.id
     else:
@@ -555,8 +575,28 @@ def record_turn(
             session.flush()
             return None
         
-        logger.debug(
-            f"Successfully created Turn {turn_obj.id} (fallback) for Rollout {rollout_id} (DB ID: {db_rollout.id})"
+        # Get task info for detailed logging
+        task_id_str = "unknown"
+        task_desc_preview = "unknown"
+        try:
+            rollout_task = session.query(Task).filter(Task.id == db_rollout.task_id).first()
+            if rollout_task:
+                task_id_str = rollout_task.task_id
+                task_desc = rollout_task.description or ""
+                task_desc_preview = task_desc[:50] + "..." if len(task_desc) > 50 else task_desc
+        except Exception:
+            pass
+        
+        # Log with comprehensive info including model_response preview
+        model_response_preview = ""
+        if model_response:
+            preview_text = model_response[:100] + "..." if len(model_response) > 100 else model_response
+            model_response_preview = f" | Model response preview: {preview_text}"
+        
+        logger.info(
+            f"Created Turn {turn} (Turn DB ID: {turn_obj.id}, fallback) for Rollout {rollout_id} "
+            f"(Rollout DB ID: {db_rollout.id}) | Task: {task_id_str} | "
+            f"Task desc: {task_desc_preview}{model_response_preview}"
         )
         return turn_obj.id
 
@@ -583,7 +623,7 @@ def record_action(
         Database action ID
     """
     # Verify turn_id exists (safety check)
-    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import get_turn
     turn_obj = get_turn(session, turn_id)
     if turn_obj is None:
         logger.error(f"CRITICAL: Turn ID {turn_id} not found in database. Cannot record action.")
@@ -630,7 +670,7 @@ def record_observation(
         Database observation ID
     """
     # Verify turn_id exists (safety check)
-    from tinker_cookbook.recipes.cua_rl.database_dao import get_turn
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import get_turn
     turn_obj = get_turn(session, turn_id)
     if turn_obj is None:
         logger.error(f"CRITICAL: Turn ID {turn_id} not found in database. Cannot record observation.")

@@ -10,7 +10,7 @@ from alembic import context
 # Add parent directory to path to import our models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))))
 
-from tinker_cookbook.recipes.cua_rl.database_models import Base
+from tinker_cookbook.recipes.cua_rl.database.database_models import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

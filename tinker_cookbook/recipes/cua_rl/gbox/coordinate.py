@@ -10,7 +10,7 @@ except ImportError:
     GboxSDK = None
     logging.warning("gbox_sdk not installed. Install with: pip install gbox-sdk")
 
-from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
 
 logger = logging.getLogger(__name__)
 

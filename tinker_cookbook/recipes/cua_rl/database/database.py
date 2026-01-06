@@ -13,7 +13,7 @@ from typing import Any, Generator, Optional
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tinker_cookbook.recipes.cua_rl.database_models import Base
+from tinker_cookbook.recipes.cua_rl.database.database_models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,8 @@ def init_database(db_url: Optional[str] = None, echo: bool = False) -> None:
         
         if not database_url:
             # Construct from individual environment variables
-            postgres_host = os.getenv("POSTGRES_HOST", "localhost")
-            postgres_port = os.getenv("POSTGRES_PORT", "5432")
+            postgres_host = os.getenv("POSTGRES_HOST", "127.0.0.1")
+            postgres_port = os.getenv("POSTGRES_PORT", "5433")  # Use 5433 to avoid conflict with Cursor
             postgres_db = os.getenv("POSTGRES_DB", "training_db")
             postgres_user = os.getenv("POSTGRES_USER", "training_user")
             postgres_password = os.getenv("POSTGRES_PASSWORD", "training_password")
@@ -76,10 +76,11 @@ def init_database(db_url: Optional[str] = None, echo: bool = False) -> None:
     try:
         from alembic import command
         from alembic.config import Config
-        import os
         
-        # Get alembic.ini path (should be in the same directory as this file)
-        alembic_dir = os.path.dirname(os.path.abspath(__file__))
+        # Get alembic.ini path (should be in the parent directory, not in database/)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # alembic.ini is in tinker_cookbook/recipes/cua_rl/, not in database/
+        alembic_dir = os.path.dirname(current_dir)  # Go up from database/ to cua_rl/
         alembic_ini_path = os.path.join(alembic_dir, "alembic.ini")
         
         if os.path.exists(alembic_ini_path):

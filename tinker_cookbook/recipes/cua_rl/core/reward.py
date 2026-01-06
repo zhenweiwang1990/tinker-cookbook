@@ -502,7 +502,7 @@ async def validate_task_completion(
         q = (task.validation_query or "").lower()
         expected = task.expected_result
 
-        # 1) 当前前台 App (Settings / Chrome 等)
+        # 1) Current foreground app (Settings / Chrome, etc.)
         if q == "current_app":
             out = await _run_shell(
                 "dumpsys window | grep mCurrentFocus || "
@@ -514,7 +514,7 @@ async def validate_task_completion(
                 return expected in out
             return "mCurrentFocus" in out or "mResumedActivity" in out
 
-        # 2) WiFi 开关
+        # 2) WiFi toggle
         if q == "wifi_enabled":
             out = await _run_shell("settings get global wifi_on")
             try:
@@ -523,7 +523,7 @@ async def validate_task_completion(
                 return False
             return bool(val) == bool(expected)
 
-        # 3) 飞行模式
+        # 3) Airplane mode
         if q == "airplane_mode":
             out = await _run_shell("settings get global airplane_mode_on")
             try:
@@ -532,7 +532,7 @@ async def validate_task_completion(
                 return False
             return bool(val) == bool(expected)
 
-        # 4) 亮度
+        # 4) Brightness level
         if q == "brightness_level":
             out = await _run_shell("settings get system screen_brightness")
             try:
@@ -541,7 +541,7 @@ async def validate_task_completion(
                 return False
             return val == int(expected) if isinstance(expected, int) else False
 
-        # 5) 当前 Activity（比如电池页）
+        # 5) Current activity (e.g., battery page)
         if q == "current_activity":
             out = await _run_shell(
                 "dumpsys window | grep mCurrentFocus || "
@@ -553,7 +553,7 @@ async def validate_task_completion(
                 return expected.lower() in out.lower()
             return False
 
-        # 6) 是否在桌面
+        # 6) Is on home screen
         if q == "is_home_screen":
             out = await _run_shell(
                 "dumpsys window | grep mCurrentFocus || "
@@ -570,7 +570,7 @@ async def validate_task_completion(
             )
             return is_home == bool(expected)
 
-        # 7) 屏幕熄屏时间 (ms)
+        # 7) Screen timeout (ms)
         if q == "screen_timeout":
             out = await _run_shell("settings get system screen_off_timeout")
             try:
@@ -579,7 +579,7 @@ async def validate_task_completion(
                 return False
             return val == int(expected) if isinstance(expected, int) else False
 
-        # 8) 勿扰模式 (DND / zen_mode)
+        # 8) Do Not Disturb mode (DND / zen_mode)
         if q == "dnd_enabled":
             out = await _run_shell("settings get global zen_mode")
             try:
@@ -589,7 +589,7 @@ async def validate_task_completion(
             is_enabled = val > 0
             return is_enabled == bool(expected)
 
-        # 9) 蓝牙开关（配合 train_08_enable_bluetooth）
+        # 9) Bluetooth toggle (used with train_08_enable_bluetooth)
         if q == "bluetooth_enabled":
             out = await _run_shell(
                 "settings get global bluetooth_on || "
@@ -953,7 +953,7 @@ async def validate_task_completion_with_details(
         actual_output = ""
         success = False
         
-        # 1) 当前前台 App (Settings / Chrome 等)
+        # 1) Current foreground app (Settings / Chrome, etc.)
         if q == "current_app":
             command = "dumpsys window | grep mCurrentFocus || dumpsys activity | grep mResumedActivity"
             actual_output = await _run_shell(command)
@@ -964,7 +964,7 @@ async def validate_task_completion_with_details(
             else:
                 success = "mCurrentFocus" in actual_output or "mResumedActivity" in actual_output
 
-        # 2) WiFi 开关
+        # 2) WiFi toggle
         elif q == "wifi_enabled":
             command = "settings get global wifi_on"
             actual_output = await _run_shell(command)
@@ -974,7 +974,7 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 3) 飞行模式
+        # 3) Airplane mode
         elif q == "airplane_mode":
             command = "settings get global airplane_mode_on"
             actual_output = await _run_shell(command)
@@ -984,7 +984,7 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 4) 亮度
+        # 4) Brightness level
         elif q == "brightness_level":
             command = "settings get system screen_brightness"
             actual_output = await _run_shell(command)
@@ -994,7 +994,7 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 7) 屏幕熄屏时间 (ms)
+        # 7) Screen timeout (ms)
         elif q == "screen_timeout":
             command = "settings get system screen_off_timeout"
             actual_output = await _run_shell(command)
@@ -1004,7 +1004,7 @@ async def validate_task_completion_with_details(
             except ValueError:
                 success = False
 
-        # 8) 勿扰模式 (DND / zen_mode)
+        # 8) Do Not Disturb mode (DND / zen_mode)
         elif q == "dnd_enabled":
             command = "settings get global zen_mode"
             actual_output = await _run_shell(command)
@@ -1178,27 +1178,27 @@ __all__ = [
 
 
 def cua_reward_fn(prompt, completions, prompt_ids, completion_ids, answer, **kwargs):
-    """CUA 奖励函数 - 直接使用 workflow 传入的终局奖励。
-    
-    这个函数用于 AReaL 训练框架，直接从 kwargs 中获取终局奖励。
+    """CUA reward function - directly uses the final reward passed from workflow.
+
+    This function is used for the AReaL training framework, directly obtaining the final reward from kwargs.
     
     Args:
-        prompt: 输入提示
-        completions: 模型输出
-        prompt_ids: 提示的 token IDs
-        completion_ids: 输出的 token IDs
-        answer: 答案（未使用）
-        **kwargs: 包含 reward, task_success, task_completed 等字段
+        prompt: Input prompt
+        completions: Model output
+        prompt_ids: Token IDs of the prompt
+        completion_ids: Token IDs of the output
+        answer: Answer (unused)
+        **kwargs: Contains reward, task_success, task_completed, etc.
         
     Returns:
-        奖励值（float）
+        Reward value (float)
     """
     if isinstance(completions, list):
         completion = completions[0] if completions else ""
     else:
         completion = completions
     
-    # 直接使用 workflow 传入的 reward
+    # Directly use the reward passed from workflow
     reward = kwargs.get("reward")
     if reward is None:
         task_success = kwargs.get("task_success", False)

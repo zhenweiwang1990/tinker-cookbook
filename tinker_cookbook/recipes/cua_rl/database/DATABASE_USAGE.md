@@ -9,14 +9,14 @@ CUA RL训练系统使用 PostgreSQL 数据库记录整个训练过程的详细�
 ### 方式 1: 使用 DATABASE_URL 环境变量
 
 ```bash
-export DATABASE_URL=postgresql://training_user:training_password@localhost:5432/training_db
+export DATABASE_URL=postgresql://training_user:training_password@127.0.0.1:5432/training_db
 python -m tinker_cookbook.recipes.cua_rl.train --model_name "..." --log_path "/path/to/logs"
 ```
 
 ### 方式 2: 使用独立的 PostgreSQL 环境变量
 
 ```bash
-export POSTGRES_HOST=localhost
+export POSTGRES_HOST=127.0.0.1
 export POSTGRES_PORT=5432
 export POSTGRES_DB=training_db
 export POSTGRES_USER=training_user
@@ -31,7 +31,7 @@ python -m tinker_cookbook.recipes.cua_rl.train --model_name "..." --log_path "/p
 如果使用 training-monitor 的 Docker Compose，可以直接使用相同的数据库：
 
 ```bash
-export DATABASE_URL=postgresql://training_user:training_password@localhost:5432/training_db
+export DATABASE_URL=postgresql://training_user:training_password@127.0.0.1:5432/training_db
 python -m tinker_cookbook.recipes.cua_rl.train --model_name "..." --log_path "/path/to/logs"
 ```
 
@@ -73,7 +73,7 @@ python -m tinker_cookbook.recipes.cua_rl.train --model_name "..." --log_path "/p
 数据库集成是自动的。只需正常启动训练：
 
 ```bash
-export DATABASE_URL=postgresql://training_user:training_password@localhost:5432/training_db
+export DATABASE_URL=postgresql://training_user:training_password@127.0.0.1:5432/training_db
 python -m tinker_cookbook.recipes.cua_rl.train \
     --model_name "Qwen/Qwen3-VL-30B-A3B-Instruct" \
     --log_path "/path/to/logs"
@@ -94,7 +94,7 @@ from tinker_cookbook.recipes.cua_rl.database_dao import (
 )
 
 # 初始化数据库连接
-init_database("postgresql://training_user:training_password@localhost:5432/training_db")
+init_database("postgresql://training_user:training_password@127.0.0.1:5432/training_db")
 
 # 查询训练记录
 with get_session() as session:

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from tinker_cookbook.recipes.cua_rl.database_dao import (
+from tinker_cookbook.recipes.cua_rl.database.database_dao import (
     create_eval,
     create_baseline,
     update_eval,
@@ -140,7 +140,7 @@ def record_baseline_start(
     Returns:
         Database baseline ID
     """
-    from tinker_cookbook.recipes.cua_rl.database_dao import update_baseline
+    from tinker_cookbook.recipes.cua_rl.database.database_dao import update_baseline
     
     baseline = create_baseline(
         session,

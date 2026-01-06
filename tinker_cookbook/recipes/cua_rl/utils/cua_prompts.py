@@ -20,10 +20,10 @@ def create_system_prompt(
     Returns:
         Formatted system prompt
     """
-    # Get the directory containing this file
-    current_dir = Path(__file__).parent
-   #  prompt_file = current_dir / "pc-system-prompt.txt"
-    prompt_file = current_dir / "android-system-prompt.txt"
+    # Get the directory containing this file (utils), then go up to cua_rl
+    current_dir = Path(__file__).parent.parent  # cua_rl directory
+   #  prompt_file = current_dir / "prompts" / "pc-system-prompt.txt"
+    prompt_file = current_dir / "prompts" / "android-system-prompt.txt"
 
     # Read the template from file
     with open(prompt_file, "r", encoding="utf-8") as f:

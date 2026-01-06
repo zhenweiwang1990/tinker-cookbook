@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from tinker_cookbook.recipes.cua_rl.database import get_session, json_serialize, json_deserialize
-from tinker_cookbook.recipes.cua_rl.database_models import (
+from tinker_cookbook.recipes.cua_rl.database.database import get_session, json_serialize, json_deserialize
+from tinker_cookbook.recipes.cua_rl.database.database_models import (
     Action,
     Baseline,
     Environment,
@@ -782,7 +782,7 @@ def create_environment(session: Session, env_type: str, **kwargs) -> Environment
 
 def get_environment_by_rollout(session: Session, rollout_id: int) -> Optional[Environment]:
     """Get environment for a rollout."""
-    from tinker_cookbook.recipes.cua_rl.database_models import Rollout
+    from tinker_cookbook.recipes.cua_rl.database.database_models import Rollout
     rollout = session.query(Rollout).filter(Rollout.id == rollout_id).first()
     if rollout and rollout.env_id:
         return session.query(Environment).filter(Environment.id == rollout.env_id).first()

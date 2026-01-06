@@ -17,7 +17,7 @@ import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
-from tinker_cookbook.recipes.cua_rl.database_models import Base
+from tinker_cookbook.recipes.cua_rl.database.database_models import Base
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

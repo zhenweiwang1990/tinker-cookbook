@@ -16,11 +16,11 @@ import tinker
 
 from tinker_cookbook.completers import TinkerTokenCompleter, TokenCompleter, TokensWithLogprobs
 from tinker_cookbook.rl.types import EnvGroupBuilder, Trajectory, TrajectoryGroup, Transition
-from tinker_cookbook.recipes.cua_rl.cua_env import CUAEnv
-from tinker_cookbook.recipes.cua_rl.vision_utils import convert_openai_responses_to_message
+from tinker_cookbook.recipes.cua_rl.agent.cua_env import CUAEnv
+from tinker_cookbook.recipes.cua_rl.utils.vision_utils import convert_openai_responses_to_message
 from tinker_cookbook.recipes.verifiers_rl.tinker_openai import TinkerAsyncOpenAIClient
 from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
-from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ async def _run_single_env_rollout(
     
     if db_session is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_rollout import (
+            from tinker_cookbook.recipes.cua_rl.database.database_rollout import (
                 record_rollout_start,
                 get_task_db_id,
             )
@@ -123,7 +123,7 @@ async def _run_single_env_rollout(
                         # This is a fallback mechanism - tasks should normally be saved during dataset initialization
                         logger.info(f"[Rollout DB] Task {task_id_str} not found in database (should have been saved during initialization), creating it now as fallback")
                         try:
-                            from tinker_cookbook.recipes.cua_rl.database_task_loader import save_task_to_database
+                            from tinker_cookbook.recipes.cua_rl.database.database_task_loader import save_task_to_database
                             # Determine source_type for task saving
                             task_source_type = "baseline" if source_type == "baseline" else ("eval" if is_eval else "step")
                             task_db_id = save_task_to_database(db_session, env.task, task_source_type)
@@ -160,7 +160,7 @@ async def _run_single_env_rollout(
                         source_id_map["baseline_id"] = baseline_id
                     else:
                         # Fallback to context if not provided as parameter
-                        from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+                        from tinker_cookbook.recipes.cua_rl.database.database_context import get_baseline_id
                         baseline_id_from_context = get_baseline_id()
                         if baseline_id_from_context:
                             source_id_map["baseline_id"] = baseline_id_from_context
@@ -193,7 +193,7 @@ async def _run_single_env_rollout(
                         rollout_id = recorded_rollout_id
                     
                     # Record status change
-                    from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+                    from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_rollout_status
                     record_rollout_status(
                         db_session,
                         rollout_id,  # rollout_id is now a UUID
@@ -267,7 +267,7 @@ async def _run_single_env_rollout(
     # Update rollout status to running BEFORE starting execution
     if db_session is not None and rollout_id is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+            from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_rollout_status
             record_rollout_status(
                 db_session,
                 rollout_id,  # rollout_id is now a UUID
@@ -303,7 +303,7 @@ async def _run_single_env_rollout(
         logger.error(f"[Rollout] Rollout failed for env {env_idx}: {e}", exc_info=True)
         if db_session is not None and rollout_id is not None:
             try:
-                from tinker_cookbook.recipes.cua_rl.database_rollout import record_rollout_status
+                from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_rollout_status
                 record_rollout_status(
                     db_session,
                     rollout_id,  # rollout_id is now a UUID
@@ -364,7 +364,7 @@ async def _run_single_env_rollout(
     if hasattr(rollout_logger, 'trajectory_data') and "adb_validation" in rollout_logger.trajectory_data:
         validation_data = rollout_logger.trajectory_data["adb_validation"]
         validation_screenshot_uri = validation_data.get("screenshot_uri")
-        from tinker_cookbook.recipes.cua_rl.reward import ADBValidationResult
+        from tinker_cookbook.recipes.cua_rl.core.reward import ADBValidationResult
         adb_validation_result = ADBValidationResult(
             command=validation_data.get("command", ""),
             expected_result=validation_data.get("expected_result", ""),
@@ -401,7 +401,7 @@ async def _run_single_env_rollout(
     
     # Compute reward using comprehensive_reward_function
     validation_start = time.time()
-    from tinker_cookbook.recipes.cua_rl.reward import (
+    from tinker_cookbook.recipes.cua_rl.core.reward import (
         comprehensive_reward_function,
         create_rollout_result_from_dict,
         CUARolloutResult,
@@ -504,7 +504,7 @@ async def _run_single_env_rollout(
     # Record rollout completion in database
     if db_session is not None and rollout_id is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_rollout import (
+            from tinker_cookbook.recipes.cua_rl.database.database_rollout import (
                 record_rollout_completion,
                 record_validation,
             )
@@ -633,8 +633,8 @@ async def _run_single_env_rollout(
     if db_session is not None and rollout_id is not None:
         try:
             import json
-            from tinker_cookbook.recipes.cua_rl.database_dao import update_rollout
-            from tinker_cookbook.recipes.cua_rl.database_rollout import get_rollout_by_rollout_id
+            from tinker_cookbook.recipes.cua_rl.database.database_dao import update_rollout
+            from tinker_cookbook.recipes.cua_rl.database.database_rollout import get_rollout_by_rollout_id
             
             # Convert trajectory_turns to JSON-serializable format (for training)
             trajectory_data_list = []
@@ -884,7 +884,7 @@ async def do_cua_group_rollout(
     
     # Determine source_type and source IDs for database
     # Try to get from global context if not provided
-    from tinker_cookbook.recipes.cua_rl.database_context import get_database_session, get_training_id
+    from tinker_cookbook.recipes.cua_rl.database.database_context import get_database_session, get_training_id
     global_db_session = get_database_session()
     if db_session is None and global_db_session is not None:
         db_session = global_db_session
@@ -913,7 +913,7 @@ async def do_cua_group_rollout(
         # This is an evaluation - try to get IDs from context
         # First try baseline (baseline evaluations happen before regular evaluations)
         if step is None:
-            from tinker_cookbook.recipes.cua_rl.database_context import get_baseline_id
+            from tinker_cookbook.recipes.cua_rl.database.database_context import get_baseline_id
             baseline_id_from_context = get_baseline_id()
             if baseline_id_from_context:
                 source_type = "baseline"
@@ -921,7 +921,7 @@ async def do_cua_group_rollout(
                 logger.info(f"[Rollout DB] Using baseline_id={baseline_id_db} from context for baseline rollout")
             else:
                 # Try eval_id as fallback
-                from tinker_cookbook.recipes.cua_rl.database_context import get_eval_id
+                from tinker_cookbook.recipes.cua_rl.database.database_context import get_eval_id
                 eval_id_from_context = get_eval_id()
                 if eval_id_from_context:
                     source_type = "eval"
@@ -931,7 +931,7 @@ async def do_cua_group_rollout(
                     logger.warning(f"[Rollout DB] is_eval=True, step=None, but both baseline_id and eval_id are None in context. Rollout will use 'unknown' as source_type.")
         else:
             # Regular evaluation - try to get eval_id from context
-            from tinker_cookbook.recipes.cua_rl.database_context import get_eval_id
+            from tinker_cookbook.recipes.cua_rl.database.database_context import get_eval_id
             eval_id_from_context = get_eval_id()
             if eval_id_from_context:
                 source_type = "eval"
@@ -948,7 +948,7 @@ async def do_cua_group_rollout(
     group_id_db = None
     if db_session is not None and source_type and group is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_dao import get_or_create_group, update_group
+            from tinker_cookbook.recipes.cua_rl.database.database_dao import get_or_create_group, update_group
             group_obj = get_or_create_group(
                 session=db_session,
                 source_type=source_type,
@@ -995,17 +995,25 @@ async def do_cua_group_rollout(
         # Create a separate session for each environment to avoid concurrent access issues
         # SQLAlchemy sessions are not thread-safe and sharing a session across
         # parallel async tasks can cause data corruption and ID mismatches
+        # CRITICAL: Each environment MUST have its own session to prevent data corruption
         env_db_session = None
         session_created = False
         if db_session is not None:
-            from tinker_cookbook.recipes.cua_rl.database import get_session_direct
+            from tinker_cookbook.recipes.cua_rl.database.database import get_session_direct
             try:
                 env_db_session = get_session_direct()
                 session_created = True
                 logger.debug(f"[Rollout] Created separate DB session for env {env_idx}")
             except Exception as e:
-                logger.warning(f"[Rollout] Failed to create separate DB session for env {env_idx}: {e}, falling back to shared session")
-                env_db_session = db_session
+                # CRITICAL FIX: DO NOT fall back to shared session - this causes data corruption
+                # If we can't create a separate session, we must fail the rollout
+                logger.error(
+                    f"[Rollout] CRITICAL: Failed to create separate DB session for env {env_idx}: {e}. "
+                    f"Cannot proceed with database recording to avoid data corruption. "
+                    f"Rollout will continue without database recording."
+                )
+                # Set env_db_session to None to disable database recording for this rollout
+                env_db_session = None
                 session_created = False
         
         # Create a wrapper task that ensures session cleanup
@@ -1064,7 +1072,7 @@ async def do_cua_group_rollout(
         # If any rollout fails, update group status to failed
         if db_session is not None and group_id_db is not None:
             try:
-                from tinker_cookbook.recipes.cua_rl.database_dao import update_group
+                from tinker_cookbook.recipes.cua_rl.database.database_dao import update_group
                 update_group(
                     db_session,
                     group_id_db,
@@ -1082,7 +1090,7 @@ async def do_cua_group_rollout(
     # Update group status after all rollouts complete
     if db_session is not None and group_id_db is not None:
         try:
-            from tinker_cookbook.recipes.cua_rl.database_dao import get_group, update_group
+            from tinker_cookbook.recipes.cua_rl.database.database_dao import get_group, update_group
             from datetime import datetime
             
             # Count successful and failed rollouts

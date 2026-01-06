@@ -21,16 +21,16 @@ from tinker_cookbook import renderers
 from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
 from tinker_cookbook.image_processing_utils import get_image_processor
 
-from tinker_cookbook.recipes.cua_rl.cua_prompts import create_system_prompt
-from tinker_cookbook.recipes.cua_rl.cua_gbox_client import CuaGBoxClient
-from tinker_cookbook.recipes.cua_rl.cua_gbox_coordinate import CuaGBoxCoordinateGenerator
-from tinker_cookbook.recipes.cua_rl.cua_tools import (
+from tinker_cookbook.recipes.cua_rl.utils.cua_prompts import create_system_prompt
+from tinker_cookbook.recipes.cua_rl.gbox.client import CuaGBoxClient
+from tinker_cookbook.recipes.cua_rl.gbox.coordinate import CuaGBoxCoordinateGenerator
+from tinker_cookbook.recipes.cua_rl.gbox.tools import (
     perform_action_impl,
     sleep_impl,
     TargetElement,
     TOOL_SCHEMAS,
 )
-from tinker_cookbook.recipes.cua_rl.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
 
 logger = logging.getLogger(__name__)
 
@@ -671,9 +671,11 @@ class TinkerCuaAgent:
             # Create GBox environment
             box_creation_start = time.time()
             import os
-            # Get the directory of this file
+            # Get the directory of this file (agent/)
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            tasks_dir = os.path.join(current_dir, "tasks")
+            # Go up one level to cua_rl/, then into tasks/
+            cua_rl_dir = os.path.dirname(current_dir)
+            tasks_dir = os.path.join(cua_rl_dir, "tasks")
             
             # Determine APK path based on task
             if app_name == "airbnb":
@@ -703,11 +705,23 @@ class TinkerCuaAgent:
             sys.stdout.flush()
             sys.stderr.flush()
             if self.rollout_logger:
-                self.rollout_logger.log(f"[Task Setup] Installing APK...")
-            await self.gbox_client.install_apk(apk_path, open_app=True)
-            logger.info(f"[Task Setup] ✓ APK installed and app opened")
-            sys.stdout.flush()
-            sys.stderr.flush()
+                self.rollout_logger.log(f"[Task Setup] Installing APK from {apk_path}...")
+            
+            try:
+                await self.gbox_client.install_apk(apk_path, open_app=True)
+                logger.info(f"[Task Setup] ✓ APK installed and app opened")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                if self.rollout_logger:
+                    self.rollout_logger.log(f"[Task Setup] ✓ APK installed and app opened")
+            except Exception as apk_error:
+                error_msg = f"[Task Setup] ✗ Failed to install APK: {apk_error}"
+                logger.error(error_msg, exc_info=True)
+                sys.stdout.flush()
+                sys.stderr.flush()
+                if self.rollout_logger:
+                    self.rollout_logger.log(error_msg)
+                raise  # Re-raise to be caught by outer exception handler
             
             box_creation_time = time.time() - box_creation_start
             if self.rollout_logger:
@@ -828,7 +842,7 @@ class TinkerCuaAgent:
                 db_turn_id = None
                 if self.db_session is not None and self.rollout_id is not None:
                     try:
-                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn_start, record_rollout_status
+                        from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_turn_start, record_rollout_status
                         from datetime import datetime
                         import os
                         debug_file = os.path.join(os.getenv("CUA_DEBUG_LOG_DIR", "/tmp"), "cua_rollout_debug.log")
@@ -948,7 +962,7 @@ class TinkerCuaAgent:
                 # Record Before screenshot and model_input in database (right after turn start)
                 if db_turn_id is not None and self.db_session is not None:
                     try:
-                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_observation
+                        from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_observation
                         # Convert ModelInput to dict for JSON serialization
                         model_input_dict = None
                         if turn_observation:
@@ -1306,7 +1320,7 @@ class TinkerCuaAgent:
                         # Record turn, actions, and observations in database
                         if self.db_session is not None and self.rollout_id is not None:
                             try:
-                                from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_action, record_observation
+                                from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_turn, record_action, record_observation
                                 from datetime import datetime
                                 
                                 # CRITICAL: Verify rollout_id before recording
@@ -1393,7 +1407,7 @@ class TinkerCuaAgent:
                     # Record turn, actions, and observations in database
                     if self.db_session is not None and self.rollout_id is not None:
                         try:
-                            from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_observation
+                            from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_turn, record_observation
                             from datetime import datetime
                             
                             # Record turn end (this will create the turn if it doesn't exist)
@@ -1435,7 +1449,7 @@ class TinkerCuaAgent:
                 # Record turn, actions, and observations in database
                 if self.db_session is not None and self.rollout_id is not None:
                     try:
-                        from tinker_cookbook.recipes.cua_rl.database_rollout import record_turn, record_action, record_observation
+                        from tinker_cookbook.recipes.cua_rl.database.database_rollout import record_turn, record_action, record_observation
                         from datetime import datetime
                         
                         # CRITICAL: Log rollout_id and task info before recording turn
@@ -1532,7 +1546,7 @@ class TinkerCuaAgent:
             
             if has_validation:
                 try:
-                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                    from tinker_cookbook.recipes.cua_rl.core.reward import validate_task_completion_with_details
                     
                     result_message = getattr(self, 'result_message', '')
                     validation_result = await validate_task_completion_with_details(
@@ -1583,7 +1597,19 @@ class TinkerCuaAgent:
                     )
             
         except Exception as e:
-            logger.error(f"[Task End] ✗ Task failed with exception: {e}", exc_info=True)
+            # Log to both logger and rollout_logger to ensure visibility
+            error_msg = f"[Task End] ✗ Task failed with exception: {e}"
+            logger.error(error_msg, exc_info=True)
+            if self.rollout_logger:
+                self.rollout_logger.log(error_msg)
+                self.rollout_logger.log(f"[Task End] Exception type: {type(e).__name__}")
+                self.rollout_logger.log(f"[Task End] Exception details: {str(e)}")
+                # Log traceback
+                import traceback
+                tb_str = traceback.format_exc()
+                for line in tb_str.split('\n'):
+                    if line.strip():
+                        self.rollout_logger.log(f"[Task End] {line}")
             self.result_message = f"Task failed with error: {str(e)}"
             self.task_success = False
             
@@ -1602,7 +1628,7 @@ class TinkerCuaAgent:
             
             if has_validation:
                 try:
-                    from tinker_cookbook.recipes.cua_rl.reward import validate_task_completion_with_details
+                    from tinker_cookbook.recipes.cua_rl.core.reward import validate_task_completion_with_details
                     
                     result_message = getattr(self, 'result_message', '')
                     validation_result = await validate_task_completion_with_details(

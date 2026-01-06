@@ -52,6 +52,8 @@ export default function RolloutDetail({
   const [screenshotCache, setScreenshotCache] = useState<Map<number, string>>(new Map());
   const [modelInputCache, setModelInputCache] = useState<Map<number, any>>(new Map());
   const [loadingScreenshots, setLoadingScreenshots] = useState<Set<number>>(new Set());
+  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   
   // Use refs to access latest cache values in callbacks without dependencies
   const turnDetailsCacheRef = useRef<Map<number, { actions: any[], observations: any[] }>>(new Map());
@@ -148,6 +150,27 @@ export default function RolloutDetail({
   const handleCloseModelInputModal = useCallback(() => {
     setShowModelInputModal(false);
     setModelInputData(null);
+  }, []);
+
+  const handleOpenVideoModal = useCallback(() => {
+    // Construct video URL from trajectory_path
+    if (data?.rollout?.trajectory_path) {
+      const trajectoryPath = data.rollout.trajectory_path;
+      // trajectory_path is like "logs/trajectories/step_1_batch_0_group_0_rollout_abc123"
+      // Video file is at trajectory_path/recording.mp4
+      const videoPath = `${trajectoryPath}/recording.mp4`;
+      // Use API route to serve video
+      const apiUrl = `/api/videos?path=${encodeURIComponent(videoPath)}`;
+      setVideoUrl(apiUrl);
+      setShowVideoModal(true);
+    } else {
+      alert('No video available for this rollout');
+    }
+  }, [data?.rollout?.trajectory_path]);
+
+  const handleCloseVideoModal = useCallback(() => {
+    setShowVideoModal(false);
+    setVideoUrl(null);
   }, []);
 
   // Function to load turn details on demand
@@ -332,29 +355,49 @@ export default function RolloutDetail({
       const x = coordinates.x * scaleX;
       const y = coordinates.y * scaleY;
       
-      // Draw circle
+      // Draw outer circle (larger, more visible)
       ctx.strokeStyle = '#ff0000';
-      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-      ctx.lineWidth = 3;
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(x, y, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
+      ctx.arc(x, y, Math.max(20, 30 * scaleX), 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
       
-      // Draw crosshair
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 2;
+      // Draw inner circle
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
       ctx.beginPath();
-      ctx.moveTo(x - 20 * scaleX, y);
-      ctx.lineTo(x + 20 * scaleX, y);
-      ctx.moveTo(x, y - 20 * scaleY);
-      ctx.lineTo(x, y + 20 * scaleY);
+      ctx.arc(x, y, Math.max(8, 12 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      
+      // Draw crosshair (longer, more visible)
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - 30 * scaleX, y);
+      ctx.lineTo(x + 30 * scaleX, y);
+      ctx.moveTo(x, y - 30 * scaleY);
+      ctx.lineTo(x, y + 30 * scaleY);
       ctx.stroke();
       
-      // Draw label
-      ctx.fillStyle = '#ff0000';
-      ctx.font = `bold ${Math.max(10, 14 * scaleX)}px Arial`;
-      ctx.fillText(`(${coordinates.x}, ${coordinates.y})`, x + 25 * scaleX, y - 10 * scaleY);
+      // Draw label with background
+      const labelText = `(${coordinates.x}, ${coordinates.y})`;
+      const fontSize = Math.max(12, 16 * scaleX);
+      ctx.font = `bold ${fontSize}px Arial`;
+      const textMetrics = ctx.measureText(labelText);
+      const textWidth = textMetrics.width;
+      const textHeight = fontSize;
+      const padding = 4;
+      const labelX = x + 35 * scaleX;
+      const labelY = y - 15 * scaleY;
+      
+      // Draw label background
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+      ctx.fillRect(labelX - padding, labelY - textHeight, textWidth + padding * 2, textHeight + padding * 2);
+      
+      // Draw label text
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(labelText, labelX, labelY);
     } else if (coordinates.start && coordinates.end) {
       // Two points (swipe, drag, etc.)
       const startX = coordinates.start.x * scaleX;
@@ -362,39 +405,81 @@ export default function RolloutDetail({
       const endX = coordinates.end.x * scaleX;
       const endY = coordinates.end.y * scaleY;
       
-      // Draw start point
-      ctx.strokeStyle = '#00ff00';
-      ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(startX, startY, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-      
-      // Draw end point
-      ctx.strokeStyle = '#ff0000';
-      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-      ctx.beginPath();
-      ctx.arc(endX, endY, Math.max(10, 15 * scaleX), 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-      
-      // Draw line between points
-      ctx.strokeStyle = '#0000ff';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
+      // Draw arrow line between points
+      ctx.strokeStyle = '#0066ff';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(startX, startY);
       ctx.lineTo(endX, endY);
       ctx.stroke();
-      ctx.setLineDash([]);
       
-      // Draw labels
-      ctx.fillStyle = '#00ff00';
-      ctx.font = `bold ${Math.max(10, 14 * scaleX)}px Arial`;
-      ctx.fillText(`Start (${coordinates.start.x}, ${coordinates.start.y})`, startX + 25 * scaleX, startY - 10 * scaleY);
-      ctx.fillStyle = '#ff0000';
-      ctx.fillText(`End (${coordinates.end.x}, ${coordinates.end.y})`, endX + 25 * scaleX, endY - 10 * scaleY);
+      // Draw arrowhead at end point
+      const angle = Math.atan2(endY - startY, endX - startX);
+      const arrowLength = 20 * scaleX;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(
+        endX - arrowLength * Math.cos(angle - Math.PI / 6),
+        endY - arrowLength * Math.sin(angle - Math.PI / 6)
+      );
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(
+        endX - arrowLength * Math.cos(angle + Math.PI / 6),
+        endY - arrowLength * Math.sin(angle + Math.PI / 6)
+      );
+      ctx.stroke();
+      
+      // Draw start point (green)
+      ctx.strokeStyle = '#00cc00';
+      ctx.fillStyle = 'rgba(0, 204, 0, 0.3)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(startX, startY, Math.max(15, 20 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(0, 204, 0, 0.6)';
+      ctx.beginPath();
+      ctx.arc(startX, startY, Math.max(6, 10 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      
+      // Draw end point (red)
+      ctx.strokeStyle = '#ff0000';
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(endX, endY, Math.max(15, 20 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.6)';
+      ctx.beginPath();
+      ctx.arc(endX, endY, Math.max(6, 10 * scaleX), 0, 2 * Math.PI);
+      ctx.fill();
+      
+      // Draw start label with background
+      const startText = `Start (${coordinates.start.x}, ${coordinates.start.y})`;
+      const fontSize = Math.max(12, 16 * scaleX);
+      ctx.font = `bold ${fontSize}px Arial`;
+      const startMetrics = ctx.measureText(startText);
+      const padding = 4;
+      const startLabelX = startX + 25 * scaleX;
+      const startLabelY = startY - 10 * scaleY;
+      
+      ctx.fillStyle = 'rgba(0, 204, 0, 0.9)';
+      ctx.fillRect(startLabelX - padding, startLabelY - fontSize, startMetrics.width + padding * 2, fontSize + padding * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(startText, startLabelX, startLabelY);
+      
+      // Draw end label with background
+      const endText = `End (${coordinates.end.x}, ${coordinates.end.y})`;
+      const endMetrics = ctx.measureText(endText);
+      const endLabelX = endX + 25 * scaleX;
+      const endLabelY = endY - 10 * scaleY;
+      
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+      ctx.fillRect(endLabelX - padding, endLabelY - fontSize, endMetrics.width + padding * 2, fontSize + padding * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(endText, endLabelX, endLabelY);
     }
   }, []);
 
@@ -412,6 +497,15 @@ export default function RolloutDetail({
       const actionResults = turnData?.action_results || [];
       const actionResult = actionResults.length > 0 ? actionResults[0] : null;
       const coordinates = actionResult?.coordinates;
+      
+      console.log('[Coordinates Debug]', {
+        turnNum: currentTurn.turn,
+        hasTurnData: !!turnData,
+        hasActionResults: actionResults.length > 0,
+        hasCoordinates: !!coordinates,
+        coordinates: coordinates,
+        actionResult: actionResult
+      });
       
       if (coordinates) {
         const img = beforeScreenshotRef.current;
@@ -542,6 +636,16 @@ export default function RolloutDetail({
       <div className={styles.header}>
         <h2 className={styles.title}>Rollout Details</h2>
         <div className={styles.headerButtons}>
+          {rollout?.trajectory_path && (
+            <button 
+              className={styles.refreshButton}
+              onClick={handleOpenVideoModal}
+              title="Play Recording"
+              style={{ marginRight: '8px' }}
+            >
+              🎥
+            </button>
+          )}
           <button 
             className={styles.refreshButton} 
             onClick={fetchDetails}
@@ -596,6 +700,34 @@ export default function RolloutDetail({
               <span className={styles.summaryValue} title={task.description}>
                 {task.name.length > 30 ? task.name.substring(0, 30) + '...' : task.name}
               </span>
+            </div>
+          )}
+          {rollout?.trajectory_path && (
+            <div className={styles.summaryItem}>
+              <button
+                onClick={handleOpenVideoModal}
+                style={{
+                  padding: '4px 12px',
+                  backgroundColor: '#6f42c1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = '#5a32a3';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = '#6f42c1';
+                }}
+              >
+                🎥 Play Recording
+              </button>
             </div>
           )}
         </div>
@@ -673,11 +805,6 @@ export default function RolloutDetail({
                 {(() => {
                   const turnData = extractTurnData(rollout, selectedTurn);
                   const action = selectedTurnActions?.[0];
-                  // Check if there's a model input observation (we only have id and obs_type now)
-                  const modelInputObs = selectedTurnObservations?.find(
-                    (obs: any) => obs && obs.obs_type === 'screenshot_before'
-                  );
-                  const hasModelInput = !!modelInputObs;
                   
                   return (
                     <div className={styles.turnMetrics} style={{ 
@@ -691,37 +818,35 @@ export default function RolloutDetail({
                       borderRadius: '4px',
                       border: '1px solid #dee2e6'
                     }}>
-                      {/* Model Input Button */}
-                      {hasModelInput && (
-                        <button
-                          onClick={() => handleOpenModelInputModal(selectedTurn.id)}
-                          disabled={loadingModelInput}
-                          style={{
-                            padding: '6px 12px',
-                            backgroundColor: loadingModelInput ? '#6c757d' : '#007bff',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: loadingModelInput ? 'not-allowed' : 'pointer',
-                            fontSize: '12px',
-                            fontWeight: 500,
-                            transition: 'background-color 0.2s',
-                            opacity: loadingModelInput ? 0.6 : 1,
-                          }}
-                          onMouseOver={(e) => {
-                            if (!loadingModelInput) {
-                              e.currentTarget.style.backgroundColor = '#0056b3';
-                            }
-                          }}
-                          onMouseOut={(e) => {
-                            if (!loadingModelInput) {
-                              e.currentTarget.style.backgroundColor = '#007bff';
-                            }
-                          }}
-                        >
-                          {loadingModelInput ? '⏳ Loading...' : '📝 Model Input'}
-                        </button>
-                      )}
+                      {/* Model Input Button - always show for non-validation turns */}
+                      <button
+                        onClick={() => handleOpenModelInputModal(selectedTurn.id)}
+                        disabled={loadingModelInput}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: loadingModelInput ? '#6c757d' : '#007bff',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: loadingModelInput ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          transition: 'background-color 0.2s',
+                          opacity: loadingModelInput ? 0.6 : 1,
+                        }}
+                        onMouseOver={(e) => {
+                          if (!loadingModelInput) {
+                            e.currentTarget.style.backgroundColor = '#0056b3';
+                          }
+                        }}
+                        onMouseOut={(e) => {
+                          if (!loadingModelInput) {
+                            e.currentTarget.style.backgroundColor = '#007bff';
+                          }
+                        }}
+                      >
+                        {loadingModelInput ? '⏳ Loading...' : '📝 Model Input'}
+                      </button>
                       
                       {/* Reward */}
                       <div className={styles.turnMetric}>
@@ -767,6 +892,83 @@ export default function RolloutDetail({
                           <span className={styles.turnMetricValue}>{turnData.model_inference_time.toFixed(3)}s</span>
                         </div>
                       )}
+                    </div>
+                  );
+                })()}
+
+                {/* Action Details Section */}
+                {(() => {
+                  const turnData = extractTurnData(rollout, selectedTurn);
+                  if (!turnData || !turnData.action_results || turnData.action_results.length === 0) {
+                    return null;
+                  }
+                  
+                  const actionResult = turnData.action_results[0];
+                  const coordinates = actionResult?.coordinates;
+                  
+                  return (
+                    <div className={styles.turnSection} style={{ marginBottom: '16px' }}>
+                      <h4 className={styles.turnSectionTitle}>Action Details</h4>
+                      <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '4px', border: '1px solid #dee2e6' }}>
+                        {/* Action Type */}
+                        {actionResult.action_type && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Action Type:</span>
+                            <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                              {actionResult.action_type}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Coordinates */}
+                        {coordinates && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Coordinates:</span>
+                            {coordinates.x !== undefined && coordinates.y !== undefined ? (
+                              <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                                ({coordinates.x}, {coordinates.y})
+                              </span>
+                            ) : coordinates.start && coordinates.end ? (
+                              <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                                Start: ({coordinates.start.x}, {coordinates.start.y}) → End: ({coordinates.end.x}, {coordinates.end.y})
+                              </span>
+                            ) : (
+                              <span style={{ color: '#999' }}>N/A</span>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Other action details */}
+                        {actionResult.text && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Text:</span>
+                            <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                              {actionResult.text}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Success Status */}
+                        {actionResult.success !== undefined && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Success:</span>
+                            <span style={{ 
+                              color: actionResult.success ? '#28a745' : '#dc3545',
+                              fontWeight: 600
+                            }}>
+                              {actionResult.success ? '✓ Yes' : '✗ No'}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Error Message */}
+                        {actionResult.error && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#dc3545', marginRight: '8px' }}>Error:</span>
+                            <span style={{ color: '#dc3545' }}>{actionResult.error}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })()}
@@ -899,9 +1101,24 @@ export default function RolloutDetail({
                         
                         return (
                           <div style={{ flex: '1', minWidth: 0 }}>
-                            <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
-                              {label}
-                            </h5>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                              <h5 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#666' }}>
+                                {label}
+                              </h5>
+                              {isBefore && showCoordinates && (
+                                <span style={{
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  backgroundColor: '#ff000020',
+                                  color: '#dc3545',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  border: '1px solid #dc3545',
+                                }}>
+                                  📍 Action Point Marked
+                                </span>
+                              )}
+                            </div>
                             <div 
                               className={styles.screenshotContainer}
                               onClick={() => handleScreenshotClick(url)}
@@ -1051,8 +1268,15 @@ export default function RolloutDetail({
                     const details = typeof validation.details_json === 'string' 
                       ? JSON.parse(validation.details_json) 
                       : validation.details_json;
-                    const screenshotUri = details?.screenshot_uri;
+                    let screenshotUri = details?.screenshot_uri;
+                    
                     if (screenshotUri) {
+                      // Convert file path to URL if needed
+                      if (!screenshotUri.startsWith('data:') && !screenshotUri.startsWith('http://') && !screenshotUri.startsWith('https://')) {
+                        const cleanPath = screenshotUri.startsWith('/') ? screenshotUri.slice(1) : screenshotUri;
+                        screenshotUri = `/screenshots/${cleanPath}`;
+                      }
+                      
                       return (
                         <div>
                           <h5 style={{ marginBottom: '10px', fontSize: '14px', fontWeight: 600, color: '#666' }}>
@@ -1086,31 +1310,6 @@ export default function RolloutDetail({
                 })()}
               </div>
             ) : null}
-
-            {/* Trajectory Data Section (after all turns, before validation) */}
-            {rollout?.trajectory_data_json && (
-              <div className={styles.turnsSection} style={{ marginTop: '40px' }}>
-                <div className={styles.turnSection}>
-                  <h3 className={styles.turnSectionTitle} style={{ fontSize: '18px', marginBottom: '20px' }}>
-                    Trajectory Data (for Training)
-                  </h3>
-                  <div className={styles.modelResponseContainer}>
-                    <pre className={styles.modelResponseText} style={{ maxHeight: '600px', overflow: 'auto' }}>
-                      {(() => {
-                        try {
-                          const trajectoryData = typeof rollout.trajectory_data_json === 'string'
-                            ? JSON.parse(rollout.trajectory_data_json)
-                            : rollout.trajectory_data_json;
-                          return JSON.stringify(trajectoryData, null, 2);
-                        } catch (e) {
-                          return String(rollout.trajectory_data_json);
-                        }
-                      })()}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            )}
 
           </div>
         )}
@@ -1172,6 +1371,108 @@ export default function RolloutDetail({
                 objectFit: 'contain',
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Video Modal */}
+      {showVideoModal && videoUrl && (
+        <div 
+          onClick={handleCloseVideoModal}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            cursor: 'pointer',
+            padding: '40px',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#1a1a1a',
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              width: '100%',
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, fontSize: '24px', fontWeight: 600, color: 'white' }}>
+                🎥 Recording
+              </h3>
+              <button
+                onClick={handleCloseVideoModal}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  border: 'none',
+                  color: 'white',
+                  fontSize: '28px',
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  lineHeight: '1',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div 
+              style={{
+                flex: 1,
+                overflow: 'auto',
+                backgroundColor: '#000',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <video
+                controls
+                autoPlay
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  width: 'auto',
+                  height: 'auto',
+                }}
+                onError={(e) => {
+                  console.error('Video load error:', e);
+                  alert('Failed to load video. The video file may not exist or is not accessible.');
+                }}
+              >
+                <source src={videoUrl} type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+            </div>
+            <div style={{ marginTop: '16px', color: '#999', fontSize: '12px', textAlign: 'center' }}>
+              {videoUrl}
+            </div>
           </div>
         </div>
       )}

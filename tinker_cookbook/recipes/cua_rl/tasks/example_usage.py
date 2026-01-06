@@ -5,7 +5,7 @@ import os
 import asyncio
 from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient
 from tinker_cookbook.recipes.cua_rl.tasks.task_adapter import TaskAdapter, get_tasks_train_eval
-from tinker_cookbook.recipes.cua_rl.cua_gbox_client import CuaGBoxClient
+from tinker_cookbook.recipes.cua_rl.gbox.client import CuaGBoxClient
 
 
 async def example_gbox_adb():

@@ -33,6 +33,29 @@ export async function GET(
     const rollout = serializeRow(rolloutResult.rows[0]);
     const taskId = (rollout as any).task_id;
     const envId = (rollout as any).env_id;
+    
+    // Optimize trajectory_data_json: only keep execution_details, remove training_data
+    if ((rollout as any).trajectory_data_json) {
+      try {
+        const trajectoryData = typeof (rollout as any).trajectory_data_json === 'string'
+          ? JSON.parse((rollout as any).trajectory_data_json)
+          : (rollout as any).trajectory_data_json;
+        
+        // Keep only execution_details if it exists
+        if (trajectoryData.execution_details) {
+          (rollout as any).trajectory_data_json = { execution_details: trajectoryData.execution_details };
+        } else if (trajectoryData.turns) {
+          // Backward compatibility: if old format with just turns, keep it
+          (rollout as any).trajectory_data_json = { turns: trajectoryData.turns };
+        } else {
+          // Empty object if nothing useful
+          (rollout as any).trajectory_data_json = {};
+        }
+      } catch (e) {
+        // If parsing fails, remove it entirely
+        (rollout as any).trajectory_data_json = null;
+      }
+    }
 
     // Get task
     let task = null;

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from tinker_cookbook.recipes.cua_rl.database_dao import (
+from tinker_cookbook.recipes.cua_rl.database.database_dao import (
     create_step,
     update_step,
     get_step_by_training_and_step,
