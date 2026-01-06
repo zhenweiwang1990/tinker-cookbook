@@ -10,6 +10,8 @@ interface TimelineItem {
   status: string;
   progress_percent: number;
   created_at: string;
+  start_time: string | null;
+  end_time: string | null;
   step?: number;
 }
 
@@ -83,9 +85,12 @@ export default function TimelineList({
     if (trainingId) {
       fetchTimeline();
       fetchTrainingParams();
-      // Auto-refresh disabled - use manual refresh button instead
-      // const interval = setInterval(fetchTimeline, 2000);
-      // return () => clearInterval(interval);
+      // Auto-refresh every 20 seconds
+      const interval = setInterval(() => {
+        fetchTimeline();
+        fetchTrainingParams();
+      }, 20000);
+      return () => clearInterval(interval);
     }
   }, [trainingId]);
 
@@ -229,6 +234,33 @@ export default function TimelineList({
           items.map((item) => {
             const isSelected =
               selectedItem?.type === item.type && selectedItem?.id === item.id;
+            
+            // Calculate duration if both start_time and end_time exist
+            let durationText = '';
+            if (item.start_time && item.end_time) {
+              const duration = new Date(item.end_time).getTime() - new Date(item.start_time).getTime();
+              const seconds = Math.floor(duration / 1000);
+              const minutes = Math.floor(seconds / 60);
+              const hours = Math.floor(minutes / 60);
+              
+              if (hours > 0) {
+                durationText = `${hours}h ${minutes % 60}m`;
+              } else if (minutes > 0) {
+                durationText = `${minutes}m ${seconds % 60}s`;
+              } else {
+                durationText = `${seconds}s`;
+              }
+            }
+            
+            // Format start time
+            const startTimeText = item.start_time 
+              ? new Date(item.start_time).toLocaleTimeString('zh-CN', { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  second: '2-digit'
+                })
+              : '';
+            
             return (
               <div
                 key={`${item.type}-${item.id}`}
@@ -244,6 +276,18 @@ export default function TimelineList({
                 </div>
                 <div className={styles.content}>
                   <div className={styles.name}>{item.display_name}</div>
+                  <div className={styles.timeInfo}>
+                    {startTimeText && (
+                      <span className={styles.startTime} title="开始时间">
+                        🕐 {startTimeText}
+                      </span>
+                    )}
+                    {durationText && (
+                      <span className={styles.duration} title="耗时">
+                        ⏱️ {durationText}
+                      </span>
+                    )}
+                  </div>
                   <div className={styles.status}>
                     <span
                       className={`${styles.statusBadge} ${

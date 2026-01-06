@@ -21,6 +21,18 @@ interface ActionDetailsProps {
     exec_time?: number;
     text?: string;
     error?: string;
+    duration?: string | number;
+    distance?: string;
+    target?: string;
+    destination?: string;
+    content?: string;
+    replace?: boolean;
+    pressEnterAfterType?: boolean;
+    buttons?: string[];
+    direction?: string;
+    location?: string;
+    // Generic catch-all for other tool-specific parameters
+    [key: string]: any;
   };
 }
 
@@ -143,6 +155,181 @@ export const ActionDetails: React.FC<ActionDetailsProps> = ({
                 verticalAlign: 'middle'
               }}>
                 {actionResult.text}
+              </code>
+            </span>
+          )}
+          
+          {/* Tool-specific parameters */}
+          {actionResult.duration && (
+            <span>
+              <strong style={{ color: '#444' }}>Duration:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                {actionResult.duration}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.distance && (
+            <span>
+              <strong style={{ color: '#444' }}>Distance:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                {actionResult.distance}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.target && (
+            <span>
+              <strong style={{ color: '#444' }}>Target:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px',
+                maxWidth: '200px',
+                display: 'inline-block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle'
+              }}>
+                {actionResult.target}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.destination && (
+            <span>
+              <strong style={{ color: '#444' }}>Destination:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px',
+                maxWidth: '200px',
+                display: 'inline-block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle'
+              }}>
+                {actionResult.destination}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.content && (
+            <span>
+              <strong style={{ color: '#444' }}>Content:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px',
+                maxWidth: '200px',
+                display: 'inline-block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle'
+              }}>
+                {actionResult.content}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.replace !== undefined && (
+            <span>
+              <strong style={{ color: '#444' }}>Replace:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                {actionResult.replace ? 'true' : 'false'}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.pressEnterAfterType !== undefined && (
+            <span>
+              <strong style={{ color: '#444' }}>Press Enter:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                {actionResult.pressEnterAfterType ? 'true' : 'false'}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.buttons && Array.isArray(actionResult.buttons) && (
+            <span>
+              <strong style={{ color: '#444' }}>Buttons:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                [{actionResult.buttons.join(', ')}]
+              </code>
+            </span>
+          )}
+          
+          {actionResult.direction && (
+            <span>
+              <strong style={{ color: '#444' }}>Direction:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px'
+              }}>
+                {actionResult.direction}
+              </code>
+            </span>
+          )}
+          
+          {actionResult.location && (
+            <span>
+              <strong style={{ color: '#444' }}>Location:</strong>{' '}
+              <code style={{ 
+                backgroundColor: '#fff',
+                padding: '1px 5px',
+                borderRadius: '2px',
+                border: '1px solid #dee2e6',
+                fontSize: '11px',
+                maxWidth: '200px',
+                display: 'inline-block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'middle'
+              }}>
+                {actionResult.location}
               </code>
             </span>
           )}

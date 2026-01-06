@@ -37,9 +37,9 @@ export default function TrainingList({ selectedId, onSelect }: TrainingListProps
 
   useEffect(() => {
     fetchTrainings();
-    // Auto-refresh disabled - use manual refresh button instead
-    // const interval = setInterval(fetchTrainings, 2000);
-    // return () => clearInterval(interval);
+    // Auto-refresh every 20 seconds
+    const interval = setInterval(fetchTrainings, 20000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

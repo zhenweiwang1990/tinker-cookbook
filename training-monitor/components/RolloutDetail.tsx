@@ -41,8 +41,8 @@ export default function RolloutDetail({
 }: RolloutDetailProps) {
   const [data, setData] = useState<RolloutDetailData | null>(null);
   const [loading, setLoading] = useState(true);
-  // Use turns.length as the index for Validation tab
-  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number>(propSelectedTurnIndex !== null && propSelectedTurnIndex !== undefined ? propSelectedTurnIndex : 0);
+  // Use turns.length as the index for Validation tab, -1 for Env Build tab
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number>(propSelectedTurnIndex !== null && propSelectedTurnIndex !== undefined ? propSelectedTurnIndex : -1);
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
   const [modalImageSrc, setModalImageSrc] = useState<string | null>(null);
   const [showModelInputModal, setShowModelInputModal] = useState(false);
@@ -256,9 +256,9 @@ export default function RolloutDetail({
   // All useEffect hooks must be before conditional returns
   useEffect(() => {
     fetchDetails();
-    // Auto-refresh disabled - use manual refresh button instead
-    // const interval = setInterval(fetchDetails, 2000);
-    // return () => clearInterval(interval);
+    // Auto-refresh every 2 seconds
+    const interval = setInterval(fetchDetails, 2000);
+    return () => clearInterval(interval);
   }, [rolloutId]);
 
   // Sync propSelectedTurnIndex to state
@@ -273,11 +273,11 @@ export default function RolloutDetail({
   const turnsLength = data?.turns?.length ?? 0;
   useEffect(() => {
     if (turnsLength > 0) {
-      // If selectedTurnIndex is out of bounds (beyond turns.length, which is Validation tab), reset to 0
+      // Allow -1 for Env Build, 0 to turns.length-1 for turns, turns.length for Validation
       setSelectedTurnIndex((currentIndex) => {
-        // Allow turns.length for Validation tab, but anything beyond that is invalid
+        // If currentIndex is out of bounds (beyond turns.length), reset to -1 (Env Build)
         if (currentIndex > turnsLength) {
-          return 0;
+          return -1;
         }
         return currentIndex;
       });
@@ -492,6 +492,7 @@ export default function RolloutDetail({
   // Calculate selectedTurnId (before any conditional returns or useEffect hooks that use it)
   const selectedTurnId = (() => {
     if (!data?.turns || data.turns.length === 0) return null;
+    if (selectedTurnIndex < 0) return null;  // Env Build tab
     if (selectedTurnIndex >= data.turns.length) return null;
     return data.turns[selectedTurnIndex]?.id ?? null;
   })();
@@ -668,7 +669,32 @@ export default function RolloutDetail({
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <h2 className={styles.title}>Rollout Details</h2>
+        <div style={{ flex: 1 }}>
+          <h2 className={styles.title}>Rollout Details</h2>
+          {task && (
+            <div style={{ 
+              marginTop: '6px',
+              fontSize: '12px',
+              color: '#666',
+              display: 'flex',
+              gap: '8px',
+              alignItems: 'center'
+            }}>
+              <span style={{ fontWeight: 600, color: '#333' }}>{task.name}</span>
+              <span style={{ color: '#999' }}>•</span>
+              <span style={{ 
+                fontFamily: 'monospace',
+                fontSize: '11px',
+                backgroundColor: '#f0f0f0',
+                padding: '2px 6px',
+                borderRadius: '3px',
+                color: '#666'
+              }}>
+                ID: {task.id}
+              </span>
+            </div>
+          )}
+        </div>
         <div className={styles.headerButtons}>
           {rollout?.trajectory_path && (
             <button 
@@ -771,8 +797,15 @@ export default function RolloutDetail({
           <div className={styles.detailsRow}>
             {task && (
               <div className={styles.detailSection}>
-                <span className={styles.detailLabel}>Task:</span>
-                <span className={styles.detailValue}>{task.description}</span>
+                <span className={styles.detailLabel}>Task Description:</span>
+                <span className={styles.detailValue} style={{ 
+                  color: '#212529', 
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  lineHeight: '1.5'
+                }}>
+                  {task.description}
+                </span>
               </div>
             )}
             {validation && validation.validation_query && (
@@ -801,6 +834,44 @@ export default function RolloutDetail({
           <div className={styles.turnsSection}>
             <div className={styles.tabsContainer}>
               <div className={styles.tabs}>
+                {/* Env Build Tab */}
+                {(() => {
+                  // Get env build time
+                  let envBuildTime: number | null = null;
+                  try {
+                    const trajectoryData = typeof rollout.trajectory_data_json === 'string'
+                      ? JSON.parse(rollout.trajectory_data_json)
+                      : rollout.trajectory_data_json;
+                    const executionDetails = trajectoryData?.execution_details || trajectoryData;
+                    envBuildTime = executionDetails?.env_build?.total_time;
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                  
+                  return (
+                    <button
+                      className={`${styles.tab} ${selectedTurnIndex === -1 ? styles.tabActive : ''}`}
+                      onClick={() => {
+                        setSelectedTurnIndex(-1);
+                        if (onTurnChange) {
+                          onTurnChange(-1);
+                        }
+                      }}
+                    >
+                      <span className={styles.tabNumber}>Env Build</span>
+                      {envBuildTime !== null && envBuildTime !== undefined && (
+                        <span className={styles.tabBadge} style={{ 
+                          backgroundColor: '#6c757d',
+                          marginLeft: '4px',
+                          fontSize: '11px',
+                          padding: '2px 6px'
+                        }}>
+                          {envBuildTime.toFixed(1)}s
+                        </span>
+                      )}
+                    </button>
+                  );
+                })()}
                 {turns.map((turn, index) => (
                   <button
                     key={turn.id}
@@ -813,6 +884,16 @@ export default function RolloutDetail({
                     }}
                   >
                     <span className={styles.tabNumber}>Turn {turn.turn}</span>
+                    {turn.turn_time !== null && turn.turn_time !== undefined && (
+                      <span className={styles.tabBadge} style={{ 
+                        backgroundColor: '#6c757d',
+                        marginLeft: '4px',
+                        fontSize: '11px',
+                        padding: '2px 6px'
+                      }}>
+                        {turn.turn_time.toFixed(1)}s
+                      </span>
+                    )}
                     {turn.episode_done && <span className={styles.tabBadge}>Final</span>}
                   </button>
                 ))}
@@ -827,13 +908,238 @@ export default function RolloutDetail({
                     }}
                   >
                     <span className={styles.tabNumber}>Validation</span>
+                    {validation.execution_time !== null && validation.execution_time !== undefined && (
+                      <span className={styles.tabBadge} style={{ 
+                        backgroundColor: '#6c757d',
+                        marginLeft: '4px',
+                        fontSize: '11px',
+                        padding: '2px 6px'
+                      }}>
+                        {validation.execution_time.toFixed(1)}s
+                      </span>
+                    )}
                   </button>
                 )}
               </div>
             </div>
 
             {/* Selected Turn Content or Validation Content */}
-            {selectedTurnIndex < turns.length && selectedTurn ? (
+            {selectedTurnIndex === -1 ? (
+              /* Env Build Content */
+              <div className={styles.turnContent}>
+                {(() => {
+                  // Parse env_build from trajectory_data_json
+                  let envBuildData: any = null;
+                  try {
+                    const trajectoryData = typeof rollout.trajectory_data_json === 'string'
+                      ? JSON.parse(rollout.trajectory_data_json)
+                      : rollout.trajectory_data_json;
+                    
+                    // Check for env_build in execution_details (new structure) or top-level (old structure)
+                    const executionDetails = trajectoryData?.execution_details || trajectoryData;
+                    envBuildData = executionDetails?.env_build;
+                  } catch (e) {
+                    console.error('Failed to parse env_build data:', e);
+                  }
+                  
+                  if (!envBuildData || !envBuildData.stages || envBuildData.stages.length === 0) {
+                    return (
+                      <div style={{ padding: '20px', textAlign: 'center', color: '#999' }}>
+                        No environment build information available
+                      </div>
+                    );
+                  }
+                  
+                  const { stages, total_time, status, box_id, box_type, apk_path, apk_size_mb, prehook_executed, prehook_output } = envBuildData;
+                  
+                  return (
+                    <div style={{ padding: '20px' }}>
+                      {/* Summary */}
+                      <div style={{ 
+                        marginBottom: '24px', 
+                        padding: '16px', 
+                        backgroundColor: status === 'success' ? '#d4edda' : status === 'error' ? '#f8d7da' : '#fff3cd',
+                        borderRadius: '8px',
+                        border: `1px solid ${status === 'success' ? '#c3e6cb' : status === 'error' ? '#f5c6cb' : '#ffeaa7'}`
+                      }}>
+                        <h3 style={{ margin: '0 0 12px 0', fontSize: '18px', fontWeight: 600 }}>
+                          Environment Build Summary
+                        </h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '14px' }}>
+                          <div>
+                            <strong>Status:</strong>{' '}
+                            <span style={{ 
+                              color: status === 'success' ? '#155724' : status === 'error' ? '#721c24' : '#856404',
+                              fontWeight: 600 
+                            }}>
+                              {status === 'success' ? '✓ Success' : status === 'error' ? '✗ Failed' : '⋯ In Progress'}
+                            </span>
+                          </div>
+                          <div>
+                            <strong>Total Time:</strong> {total_time ? `${total_time.toFixed(3)}s` : 'N/A'}
+                          </div>
+                          {box_id && (
+                            <div>
+                              <strong>Box ID:</strong> <code>{box_id}</code>
+                            </div>
+                          )}
+                          {box_type && (
+                            <div>
+                              <strong>Box Type:</strong> {box_type}
+                            </div>
+                          )}
+                          {apk_size_mb && (
+                            <div>
+                              <strong>APK Size:</strong> {apk_size_mb} MB
+                            </div>
+                          )}
+                          <div>
+                            <strong>Prehook:</strong> {prehook_executed ? '✓ Executed' : '✗ Not Executed'}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Timeline */}
+                      <div style={{ marginBottom: '24px' }}>
+                        <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: 600 }}>
+                          Build Timeline
+                        </h3>
+                        <div style={{ position: 'relative', paddingLeft: '40px' }}>
+                          {/* Vertical line */}
+                          <div style={{
+                            position: 'absolute',
+                            left: '16px',
+                            top: '8px',
+                            bottom: '8px',
+                            width: '2px',
+                            backgroundColor: '#dee2e6'
+                          }} />
+                          
+                          {stages.map((stage: any, index: number) => {
+                            const stageStatus = stage.status;
+                            const stageDuration = stage.duration;
+                            const stageDetails = stage.details || {};
+                            const stageError = stage.error;
+                            
+                            const statusColor = stageStatus === 'success' ? '#28a745' : 
+                                              stageStatus === 'error' ? '#dc3545' : '#ffc107';
+                            const statusIcon = stageStatus === 'success' ? '✓' : 
+                                             stageStatus === 'error' ? '✗' : '⋯';
+                            
+                            return (
+                              <div key={index} style={{ 
+                                position: 'relative', 
+                                marginBottom: '24px',
+                                paddingLeft: '8px'
+                              }}>
+                                {/* Timeline dot */}
+                                <div style={{
+                                  position: 'absolute',
+                                  left: '-32px',
+                                  top: '4px',
+                                  width: '16px',
+                                  height: '16px',
+                                  borderRadius: '50%',
+                                  backgroundColor: statusColor,
+                                  border: '3px solid white',
+                                  boxShadow: '0 0 0 2px ' + statusColor,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '10px',
+                                  color: 'white',
+                                  fontWeight: 'bold'
+                                }} />
+                                
+                                <div style={{
+                                  backgroundColor: 'white',
+                                  border: '1px solid #dee2e6',
+                                  borderRadius: '8px',
+                                  padding: '12px 16px',
+                                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                                }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                    <div style={{ fontSize: '16px', fontWeight: 600 }}>
+                                      {statusIcon} {stage.name}
+                                    </div>
+                                    {stageDuration !== null && stageDuration !== undefined && (
+                                      <div style={{ 
+                                        fontSize: '14px', 
+                                        color: '#666',
+                                        backgroundColor: '#f8f9fa',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px'
+                                      }}>
+                                        {stageDuration.toFixed(3)}s
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  {/* Stage Details */}
+                                  {Object.keys(stageDetails).length > 0 && (
+                                    <div style={{ 
+                                      fontSize: '13px', 
+                                      color: '#666',
+                                      marginTop: '8px',
+                                      paddingTop: '8px',
+                                      borderTop: '1px solid #f0f0f0'
+                                    }}>
+                                      {Object.entries(stageDetails).map(([key, value]) => (
+                                        <div key={key} style={{ marginBottom: '4px' }}>
+                                          <strong>{key}:</strong> {String(value)}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  
+                                  {/* Stage Error */}
+                                  {stageError && (
+                                    <div style={{ 
+                                      marginTop: '8px',
+                                      padding: '8px 12px',
+                                      backgroundColor: '#f8d7da',
+                                      border: '1px solid #f5c6cb',
+                                      borderRadius: '4px',
+                                      color: '#721c24',
+                                      fontSize: '13px'
+                                    }}>
+                                      <strong>Error:</strong> {stageError}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      
+                      {/* Prehook Output */}
+                      {prehook_output && (
+                        <div style={{ marginBottom: '24px' }}>
+                          <h3 style={{ margin: '0 0 12px 0', fontSize: '18px', fontWeight: 600 }}>
+                            Prehook Output
+                          </h3>
+                          <pre style={{
+                            backgroundColor: '#f8f9fa',
+                            border: '1px solid #dee2e6',
+                            borderRadius: '4px',
+                            padding: '12px',
+                            fontSize: '13px',
+                            lineHeight: '1.5',
+                            overflow: 'auto',
+                            maxHeight: '300px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word'
+                          }}>
+                            {prehook_output}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : selectedTurnIndex < turns.length && selectedTurn ? (
               <div className={styles.turnContent}>
                 {/* Compact Turn Header with Integrated Timeline */}
                 {(() => {

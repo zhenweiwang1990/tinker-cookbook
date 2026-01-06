@@ -8,19 +8,20 @@
 .header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 10px 16px;
+  align-items: flex-start;
+  padding: 12px 16px;
   border-bottom: 1px solid #e0e0e0;
   background-color: #fafafa;
   flex-shrink: 0;
   z-index: 10;
+  gap: 16px;
 }
 
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: #212529;
 }
 
 .headerButtons {
@@ -469,9 +470,9 @@
 /* Model Response */
 .modelResponseContainer {
   flex: 1;
-  padding: 8px;
-  background-color: #fafafa;
-  border: 1px solid #e0e0e0;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
   border-radius: 4px;
   overflow-y: auto;
   min-height: 0;
@@ -480,9 +481,10 @@
 .modelResponseText {
   margin: 0;
   font-family: 'Courier New', monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  color: #333;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #212529;
+  font-weight: 500;
   white-space: pre-wrap;
   word-break: break-word;
 }

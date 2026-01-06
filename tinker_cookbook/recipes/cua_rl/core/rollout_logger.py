@@ -87,6 +87,7 @@ class RolloutLogger:
             "turns": [],
             "screenshots": [],
             "summary": {},
+            "env_build": {},  # Store environment build information
         }
         self.current_turn: Optional[Dict[str, Any]] = None
         self.start_time = time.time()
@@ -932,6 +933,117 @@ class RolloutLogger:
         
         # Close the table
         self.log(self._table_bottom())
+    
+    def log_env_build_start(self):
+        """Start logging environment build phase."""
+        self.trajectory_data["env_build"] = {
+            "start_time": time.time(),
+            "stages": [],
+            "total_time": 0.0,
+            "status": "in_progress",
+            "box_id": None,
+            "box_type": None,
+            "box_region": None,
+            "apk_path": None,
+            "apk_size_mb": None,
+            "prehook_executed": False,
+            "prehook_output": None,
+        }
+        self.log("")
+        self.log(self._table_top())
+        self.log(self._table_row("Environment Build"))
+        self.log(self._table_separator())
+    
+    def log_env_build_stage(
+        self,
+        stage_name: str,
+        status: str,  # "in_progress", "success", "error"
+        duration: Optional[float] = None,
+        details: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ):
+        """Log a stage in environment build process.
+        
+        Args:
+            stage_name: Name of the stage (e.g., "Box Creation", "APK Installation")
+            status: Status of the stage ("in_progress", "success", "error")
+            duration: Time taken for this stage in seconds
+            details: Additional details for the stage (e.g., box_id, apk_size)
+            error: Error message if stage failed
+        """
+        stage_info = {
+            "name": stage_name,
+            "status": status,
+            "timestamp": time.time(),
+            "duration": duration,
+            "details": details or {},
+            "error": error,
+        }
+        
+        if "env_build" not in self.trajectory_data:
+            self.log_env_build_start()
+        
+        self.trajectory_data["env_build"]["stages"].append(stage_info)
+        
+        # Format status icon
+        if status == "success":
+            status_icon = self._color("✓", "GREEN")
+        elif status == "error":
+            status_icon = self._color("✗", "RED")
+        else:  # in_progress
+            status_icon = self._color("⋯", "YELLOW")
+        
+        # Format duration
+        duration_str = f"{duration:.3f}s" if duration is not None else "N/A"
+        
+        # Log stage
+        stage_line = f"{status_icon} {stage_name} | {duration_str}"
+        self.log(self._table_row(stage_line))
+        
+        # Log details if available
+        if details:
+            for key, value in details.items():
+                detail_line = f"  ↳ {key}: {value}"
+                wrapped_details = self._wrap_text_for_table(detail_line)
+                for wrapped_line in wrapped_details:
+                    self.log(self._table_row(wrapped_line))
+        
+        # Log error if present
+        if error:
+            error_lines = self._wrap_text_for_table(f"  ↳ Error: {error}")
+            for error_line in error_lines:
+                self.log(self._table_row(self._color(error_line, "RED")))
+    
+    def log_env_build_complete(
+        self,
+        total_time: float,
+        box_id: Optional[str] = None,
+        box_type: Optional[str] = None,
+        success: bool = True,
+    ):
+        """Complete environment build logging.
+        
+        Args:
+            total_time: Total time for environment build
+            box_id: GBox box ID
+            box_type: GBox box type (android/linux)
+            success: Whether environment build succeeded
+        """
+        if "env_build" in self.trajectory_data:
+            self.trajectory_data["env_build"]["total_time"] = total_time
+            self.trajectory_data["env_build"]["status"] = "success" if success else "error"
+            self.trajectory_data["env_build"]["box_id"] = box_id
+            self.trajectory_data["env_build"]["box_type"] = box_type
+        
+        # Close the table
+        self.log(self._table_separator())
+        status_icon = self._color("✓", "GREEN") if success else self._color("✗", "RED")
+        summary_line = f"{status_icon} Environment Build Complete | Total: {total_time:.3f}s"
+        if box_id:
+            summary_line += f" | Box ID: {box_id}"
+        self.log(self._table_row(summary_line))
+        self.log(self._table_bottom())
+
     
     def set_summary(self, summary: Dict[str, Any]):
         """Set rollout summary."""

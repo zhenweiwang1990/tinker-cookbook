@@ -35,6 +35,9 @@ _current_eval_model_path: str | None = None
 _current_eval_model_path: str | None = None
 _eval_group_counter: dict | None = None
 
+# Global semaphore for rollout concurrency control
+_rollout_semaphore: asyncio.Semaphore | None = None
+
 def set_eval_model_path(model_path: str | None):
     """Set the current model_path for evaluation rollouts."""
     global _current_eval_model_path, _eval_group_counter
@@ -59,6 +62,21 @@ async def _cua_group_rollout_for_eval(
     Note: group number cannot be determined from env_group_builder alone.
     We use a global counter to track group numbers across parallel evaluations.
     """
+    global _rollout_semaphore
+    
+    # Use semaphore to control concurrency
+    if _rollout_semaphore is not None:
+        async with _rollout_semaphore:
+            return await _do_cua_group_rollout_for_eval_impl(env_group_builder, policy)
+    else:
+        return await _do_cua_group_rollout_for_eval_impl(env_group_builder, policy)
+
+
+async def _do_cua_group_rollout_for_eval_impl(
+    env_group_builder: EnvGroupBuilder,
+    policy: TokenCompleter
+):
+    """Implementation of evaluation rollout (separated for semaphore wrapping)."""
     global _current_eval_model_path, _eval_group_counter
     
     # Use the global model_path if available, otherwise try to extract from policy
@@ -132,7 +150,7 @@ class CLIConfig:
     eval_tasks: dict | list[dict] | None = None  # Optional TaskSourceConfig dict(s) for evaluation. If None and use_default_eval_tasks=True, will use default (10 random tasks from demo_eval)
     use_default_eval_tasks: bool = True  # If True and eval_tasks is None, will use default: 10 random tasks from demo_eval
     seed: int = 0
-    max_turns: int = 3
+    max_turns: int = 20
     
     # Training hyperparameters
     group_size: int = 4
@@ -160,11 +178,17 @@ class CLIConfig:
     
     # Async rollout configuration
     max_steps_off_policy: int | None = None
+    max_concurrent_rollouts: int = 8  # Global rollout concurrency control (for baseline, train, and eval)
 
 
 async def cli_main(cli_config: CLIConfig) -> None:
     """Main training function."""
     import os
+    
+    # Create global rollout concurrency control semaphore
+    global _rollout_semaphore
+    _rollout_semaphore = asyncio.Semaphore(cli_config.max_concurrent_rollouts)
+    logger.info(f"[Concurrency] Set max concurrent rollouts to {cli_config.max_concurrent_rollouts}")
     
     # Get API keys from environment if not provided
     gbox_api_key = cli_config.gbox_api_key or os.getenv("GBOX_API_KEY")
@@ -348,6 +372,31 @@ async def cli_main(cli_config: CLIConfig) -> None:
         is_eval=False,
     ):
         """Wrapper that adds database recording to rollout."""
+        global _rollout_semaphore
+        
+        # Use semaphore to control concurrency
+        # Only apply to training rollouts; eval rollouts already have semaphore in _cua_group_rollout_for_eval
+        if _rollout_semaphore is not None and not is_eval:
+            async with _rollout_semaphore:
+                return await _do_cua_group_rollout_with_db_impl(
+                    env_group_builder, policy, model_path, step, batch, group, output_dir, is_eval
+                )
+        else:
+            return await _do_cua_group_rollout_with_db_impl(
+                env_group_builder, policy, model_path, step, batch, group, output_dir, is_eval
+            )
+    
+    async def _do_cua_group_rollout_with_db_impl(
+        env_group_builder,
+        policy,
+        model_path,
+        step,
+        batch,
+        group,
+        output_dir,
+        is_eval,
+    ):
+        """Implementation of rollout with database recording (separated for semaphore wrapping)."""
         from tinker_cookbook.recipes.cua_rl.database.database_context import get_database_session, get_baseline_id, get_training_id
         from tinker_cookbook.recipes.cua_rl.database.database_training_hooks import (
             record_step_before_rollout,

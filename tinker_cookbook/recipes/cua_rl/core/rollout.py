@@ -553,7 +553,7 @@ async def _run_single_env_rollout(
                 "execution_details": None,  # Detailed execution info from RolloutLogger
             }
             
-            # Add RolloutLogger's trajectory_data if available (contains turns, action_results, tool_executions, etc.)
+            # Add RolloutLogger's trajectory_data if available (contains turns, action_results, tool_executions, env_build, etc.)
             if hasattr(rollout_logger, 'trajectory_data') and rollout_logger.trajectory_data:
                 try:
                     # Convert rollout_logger.trajectory_data to JSON-serializable format
@@ -562,10 +562,24 @@ async def _run_single_env_rollout(
                 except Exception as e:
                     logger.warning(f"Failed to serialize rollout_logger.trajectory_data: {e}")
             
+            # Get existing trajectory_data_json from database (might have env_build from early save)
+            db_rollout = get_rollout_by_rollout_id(db_session, rollout_id)
+            if db_rollout and db_rollout.trajectory_data_json:
+                try:
+                    existing_data = json.loads(db_rollout.trajectory_data_json)
+                    # If existing data has env_build but new data doesn't, preserve it
+                    if (existing_data.get("execution_details", {}).get("env_build") and 
+                        not combined_trajectory_data.get("execution_details", {}).get("env_build")):
+                        if combined_trajectory_data["execution_details"] is None:
+                            combined_trajectory_data["execution_details"] = {}
+                        combined_trajectory_data["execution_details"]["env_build"] = existing_data["execution_details"]["env_build"]
+                        logger.debug("Preserved env_build data from early save")
+                except Exception as e:
+                    logger.debug(f"Could not merge existing trajectory data: {e}")
+            
             trajectory_data_json = json.dumps(combined_trajectory_data, default=str)
             
             # Update rollout with trajectory_data_json
-            db_rollout = get_rollout_by_rollout_id(db_session, rollout_id)
             if db_rollout:
                 update_rollout(
                     db_session,

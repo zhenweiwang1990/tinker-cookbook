@@ -567,6 +567,66 @@ class TinkerCuaAgent:
         
         return response_message, parse_success, tokens, logprobs
     
+    def _save_turn_data_to_db(self, turn: int):
+        """Save the completed turn's data to database immediately."""
+        if not self.rollout_logger or not self.rollout_recorder:
+            return
+        
+        try:
+            import json
+            # Get the turn data that was just saved
+            if (hasattr(self.rollout_logger, 'trajectory_data') and 
+                'turns' in self.rollout_logger.trajectory_data):
+                turns_data = self.rollout_logger.trajectory_data['turns']
+                # Find the turn we just completed
+                completed_turn_data = None
+                for t in turns_data:
+                    if t.get('turn_num') == turn:
+                        completed_turn_data = t
+                        break
+                
+                if completed_turn_data:
+                    # Update trajectory_data_json with the completed turn
+                    # First, get existing data from database
+                    from tinker_cookbook.recipes.cua_rl.database.database_dao import get_rollout_by_rollout_id
+                    db_rollout = get_rollout_by_rollout_id(self.db_session, self.rollout_id)
+                    
+                    if db_rollout:
+                        # Parse existing trajectory_data_json
+                        existing_data = {}
+                        if db_rollout.trajectory_data_json:
+                            try:
+                                existing_data = json.loads(db_rollout.trajectory_data_json)
+                            except:
+                                existing_data = {}
+                        
+                        # Ensure execution_details exists
+                        if 'execution_details' not in existing_data:
+                            existing_data['execution_details'] = {}
+                        if 'turns' not in existing_data['execution_details']:
+                            existing_data['execution_details']['turns'] = []
+                        
+                        # Add or update this turn's data
+                        turns_list = existing_data['execution_details']['turns']
+                        # Check if turn already exists
+                        turn_exists = False
+                        for i, t in enumerate(turns_list):
+                            if t.get('turn_num') == turn:
+                                turns_list[i] = completed_turn_data
+                                turn_exists = True
+                                break
+                        if not turn_exists:
+                            turns_list.append(completed_turn_data)
+                        
+                        # Save updated data
+                        trajectory_data_json = json.dumps(existing_data, default=str)
+                        self.rollout_recorder.update(
+                            trajectory_data_json=trajectory_data_json
+                        )
+                        logger.debug(f"[Turn {turn}] Saved turn data to database for rollout {self.rollout_id}")
+        except Exception as e:
+            logger.warning(f"[Turn {turn}] Failed to save turn data to database: {e}")
+    
     async def run_task(
         self,
         task_description: str,
@@ -682,6 +742,11 @@ class TinkerCuaAgent:
             
             # Create GBox environment
             box_creation_start = time.time()
+            
+            # Start env build logging
+            if self.rollout_logger:
+                self.rollout_logger.log_env_build_start()
+            
             import os
             # Get the directory of this file (agent/)
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -699,14 +764,44 @@ class TinkerCuaAgent:
                 package_name = "com.airbnb.clone"
                 logger.warning(f"[Task Setup] Could not identify app from task, defaulting to airbnb APK")
             
+            # Get APK file size
+            apk_size_mb = None
+            if os.path.exists(apk_path):
+                apk_size_bytes = os.path.getsize(apk_path)
+                apk_size_mb = apk_size_bytes / (1024 * 1024)
+            
             # Create box without installing APK (we'll do it manually)
             # Always use logger.info (not rollout_logger) for critical debug messages
             import sys
             logger.info(f"[Task Setup] Creating box (this may take a while)...")
             sys.stdout.flush()
             sys.stderr.flush()
+            
+            # Log box creation start
+            box_create_stage_start = time.time()
+            if self.rollout_logger:
+                self.rollout_logger.log_env_build_stage(
+                    "Box Creation",
+                    "in_progress",
+                    details={"type": self.box_type}
+                )
+            
             box_info = await self.gbox_client.create_box(box_type=self.box_type, apk_paths=None)
             box_id = box_info.get("id") or self.gbox_client.box_id
+            box_create_time = time.time() - box_create_stage_start
+            
+            # Log box creation success
+            if self.rollout_logger:
+                self.rollout_logger.log_env_build_stage(
+                    "Box Creation",
+                    "success",
+                    duration=box_create_time,
+                    details={
+                        "box_id": box_id,
+                        "box_type": self.box_type,
+                    }
+                )
+            
             logger.info(f"[Task Setup] ✓ Box created: {box_id}")
             sys.stdout.flush()
             sys.stderr.flush()
@@ -716,23 +811,55 @@ class TinkerCuaAgent:
             logger.info(f"[Task Setup] Installing APK from {apk_path}...")
             sys.stdout.flush()
             sys.stderr.flush()
+            
+            # Log APK installation start
+            apk_install_stage_start = time.time()
             if self.rollout_logger:
-                self.rollout_logger.log(f"[Task Setup] Installing APK from {apk_path}...")
+                self.rollout_logger.log_env_build_stage(
+                    "APK Installation",
+                    "in_progress",
+                    details={
+                        "apk_path": os.path.basename(apk_path),
+                        "apk_size_mb": f"{apk_size_mb:.2f}" if apk_size_mb else "N/A",
+                        "package": package_name,
+                    }
+                )
             
             try:
                 await self.gbox_client.install_apk(apk_path, open_app=True)
+                apk_install_time = time.time() - apk_install_stage_start
+                
+                # Log APK installation success
+                if self.rollout_logger:
+                    self.rollout_logger.log_env_build_stage(
+                        "APK Installation",
+                        "success",
+                        duration=apk_install_time,
+                        details={
+                            "package": package_name,
+                            "app_opened": "true",
+                        }
+                    )
+                
                 logger.info(f"[Task Setup] ✓ APK installed and app opened")
                 sys.stdout.flush()
                 sys.stderr.flush()
-                if self.rollout_logger:
-                    self.rollout_logger.log(f"[Task Setup] ✓ APK installed and app opened")
             except Exception as apk_error:
+                apk_install_time = time.time() - apk_install_stage_start
                 error_msg = f"[Task Setup] ✗ Failed to install APK: {apk_error}"
+                
+                # Log APK installation error
+                if self.rollout_logger:
+                    self.rollout_logger.log_env_build_stage(
+                        "APK Installation",
+                        "error",
+                        duration=apk_install_time,
+                        error=str(apk_error)
+                    )
+                
                 logger.error(error_msg, exc_info=True)
                 sys.stdout.flush()
                 sys.stderr.flush()
-                if self.rollout_logger:
-                    self.rollout_logger.log(error_msg)
                 raise  # Re-raise to be caught by outer exception handler
             
             box_creation_time = time.time() - box_creation_start
@@ -787,9 +914,10 @@ class TinkerCuaAgent:
             if pre_hook is not None:
                 prehook_start = time.time()
                 if self.rollout_logger:
-                    self.rollout_logger.log(f"[Task Setup] Executing prehook...")
-                else:
-                    logger.info(f"[Task Setup] Executing prehook...")
+                    self.rollout_logger.log_env_build_stage(
+                        "Prehook Execution",
+                        "in_progress",
+                    )
                 
                 try:
                     # Execute prehook
@@ -805,25 +933,73 @@ class TinkerCuaAgent:
                     finally:
                         sys.stdout = old_stdout
                         output = captured_output.getvalue()
-                        if output.strip():
-                            if self.rollout_logger:
-                                self.rollout_logger.log(f"[Task Setup] Prehook output: {output.strip()}")
-                            else:
-                                logger.info(f"[Task Setup] Prehook output: {output.strip()}")
                     
                     prehook_time = time.time() - prehook_start
+                    
+                    # Log prehook success
+                    prehook_details = {}
+                    if output.strip():
+                        prehook_details["output"] = output.strip()[:200]  # Limit output length
+                    
                     if self.rollout_logger:
-                        self.rollout_logger.log(f"[Task Setup] ✓ Prehook executed in {prehook_time:.3f}s")
+                        self.rollout_logger.log_env_build_stage(
+                            "Prehook Execution",
+                            "success",
+                            duration=prehook_time,
+                            details=prehook_details
+                        )
+                        # Store full output in trajectory data
+                        if "env_build" in self.rollout_logger.trajectory_data:
+                            self.rollout_logger.trajectory_data["env_build"]["prehook_executed"] = True
+                            self.rollout_logger.trajectory_data["env_build"]["prehook_output"] = output.strip() if output.strip() else None
                     else:
                         logger.info(f"[Task Setup] ✓ Prehook executed in {prehook_time:.3f}s")
+                        if output.strip():
+                            logger.info(f"[Task Setup] Prehook output: {output.strip()}")
                 except Exception as e:
                     prehook_time = time.time() - prehook_start
-                    error_msg = f"[Task Setup] ✗ Prehook execution failed after {prehook_time:.3f}s: {str(e)}"
+                    error_msg = str(e)
+                    
+                    # Log prehook error
                     if self.rollout_logger:
-                        self.rollout_logger.log(error_msg)
+                        self.rollout_logger.log_env_build_stage(
+                            "Prehook Execution",
+                            "error",
+                            duration=prehook_time,
+                            error=error_msg
+                        )
                     else:
-                        logger.error(error_msg)
+                        logger.error(f"[Task Setup] ✗ Prehook execution failed after {prehook_time:.3f}s: {error_msg}")
                     # Continue execution even if prehook fails
+            
+            # Complete env build logging
+            if self.rollout_logger:
+                self.rollout_logger.log_env_build_complete(
+                    total_time=box_creation_time,
+                    box_id=box_id,
+                    box_type=self.box_type,
+                    success=True
+                )
+                
+                # Save env_build data to database immediately (so it's visible during rollout)
+                if self.rollout_recorder is not None:
+                    try:
+                        import json
+                        # Create a partial trajectory_data_json with just env_build info
+                        env_build_data = {
+                            "execution_details": {
+                                "env_build": self.rollout_logger.trajectory_data.get("env_build", {})
+                            }
+                        }
+                        trajectory_data_json = json.dumps(env_build_data, default=str)
+                        
+                        # Update rollout with env_build data
+                        self.rollout_recorder.update(
+                            trajectory_data_json=trajectory_data_json
+                        )
+                        logger.debug(f"[Env Build] Saved env_build data to database for rollout {self.rollout_id}")
+                    except Exception as e:
+                        logger.warning(f"[Env Build] Failed to save env_build data to database: {e}")
             
             # Environment setup is now complete (APK installed, app launched, prehook executed)
             if self.rollout_logger:
@@ -1388,6 +1564,8 @@ class TinkerCuaAgent:
                     
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
+                        # Save turn data to database immediately
+                        self._save_turn_data_to_db(turn)
                     if not self.rollout_logger:
                         logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
                     
@@ -1456,6 +1634,8 @@ class TinkerCuaAgent:
                     
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
+                        # Save turn data to database immediately
+                        self._save_turn_data_to_db(turn)
                     if not self.rollout_logger:
                         logger.info(f"[Turn {turn}] ══ Turn {turn} completed in {turn_time:.3f}s ══")
                     
