@@ -132,7 +132,13 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Tap executed in {tap_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "tap", "target": target_desc, "coords": {"x": x, "y": y}}
+        return {
+            "action": "tap",
+            "target": target_desc,
+            "coords": {"x": x, "y": y},
+            "coord_time": coord_time,
+            "exec_time": tap_time,
+        }
     
     elif action_type == "click":
         target_desc = target_to_description(target)
@@ -182,7 +188,13 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Click executed in {click_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "click", "target": target_desc, "coords": {"x": x, "y": y}}
+        return {
+            "action": "click",
+            "target": target_desc,
+            "coords": {"x": x, "y": y},
+            "coord_time": coord_time,
+            "exec_time": click_time,
+        }
     
     elif action_type == "swipe":
         start_desc = target_to_description(start_target)
@@ -270,7 +282,13 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Swipe executed in {swipe_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "swipe", "start": start_coords, "end": end_coords}
+        return {
+            "action": "swipe",
+            "start": start_coords,
+            "end": end_coords,
+            "coord_time": coord_time,
+            "exec_time": swipe_time,
+        }
     
     elif action_type == "drag":
         # Drag action for both PC and Android
@@ -360,7 +378,13 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Drag executed in {drag_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "drag", "start": start_coords, "end": end_coords}
+        return {
+            "action": "drag",
+            "start": start_coords,
+            "end": end_coords,
+            "coord_time": coord_time,
+            "exec_time": drag_time,
+        }
     
     elif action_type == "scroll":
         target_desc = target_to_description(target)
@@ -429,7 +453,15 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Scroll executed in {scroll_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "scroll", "direction": direction, "coords": {"x": x, "y": y}, "scroll_x": scroll_x, "scroll_y": scroll_y}
+        return {
+            "action": "scroll",
+            "direction": direction,
+            "coords": {"x": x, "y": y},
+            "scroll_x": scroll_x,
+            "scroll_y": scroll_y,
+            "coord_time": coord_time,
+            "exec_time": scroll_time,
+        }
     
     elif action_type == "input":
         text = text or ""
@@ -495,7 +527,12 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] ✓ Text typed in {type_time:.3f}s")
             logger.info(f"[Tool: perform_action] Total action time: {action_total_time:.3f}s")
         
-        return {"action": "input", "text": text}
+        return {
+            "action": "input",
+            "text": text,
+            "coord_time": coord_time if target_dict else 0,
+            "exec_time": (click_time if target_dict else 0) + type_time,
+        }
     
     elif action_type == "key_press":
         keys = keys or []
@@ -518,7 +555,12 @@ async def perform_action_impl(
         else:
             logger.info(f"[Tool: perform_action] ✓ Key press: {keys}, Combination: {len(keys) > 1}, Executed in {key_time:.3f}s, Total time: {action_total_time:.3f}s")
         
-        return {"action": "key_press", "keys": keys}
+        return {
+            "action": "key_press",
+            "keys": keys,
+            "coord_time": 0,
+            "exec_time": key_time,
+        }
     
     elif action_type == "button_press":
         # Valid button values according to GBox API

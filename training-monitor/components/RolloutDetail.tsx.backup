@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import styles from './RolloutDetail.module.css';
-import TurnHeader from './TurnHeader';
-import ActionDetails from './ActionDetails';
 
 interface RolloutDetailProps {
   rolloutId: number;
@@ -835,43 +833,325 @@ export default function RolloutDetail({
             {/* Selected Turn Content or Validation Content */}
             {selectedTurnIndex < turns.length && selectedTurn ? (
               <div className={styles.turnContent}>
-                {/* Compact Turn Header with Integrated Timeline */}
+                {/* Turn Progress Timeline */}
                 {(() => {
-                  // Re-fetch turn details for this scope (TypeScript scoping issue)
-                  const turnDetails = selectedTurnId ? turnDetailsCache.get(selectedTurnId) : null;
-                  const turnActions = turnDetails?.actions || [];
-                  const action = turnActions && turnActions.length > 0 ? turnActions[0] : null;
-                  const turnData = extractTurnData(rollout, selectedTurn);
+                  if (!selectedTurn || !selectedTurnObservations) return null;
+                  
+                  // Extract observations and action data
+                  const beforeObs = selectedTurnObservations.find((obs: any) => obs && obs.obs_type === 'screenshot_before');
+                  const modelInputObs = selectedTurnObservations.find((obs: any) => obs && obs.obs_type === 'model_input');
+                  const hasModelResponse = selectedTurn.model_response;
+                  const hasAction = selectedTurnActions && selectedTurnActions.length > 0;
+                  const afterObs = selectedTurnObservations.find((obs: any) => obs && obs.obs_type === 'screenshot_after');
                   
                   // Parse metrics_json to get precise stage timings
                   let stageTimings: any = {};
                   try {
                     const metricsJson = (selectedTurn as any).metrics_json;
                     if (metricsJson) {
-                      const metrics = typeof metricsJson === 'string' ? JSON.parse(metricsJson) : metricsJson;
+                      const metrics = typeof metricsJson === 'string' 
+                        ? JSON.parse(metricsJson) 
+                        : metricsJson;
                       stageTimings = metrics.stage_timings || {};
                     }
                   } catch (e) {
                     console.error('Failed to parse metrics_json:', e);
                   }
                   
+                  // Define stages with their precise times from metrics
+                  const stages = [
+                    { 
+                      name: 'Screenshot', 
+                      time: stageTimings.screenshot_before || 0, 
+                      color: '#007bff', 
+                      completed: !!beforeObs 
+                    },
+                    { 
+                      name: 'Model Input', 
+                      time: stageTimings.model_input_prep || 0, 
+                      color: '#17a2b8', 
+                      completed: !!modelInputObs || !!beforeObs 
+                    },
+                    { 
+                      name: 'Model Response', 
+                      time: stageTimings.model_inference || 0, 
+                      color: '#28a745', 
+                      completed: !!hasModelResponse 
+                    },
+                    { 
+                      name: 'Action', 
+                      time: stageTimings.action_execution || 0, 
+                      color: '#ffc107', 
+                      completed: !!hasAction 
+                    },
+                    { 
+                      name: 'After Screenshot', 
+                      time: stageTimings.screenshot_after || 0, 
+                      color: '#6c757d', 
+                      completed: !!afterObs 
+                    },
+                  ];
+                  
+                  const totalTime = stages.reduce((sum, stage) => sum + stage.time, 0);
+                  const turnTime = selectedTurn.turn_time || 0;
+                  
                   return (
-                    <TurnHeader
-                      turn={selectedTurn}
-                      action={action}
-                      stageTimings={stageTimings}
-                      parseSuccess={turnData?.parse_success}
-                      loadingModelInput={loadingModelInput}
-                      onOpenModelInput={() => {
-                        if (selectedTurn) {
-                          handleOpenModelInputModal(selectedTurn.id);
-                        }
-                      }}
-                    />
+                    <div style={{ marginBottom: '16px' }}>
+                      <div style={{ 
+                        padding: '12px',
+                        backgroundColor: '#f8f9fa',
+                        borderRadius: '6px',
+                        border: '1px solid #dee2e6'
+                      }}>
+                        {/* Total time label */}
+                        <div style={{ 
+                          fontSize: '11px', 
+                          color: '#6c757d', 
+                          marginBottom: '6px',
+                          fontWeight: 600
+                        }}>
+                          Turn Time: {turnTime > 0 ? turnTime.toFixed(2) : '0.00'}s
+                          {totalTime > 0 && totalTime !== turnTime && (
+                            <span style={{ marginLeft: '8px', color: '#999' }}>
+                              (Measured: {totalTime.toFixed(2)}s)
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Timeline bar */}
+                        <div style={{ 
+                          display: 'flex', 
+                          height: '32px',
+                          backgroundColor: '#e9ecef',
+                          borderRadius: '4px',
+                          overflow: 'hidden',
+                          marginBottom: '6px'
+                        }}>
+                          {stages.map((stage, index) => {
+                            const widthPercent = totalTime > 0 ? (stage.time / totalTime) * 100 : 100 / stages.length;
+                            return (
+                              <div
+                                key={index}
+                                style={{
+                                  width: `${widthPercent}%`,
+                                  backgroundColor: stage.completed ? stage.color : '#dee2e6',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: stage.completed ? 'white' : '#adb5bd',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  padding: '0 4px',
+                                  borderRight: index < stages.length - 1 ? '1px solid white' : 'none',
+                                  transition: 'all 0.3s ease',
+                                  opacity: stage.completed ? 1 : 0.6
+                                }}
+                                title={`${stage.name}: ${stage.time.toFixed(3)}s`}
+                              >
+                                {widthPercent > 8 && stage.time > 0.1 ? stage.time.toFixed(2) + 's' : ''}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        
+                        {/* Stage labels */}
+                        <div style={{ display: 'flex', fontSize: '10px', color: '#6c757d' }}>
+                          {stages.map((stage, index) => {
+                            const widthPercent = totalTime > 0 ? (stage.time / totalTime) * 100 : 100 / stages.length;
+                            return (
+                              <div
+                                key={index}
+                                style={{
+                                  width: `${widthPercent}%`,
+                                  textAlign: 'center',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  padding: '0 2px'
+                                }}
+                                title={stage.name}
+                              >
+                                {widthPercent > 12 ? stage.name : ''}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   );
                 })()}
 
-                {/* OLD Action Details Section REMOVED - Will be added after Model Response */}
+                {/* Top Summary Bar: Model Input Button, Reward, Token Stats, Time, Action Parse Info */}
+                {(() => {
+                  const turnData = extractTurnData(rollout, selectedTurn);
+                  const action = selectedTurnActions?.[0];
+                  
+                  return (
+                    <div className={styles.turnMetrics} style={{ 
+                      display: 'flex', 
+                      flexWrap: 'wrap', 
+                      gap: '12px', 
+                      alignItems: 'center',
+                      marginBottom: '16px',
+                      padding: '12px',
+                      backgroundColor: '#f8f9fa',
+                      borderRadius: '4px',
+                      border: '1px solid #dee2e6'
+                    }}>
+                      {/* Model Input Button - always show for non-validation turns */}
+                      <button
+                        onClick={() => handleOpenModelInputModal(selectedTurn.id)}
+                        disabled={loadingModelInput}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: loadingModelInput ? '#6c757d' : '#007bff',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: loadingModelInput ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          transition: 'background-color 0.2s',
+                          opacity: loadingModelInput ? 0.6 : 1,
+                        }}
+                        onMouseOver={(e) => {
+                          if (!loadingModelInput) {
+                            e.currentTarget.style.backgroundColor = '#0056b3';
+                          }
+                        }}
+                        onMouseOut={(e) => {
+                          if (!loadingModelInput) {
+                            e.currentTarget.style.backgroundColor = '#007bff';
+                          }
+                        }}
+                      >
+                        {loadingModelInput ? '⏳ Loading...' : '📝 Model Input'}
+                      </button>
+                      
+                      {/* Reward */}
+                      <div className={styles.turnMetric}>
+                        <span className={styles.turnMetricLabel}>Reward:</span>
+                        <span className={styles.turnMetricValue}>
+                          {selectedTurn.reward !== null ? selectedTurn.reward.toFixed(4) : 'N/A'}
+                        </span>
+                      </div>
+                      
+                      {/* Token Stats */}
+                      {action && action.num_tokens !== null && action.num_tokens !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Tokens:</span>
+                          <span className={styles.turnMetricValue}>{action.num_tokens}</span>
+                        </div>
+                      )}
+                      
+                      {/* Time */}
+                      {selectedTurn.turn_time !== null && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Time:</span>
+                          <span className={styles.turnMetricValue}>{selectedTurn.turn_time.toFixed(2)}s</span>
+                        </div>
+                      )}
+                      
+                      {/* Action Parse Info */}
+                      {turnData && turnData.parse_success !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Parse:</span>
+                          <span style={{ 
+                            color: turnData.parse_success ? '#28a745' : '#dc3545',
+                            fontWeight: 600
+                          }}>
+                            {turnData.parse_success ? '✓ Success' : '✗ Failed'}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* Model Inference Time */}
+                      {turnData && turnData.model_inference_time !== null && turnData.model_inference_time !== undefined && (
+                        <div className={styles.turnMetric}>
+                          <span className={styles.turnMetricLabel}>Inference:</span>
+                          <span className={styles.turnMetricValue}>{turnData.model_inference_time.toFixed(3)}s</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Action Details Section */}
+                {(() => {
+                  const turnData = extractTurnData(rollout, selectedTurn);
+                  if (!turnData || !turnData.action_results || turnData.action_results.length === 0) {
+                    return null;
+                  }
+                  
+                  const actionResult = turnData.action_results[0];
+                  const coordinates = actionResult?.coordinates;
+                  
+                  return (
+                    <div className={styles.turnSection} style={{ marginBottom: '16px' }}>
+                      <h4 className={styles.turnSectionTitle}>Action Details</h4>
+                      <div style={{ padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '4px', border: '1px solid #dee2e6' }}>
+                        {/* Action Type */}
+                        {actionResult.action_type && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Action Type:</span>
+                            <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                              {actionResult.action_type}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Coordinates */}
+                        {coordinates && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Coordinates:</span>
+                            {coordinates.x !== undefined && coordinates.y !== undefined ? (
+                              <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                                ({coordinates.x}, {coordinates.y})
+                              </span>
+                            ) : coordinates.start && coordinates.end ? (
+                              <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                                Start: ({coordinates.start.x}, {coordinates.start.y}) → End: ({coordinates.end.x}, {coordinates.end.y})
+                              </span>
+                            ) : (
+                              <span style={{ color: '#999' }}>N/A</span>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Other action details */}
+                        {actionResult.text && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Text:</span>
+                            <span style={{ fontFamily: 'monospace', backgroundColor: '#e9ecef', padding: '2px 8px', borderRadius: '3px' }}>
+                              {actionResult.text}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Success Status */}
+                        {actionResult.success !== undefined && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#666', marginRight: '8px' }}>Success:</span>
+                            <span style={{ 
+                              color: actionResult.success ? '#28a745' : '#dc3545',
+                              fontWeight: 600
+                            }}>
+                              {actionResult.success ? '✓ Yes' : '✗ No'}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* Error Message */}
+                        {actionResult.error && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <span style={{ fontWeight: 600, color: '#dc3545', marginRight: '8px' }}>Error:</span>
+                            <span style={{ color: '#dc3545' }}>{actionResult.error}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Turn Content: Left (Screenshots) and Right (Model Response) */}
                 <div className={styles.turnContentLayout}>
@@ -1121,50 +1401,12 @@ export default function RolloutDetail({
                         {/* Model Response */}
                         {selectedTurn.model_response && (
                           <div className={styles.turnSection}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                              <h4 className={styles.turnSectionTitle} style={{ marginBottom: 0 }}>Model Response</h4>
-                              {(() => {
-                                const turnDetails = selectedTurnId ? turnDetailsCache.get(selectedTurnId) : null;
-                                const turnActions = turnDetails?.actions || [];
-                                const action = turnActions && turnActions.length > 0 ? turnActions[0] : null;
-                                if (action && action.num_tokens !== null && action.num_tokens !== undefined) {
-                                  return (
-                                    <span style={{ 
-                                      fontSize: '11px', 
-                                      color: '#666',
-                                      fontWeight: 600,
-                                      backgroundColor: '#f0f0f0',
-                                      padding: '2px 8px',
-                                      borderRadius: '3px',
-                                      border: '1px solid #dee2e6'
-                                    }}>
-                                      {action.num_tokens} tokens
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
-                            </div>
+                            <h4 className={styles.turnSectionTitle}>Model Response</h4>
                             <div className={styles.modelResponseContainer}>
                               <pre className={styles.modelResponseText}>{selectedTurn.model_response}</pre>
                             </div>
                           </div>
                         )}
-                        
-                        {/* Action Details - Placed after Model Response for compact layout */}
-                        {(() => {
-                          const turnData = extractTurnData(rollout, selectedTurn);
-                          const actionResults = turnData?.action_results || [];
-                          const actionResult = actionResults.length > 0 ? actionResults[0] : undefined;
-                          
-                          return (
-                            <ActionDetails
-                              parseSuccess={turnData?.parse_success}
-                              parseError={turnData?.parse_error}
-                              actionResult={actionResult}
-                            />
-                          );
-                        })()}
                       </>
                     )}
                   </div>
@@ -1554,25 +1796,6 @@ export default function RolloutDetail({
                                 msg.content.map((content: any, contentIdx: number) => {
                                   if (content.type === 'image' && (content.url || content.image || content.image_url)) {
                                     const rawImageUrl = content.url || content.image || content.image_url;
-                                    const rawImageUrlStr = String(rawImageUrl);
-                                    
-                                    // Filter out PIL.Image.Image strings from old data
-                                    if (rawImageUrlStr.includes('PIL.Image.Image') || rawImageUrlStr.includes('<PIL.')) {
-                                      return (
-                                        <div key={contentIdx} style={{ 
-                                          marginBottom: '8px',
-                                          padding: '12px',
-                                          backgroundColor: '#fff3cd',
-                                          border: '1px solid #ffc107',
-                                          borderRadius: '4px',
-                                          fontSize: '12px',
-                                          color: '#856404'
-                                        }}>
-                                          ⚠️ Screenshot not available (old data format). Please re-run training to see screenshots.
-                                        </div>
-                                      );
-                                    }
-                                    
                                     const resolveImageUrl = (uri: string | null | undefined) => {
                                       if (!uri) return null;
                                       // Placeholder emitted by trainer for the turn's screenshot_before
@@ -1591,7 +1814,7 @@ export default function RolloutDetail({
                                       const normalizedPath = clean.startsWith('screenshots/') ? clean.slice('screenshots/'.length) : clean;
                                       return `/api/screenshots/${normalizedPath}`;
                                     };
-                                    const imageUrl = resolveImageUrl(rawImageUrlStr) || '';
+                                    const imageUrl = resolveImageUrl(String(rawImageUrl)) || '';
                                     return (
                                       <div key={contentIdx} style={{ marginBottom: '8px' }}>
                                         <img

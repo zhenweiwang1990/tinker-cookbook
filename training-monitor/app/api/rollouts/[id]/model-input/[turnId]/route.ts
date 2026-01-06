@@ -61,8 +61,17 @@ export async function GET(
     }
 
     // Set cache headers for better performance
+    // Also return screenshot_uri for resolving placeholder image URLs in modelInput
+    const screenshotResult = await query(
+      `SELECT screenshot_uri FROM obs
+       WHERE turn_id = $1 AND obs_type = 'screenshot_before' AND screenshot_uri IS NOT NULL
+       ORDER BY created_at ASC LIMIT 1`,
+      [turnId]
+    );
+    const screenshotRow = screenshotResult.rows[0] ? serializeRow(screenshotResult.rows[0]) : null;
+
     return NextResponse.json(
-      { modelInput },
+      { modelInput, screenshot_uri: screenshotRow?.screenshot_uri ?? null },
       {
         headers: {
           'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',

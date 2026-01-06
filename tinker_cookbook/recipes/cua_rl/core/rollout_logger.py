@@ -966,7 +966,6 @@ class RolloutLogger:
             for i, log_entry in enumerate(self.log_buffer):
                 # Print to stdout only (avoid duplication)
                 print(log_entry, file=sys.stdout, flush=True)
-            print(f"[RolloutLogger] Finished flushing {len(self.log_buffer)} log entries for rollout {self.rollout_id}", file=sys.stderr, flush=True)
         except Exception as e:
             # Complete fallback: print directly if everything fails
             print(f"[RolloutLogger ERROR] Failed to log: {e}", file=sys.stderr, flush=True)

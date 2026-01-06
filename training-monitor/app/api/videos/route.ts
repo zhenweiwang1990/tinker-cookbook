@@ -63,7 +63,9 @@ export async function GET(request: NextRequest) {
       const readableStream = new ReadableStream({
         start(controller) {
           stream.on('data', (chunk) => {
-            controller.enqueue(new Uint8Array(chunk));
+            // Node streams can type chunk as string | Buffer in typings; normalize to bytes.
+            const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+            controller.enqueue(new Uint8Array(buf));
           });
           stream.on('end', () => {
             controller.close();
@@ -91,7 +93,9 @@ export async function GET(request: NextRequest) {
       const readableStream = new ReadableStream({
         start(controller) {
           stream.on('data', (chunk) => {
-            controller.enqueue(new Uint8Array(chunk));
+            // Node streams can type chunk as string | Buffer in typings; normalize to bytes.
+            const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+            controller.enqueue(new Uint8Array(buf));
           });
           stream.on('end', () => {
             controller.close();

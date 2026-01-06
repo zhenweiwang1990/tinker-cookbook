@@ -208,10 +208,18 @@ def load_tasks_from_config(
             else:
                 task_name = f"Task {i+1}"
             
+            # Generate unique task ID based on task name (not loop index!)
+            # This ensures train and eval tasks have different IDs even if they come from the same pool
+            import hashlib
+            # Use task name + description to create a unique, stable ID
+            unique_str = f"{task_name}_{desc[:100] if desc else ''}"
+            task_hash = hashlib.md5(unique_str.encode()).hexdigest()[:8]
+            task_id = f"task_adapter_{task_hash}"
+            
             # Create task with app info
             # Note: We don't set validation_query here - validation will be done via _original_task's validator
             task = CUATask(
-                id=f"task_adapter_{i}",
+                id=task_id,
                 name=task_name,
                 description=desc,
                 difficulty=TaskDifficulty.MEDIUM,

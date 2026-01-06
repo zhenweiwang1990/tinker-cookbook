@@ -112,7 +112,7 @@ class CUAEnv(ProblemEnv):
         base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
         renderer_name: Optional[str] = None,
         rollout_logger = None,
-        db_session = None,  # Optional database session for recording turns/actions/observations
+        rollout_recorder = None,  # RolloutRecorder instance for database recording
         rollout_id: Optional[str] = None,  # Rollout ID (UUID) for database recording
     ) -> Dict[str, Any]:
         """
@@ -168,7 +168,7 @@ class CUAEnv(ProblemEnv):
             box_type=self.box_type,
             max_recent_turns=self.max_recent_turns,  # Pass max_recent_turns to agent
             rollout_logger=rollout_logger,
-            db_session=db_session,  # Pass db_session for database recording
+            rollout_recorder=rollout_recorder,  # Pass rollout_recorder for database recording
             rollout_id=rollout_id,  # rollout_id is now a UUID
         )
         # Pass task object to agent for validation
@@ -215,10 +215,6 @@ class CUAEnv(ProblemEnv):
         finally:
             # Cleanup
             cleanup_start = time.time()
-            if rollout_logger:
-                rollout_logger.log(f"[CUAEnv] Cleaning up agent...")
-            else:
-                logger.info(f"[CUAEnv] Cleaning up agent...")
             await self._agent.close()
             cleanup_time = time.time() - cleanup_start
             if rollout_logger:
@@ -338,26 +334,37 @@ class CUADataset(RLDataset):
         if hasattr(task, 'description'):
             # It's a CUATask object
             task_description = task.description
-            task_obj = task
+            # Make a deep copy to ensure independence
+            import copy
+            task_obj = copy.deepcopy(task)
         else:
             # It's a string
             task_description = str(task)
             task_obj = None
         
-        return ProblemGroupBuilder(
-            env_thunk=partial(
-                CUAEnv,
-                task_description,
-                self.gbox_api_key,
+        # CRITICAL: Use a closure factory instead of partial to ensure
+        # each environment gets the correct task parameters.
+        # We capture task_description and task_obj at THIS moment.
+        _captured_desc = task_description
+        _captured_task = task_obj
+        
+        def make_env():
+            """Factory function that creates a CUAEnv with captured parameters."""
+            return CUAEnv(
+                task_description=_captured_desc,
+                gbox_api_key=self.gbox_api_key,
                 tinker_api_key=self.tinker_api_key,
                 rollout_model_name=self.rollout_model_name,
                 renderer=self.renderer,
                 convo_prefix=self.convo_prefix,
                 max_turns=self.max_turns,
                 box_type=self.box_type,
-                task=task_obj,  # Pass task object for validation (None if task is string)
-                max_recent_turns=self.max_recent_turns,  # Pass max_recent_turns to environment
-            ),
+                task=_captured_task,
+                max_recent_turns=self.max_recent_turns,
+            )
+        
+        return ProblemGroupBuilder(
+            env_thunk=make_env,
             num_envs=group_size,
             dataset_name="cua",
         )
