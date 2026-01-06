@@ -41,6 +41,82 @@ def set_rollout_context(step: Optional[int] = None, batch: Optional[int] = None)
     _rollout_batch = batch
 
 
+def _update_parent_progress(db_session, group):
+    """
+    Update the progress of the parent item (baseline/eval/step) based on all its groups' progress.
+    
+    Args:
+        db_session: SQLAlchemy session
+        group: The group that was just updated
+    """
+    if not group:
+        return
+    
+    try:
+        from tinker_cookbook.recipes.cua_rl.database.database_dao import (
+            get_baseline, update_baseline,
+            get_eval, update_eval,
+            get_step, update_step
+        )
+        from sqlalchemy import func
+        from tinker_cookbook.recipes.cua_rl.database.database_models import Group
+        
+        # Determine parent type and ID
+        parent_type = group.source_type
+        parent_id = None
+        if parent_type == 'baseline':
+            parent_id = group.baseline_id
+        elif parent_type == 'eval':
+            parent_id = group.eval_id
+        elif parent_type == 'step':
+            parent_id = group.step_id
+        
+        if not parent_id:
+            return
+        
+        # Calculate aggregate progress from all groups belonging to this parent
+        query = db_session.query(
+            func.avg(Group.progress_percent).label('avg_progress'),
+            func.count(Group.id).label('total_groups'),
+            func.sum(func.cast(Group.status == 'completed', db_session.bind.dialect.type_descriptor(int))).label('completed_groups')
+        )
+        
+        if parent_type == 'baseline':
+            query = query.filter(Group.baseline_id == parent_id)
+        elif parent_type == 'eval':
+            query = query.filter(Group.eval_id == parent_id)
+        elif parent_type == 'step':
+            query = query.filter(Group.step_id == parent_id)
+        
+        result = query.first()
+        if not result:
+            return
+        
+        avg_progress = result.avg_progress or 0.0
+        total_groups = result.total_groups or 0
+        completed_groups = result.completed_groups or 0
+        
+        # Update parent item
+        update_kwargs = {
+            'progress_percent': avg_progress,
+        }
+        
+        # If all groups are completed, mark parent as completed
+        if total_groups > 0 and completed_groups >= total_groups:
+            update_kwargs['status'] = 'completed'
+        
+        if parent_type == 'baseline':
+            update_baseline(db_session, parent_id, **update_kwargs)
+        elif parent_type == 'eval':
+            update_eval(db_session, parent_id, **update_kwargs)
+        elif parent_type == 'step':
+            update_step(db_session, parent_id, **update_kwargs)
+            
+    except Exception as e:
+        logger.warning(f"[Rollout DB] Failed to update parent progress: {e}")
+
+
+
 async def _run_single_env_rollout(
     env: CUAEnv,
     env_idx: int,
@@ -1039,6 +1115,10 @@ async def do_cua_group_rollout(
                         progress_percent=100.0,
                         end_time=datetime.utcnow(),
                     )
+                    # Refresh group object after update
+                    db_session.refresh(group)
+                    # Update parent item progress
+                    _update_parent_progress(db_session, group)
                 else:
                     # Update progress but keep status as running
                     update_group(
@@ -1050,6 +1130,10 @@ async def do_cua_group_rollout(
                         reward_std=reward_std,
                         progress_percent=(completed_rollouts / (group.num_rollouts or len(results))) * 100.0,
                     )
+                
+                # Update parent item (baseline/eval/step) progress based on all groups
+                _update_parent_progress(db_session, group)
+                
                 db_session.commit()
         except Exception as e:
             logger.warning(f"[Rollout DB] Failed to update group completion status: {e}")

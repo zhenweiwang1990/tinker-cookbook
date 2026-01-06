@@ -66,6 +66,11 @@
   color: white;
 }
 
+.badge.running {
+  background-color: #ff9800;
+  color: white;
+}
+
 .metrics {
   display: flex;
   gap: 12px;

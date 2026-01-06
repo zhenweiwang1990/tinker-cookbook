@@ -62,19 +62,29 @@ export default function RolloutList({ rollouts, onSelect }: RolloutListProps) {
                 )}
               </span>
               <div className={styles.badges}>
-                {rollout.task_success && (
+                {rollout.status === 'running' && (
+                  <span className={`${styles.badge} ${styles.running}`}>
+                    ⋯ Running
+                  </span>
+                )}
+                {rollout.status === 'completed' && rollout.task_success && (
                   <span className={`${styles.badge} ${styles.success}`}>
                     ✓ Success
                   </span>
                 )}
-                {rollout.validation_passed && (
+                {rollout.status === 'completed' && rollout.validation_passed && (
                   <span className={`${styles.badge} ${styles.validated}`}>
                     ✓ Validated
                   </span>
                 )}
-                {!rollout.task_success && (
+                {rollout.status === 'completed' && !rollout.task_success && (
                   <span className={`${styles.badge} ${styles.failed}`}>
                     ✗ Failed
+                  </span>
+                )}
+                {rollout.status === 'failed' && (
+                  <span className={`${styles.badge} ${styles.failed}`}>
+                    ✗ Error
                   </span>
                 )}
               </div>

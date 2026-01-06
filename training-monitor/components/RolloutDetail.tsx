@@ -824,6 +824,26 @@ export default function RolloutDetail({
                     <code className={styles.detailCode}>{validation.actual_result}</code>
                   </>
                 )}
+                {(() => {
+                  try {
+                    const details = typeof validation.details_json === 'string' 
+                      ? JSON.parse(validation.details_json) 
+                      : validation.details_json;
+                    if (details?.termination_reason) {
+                      return (
+                        <>
+                          <span className={styles.detailLabel}>Termination:</span>
+                          <span className={styles.detailValue} style={{ color: '#17a2b8', fontWeight: 500 }}>
+                            {details.termination_reason}
+                          </span>
+                        </>
+                      );
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                  return null;
+                })()}
               </div>
             )}
           </div>
@@ -1521,6 +1541,23 @@ export default function RolloutDetail({
                       <strong>Error:</strong> {validation.error_message}
                     </div>
                   )}
+                  {(() => {
+                    try {
+                      const details = typeof validation.details_json === 'string' 
+                        ? JSON.parse(validation.details_json) 
+                        : validation.details_json;
+                      if (details?.termination_reason) {
+                        return (
+                          <div style={{ marginBottom: '10px', color: '#17a2b8', fontWeight: 500 }}>
+                            <strong>Termination Reason:</strong> {details.termination_reason}
+                          </div>
+                        );
+                      }
+                    } catch (e) {
+                      // Ignore parse errors
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 {/* Validation Screenshot */}

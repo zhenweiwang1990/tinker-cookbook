@@ -89,6 +89,9 @@ class TinkerCuaAgent:
         self.rollout_recorder = rollout_recorder  # RolloutRecorder instance
         self.rollout_id = rollout_id
         
+        # Track termination reason for reporting
+        self.termination_reason = None  # Will be set when task ends
+        
         # Set up compatibility layer for old database recording code
         if rollout_recorder is not None:
             logger.info(f"[TinkerCuaAgent] Initializing with rollout_recorder: {rollout_recorder}, rollout_id={rollout_id}")
@@ -396,6 +399,11 @@ class TinkerCuaAgent:
             self.task_success = arguments.get("success", False)
             self.result_message = arguments.get("result_message", "Task completed")
             self.attempted_completion = True
+            # Set termination reason based on success
+            if self.task_success:
+                self.termination_reason = "finish_success"
+            else:
+                self.termination_reason = "finish_failure"
             return {
                 "status": "complete",
                 "success": self.task_success,
@@ -1015,6 +1023,7 @@ class TinkerCuaAgent:
                 # Check for timeout (30 minutes total)
                 elapsed_time = time.time() - task_start_time
                 if elapsed_time > MAX_TASK_TIME:
+                    self.termination_reason = f"timeout_30min"
                     logger.warning(f"[Task Timeout] Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout after {elapsed_time/60:.1f} minutes. Ending rollout.")
                     self.result_message = f"Task exceeded {MAX_TASK_TIME/60:.0f} minute timeout"
                     self.task_completed = False
@@ -1187,6 +1196,7 @@ class TinkerCuaAgent:
                     )
                     logger.info(f"[Turn {turn}] _sample_with_tinker() returned")
                 except asyncio.TimeoutError:
+                    self.termination_reason = f"model_timeout_turn_{turn}"
                     logger.error(f"[Turn {turn}] Model inference timed out after 5 minutes. Ending rollout.")
                     self.result_message = f"Model inference timed out on turn {turn}"
                     self.task_completed = False
@@ -1195,6 +1205,7 @@ class TinkerCuaAgent:
                     # But we should still save any previous turns' trajectory data
                     break
                 except Exception as e:
+                    self.termination_reason = f"model_error_turn_{turn}"
                     logger.error(f"[Turn {turn}] Model inference failed with exception: {e}", exc_info=True)
                     self.result_message = f"Model inference failed on turn {turn}: {str(e)}"
                     self.task_completed = False
@@ -1722,6 +1733,9 @@ class TinkerCuaAgent:
             # Debug: Log loop exit
             logger.info(f"[Task End] Exited while loop: turn={turn}, max_turns={self.max_turns}, task_completed={self.task_completed}")
             if not self.task_completed:
+                # Set termination reason if not already set
+                if self.termination_reason is None:
+                    self.termination_reason = f"max_turns_reached_{turn}"
                 self.result_message = f"Task not completed within {self.max_turns} turns"
                 logger.warning(f"[Task End] Task did not complete within {self.max_turns} turns")
             
@@ -1773,6 +1787,7 @@ class TinkerCuaAgent:
                             execution_time=validation_result.execution_time,
                             validation_query=validation_result.validation_query,
                             screenshot_uri=self.validation_screenshot_uri,
+                            termination_reason=self.termination_reason,  # Add termination reason
                         )
                     else:
                         validation_query_str = self.task.validation_query or "task_validator"
@@ -1780,6 +1795,7 @@ class TinkerCuaAgent:
                         self.rollout_logger.log_adb_validation_error(
                             error="Validation returned None (unsupported query or validation failed)",
                             validation_query=validation_query_str,
+                            termination_reason=self.termination_reason,  # Add termination reason
                         )
                 except Exception as e:
                     logger.warning(f"[Task Validation] Failed to perform ADB validation: {e}", exc_info=True)
@@ -1787,6 +1803,7 @@ class TinkerCuaAgent:
                         self.rollout_logger.log_adb_validation_error(
                             error=str(e),
                             validation_query=self.task.validation_query or "task_validator",
+                            termination_reason=self.termination_reason,  # Add termination reason
                         )
             else:
                 # Task has no validator - this is an error
@@ -1803,9 +1820,13 @@ class TinkerCuaAgent:
                     self.rollout_logger.log_adb_validation_error(
                         error="Task has no validator (all tasks must have a validator)",
                         validation_query=None,
+                        termination_reason=self.termination_reason,
                     )
             
         except Exception as e:
+            # Set termination reason for exception
+            if self.termination_reason is None:
+                self.termination_reason = f"exception_{type(e).__name__}"
             # Log to both logger and rollout_logger to ensure visibility
             error_msg = f"[Task End] ✗ Task failed with exception: {e}"
             logger.error(error_msg, exc_info=True)
@@ -1855,11 +1876,13 @@ class TinkerCuaAgent:
                             execution_time=validation_result.execution_time,
                             validation_query=validation_result.validation_query,
                             screenshot_uri=self.validation_screenshot_uri,
+                            termination_reason=self.termination_reason,
                         )
                     else:
                         self.rollout_logger.log_adb_validation_error(
                             error="Validation returned None (unsupported query or validation failed)",
                             validation_query=self.task.validation_query,
+                            termination_reason=self.termination_reason,
                         )
                 except Exception as validation_error:
                     logger.warning(f"[Task Validation] Failed to perform ADB validation after task error: {validation_error}", exc_info=True)
@@ -1867,6 +1890,7 @@ class TinkerCuaAgent:
                         self.rollout_logger.log_adb_validation_error(
                             error=str(validation_error),
                             validation_query=self.task.validation_query or "task_validator",
+                            termination_reason=self.termination_reason,
                         )
             else:
                 # Task has no validator - this is an error
@@ -1883,6 +1907,7 @@ class TinkerCuaAgent:
                     self.rollout_logger.log_adb_validation_error(
                         error="Task has no validator (all tasks must have a validator)",
                         validation_query=None,
+                        termination_reason=self.termination_reason,
                     )
         
         finally:

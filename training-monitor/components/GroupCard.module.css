@@ -1,0 +1,270 @@
+.card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.cardRunning {
+  border-left: 3px solid #ff9800;
+}
+
+.cardCompleted {
+  border-left: 3px solid #4caf50;
+}
+
+.header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.headerTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.groupTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groupNumber {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.runningIndicator {
+  display: inline-block;
+  color: #ff9800;
+  font-size: 10px;
+  animation: blink 1.5s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.statusBadge {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.statuspending {
+  background-color: #f5f5f5;
+  color: #999;
+}
+
+.statusrunning {
+  background-color: #fff3e0;
+  color: #f57c00;
+}
+
+.statuscompleted {
+  background-color: #e8f5e9;
+  color: #4caf50;
+}
+
+.statusfailed {
+  background-color: #ffebee;
+  color: #f44336;
+}
+
+/* Compact Success Rate */
+.successRate {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.successHigh {
+  background-color: #e8f5e9;
+  color: #4caf50;
+}
+
+.successMedium {
+  background-color: #fff8e1;
+  color: #f57c00;
+}
+
+.successLow {
+  background-color: #ffebee;
+  color: #f44336;
+}
+
+.successRateValue {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.successRateLabel {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.stats {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: #666;
+}
+
+.statItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rolloutsContainer {
+  padding: 12px;
+  background-color: #fafafa;
+}
+
+.rolloutsList {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.rolloutCard {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.rolloutCard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  border-radius: 6px 0 0 6px;
+}
+
+.rolloutCard:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-color: #bbb;
+}
+
+.rolloutRunning {
+  border-color: #ff9800;
+  background-color: #fffbf5;
+}
+
+.rolloutRunning::before {
+  background: #ff9800;
+}
+
+.rolloutSuccess {
+  border-color: #4caf50;
+  background-color: #f9fdf9;
+}
+
+.rolloutSuccess::before {
+  background: #4caf50;
+}
+
+.rolloutFailed {
+  border-color: #f44336;
+  background-color: #fffafa;
+}
+
+.rolloutFailed::before {
+  background: #f44336;
+}
+
+.rolloutHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.rolloutEnv {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.runningDot {
+  display: inline-block;
+  color: #ff9800;
+  font-size: 8px;
+  animation: blink 1.5s ease-in-out infinite;
+}
+
+.rolloutBadges {
+  display: flex;
+  gap: 4px;
+}
+
+.badge {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.badge.success {
+  background-color: #4caf50;
+  color: white;
+}
+
+.badge.failed {
+  background-color: #f44336;
+  color: white;
+}
+
+.badge.running {
+  background-color: #ff9800;
+  color: white;
+}
+
+.badge.error {
+  background-color: #d32f2f;
+  color: white;
+}
+
+.rolloutStats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rolloutStat {
+  font-size: 11px;
+  color: #666;
+  font-weight: 500;
+}
+

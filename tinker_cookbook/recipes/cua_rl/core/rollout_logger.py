@@ -698,6 +698,7 @@ class RolloutLogger:
         execution_time: float,
         validation_query: str = "",
         screenshot_uri: Optional[str] = None,
+        termination_reason: Optional[str] = None,
     ):
         """Log ADB validation information.
         
@@ -709,6 +710,7 @@ class RolloutLogger:
             execution_time: Time taken to execute (seconds)
             validation_query: Type of validation query (e.g., "wifi_enabled")
             screenshot_uri: Screenshot URI taken at validation time
+            termination_reason: Reason for task termination (e.g., "timeout_30min", "finish_success")
         """
         # Store ADB validation info for later logging
         self.trajectory_data["adb_validation"] = {
@@ -720,18 +722,21 @@ class RolloutLogger:
             "validation_query": validation_query,
             "error": None,  # No error
             "screenshot_uri": screenshot_uri,  # Screenshot taken at validation time
+            "termination_reason": termination_reason,  # Add termination reason
         }
     
     def log_adb_validation_error(
         self,
         error: str,
         validation_query: Optional[str] = None,
+        termination_reason: Optional[str] = None,
     ):
         """Log ADB validation error (when validation cannot be performed).
         
         Args:
             error: Error message describing why validation failed
             validation_query: The validation_query that was attempted (if any)
+            termination_reason: Reason for task termination
         """
         # Store validation error info
         self.trajectory_data["adb_validation"] = {
@@ -742,6 +747,7 @@ class RolloutLogger:
             "execution_time": 0.0,
             "validation_query": validation_query or "",
             "error": error,
+            "termination_reason": termination_reason,  # Add termination reason
         }
     
     def _format_adb_validation_details(self) -> List[str]:
@@ -759,16 +765,16 @@ class RolloutLogger:
         # If there's an error, show error message instead of validation details
         if error:
             query_type = validation.get("validation_query", "")
+            termination_reason = validation.get("termination_reason")
+            lines = []
+            lines.append(self._color(f"⚠ Validation Error: {error}", "YELLOW"))
             if query_type:
-                return [
-                    self._color(f"⚠ Validation Error: {error}", "YELLOW"),
-                    f"Validation Query: {query_type}",
-                ]
+                lines.append(f"Validation Query: {query_type}")
             else:
-                return [
-                    self._color(f"⚠ Validation Error: {error}", "YELLOW"),
-                    "No validation_query configured for this task",
-                ]
+                lines.append("No validation_query configured for this task")
+            if termination_reason:
+                lines.append(f"Termination Reason: {termination_reason}")
+            return lines
         
         command = validation.get("command", "N/A")
         expected = validation.get("expected_result", "N/A")
@@ -855,6 +861,11 @@ class RolloutLogger:
         if query_type:
             summary_line += f" | Query type: {query_type}"
         lines.append(summary_line)
+        
+        # Add termination reason if available
+        termination_reason = validation.get("termination_reason")
+        if termination_reason:
+            lines.append(f"Termination Reason: {termination_reason}")
         
         return lines
     

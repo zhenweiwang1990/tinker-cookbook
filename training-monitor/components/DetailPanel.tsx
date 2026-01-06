@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import RolloutList from './RolloutList';
 import RolloutDetail from './RolloutDetail';
+import GroupCard from './GroupCard';
 import styles from './DetailPanel.module.css';
 
 interface DetailPanelProps {
@@ -160,49 +160,30 @@ export default function DetailPanel({
           </div>
         </div>
 
-        {(type === 'step' || type === 'eval' || type === 'baseline') && item.groups && item.groups.length > 0 && (
+        {item.groups && item.groups.length > 0 && (
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>Groups ({item.groups.length})</h3>
-            <div className={styles.groupsList}>
-              {item.groups.map((group: any) => (
-                <div key={group.id} className={styles.groupItem}>
-                  <div className={styles.groupHeader}>
-                    <span className={styles.groupNumber}>Group {group.group_num}</span>
-                    <span className={styles.status}>{group.status}</span>
-                    {group.progress_percent !== null && (
-                      <span className={styles.progress}>
-                        {group.progress_percent.toFixed(1)}%
-                      </span>
-                    )}
-                  </div>
-                  <div className={styles.groupStats}>
-                    {group.completed_rollouts !== null && group.num_rollouts !== null && (
-                      <span>Rollouts: {group.completed_rollouts}/{group.num_rollouts}</span>
-                    )}
-                    {group.reward_mean !== null && (
-                      <span>Reward: {group.reward_mean.toFixed(4)}</span>
-                    )}
-                    {group.success_count !== null && (
-                      <span>Success: {group.success_count}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
+            <div className={styles.groupsGrid}>
+              {item.groups.map((group: any) => {
+                // Filter rollouts for this group
+                const groupRollouts = rollouts.filter(
+                  (r: any) => r.group_number === group.group_num
+                );
+                return (
+                  <GroupCard
+                    key={group.id}
+                    group={group}
+                    rollouts={groupRollouts}
+                    onSelectRollout={(id) => {
+                      console.log('GroupCard onSelectRollout called with id:', id);
+                      onSelectRollout(id);
+                    }}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
-
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Rollouts ({rollouts.length})</h3>
-          <RolloutList
-            rollouts={rollouts}
-            onSelect={(id) => {
-              console.log('RolloutList onSelect called with id:', id);
-              console.log('onSelectRollout function:', onSelectRollout);
-              onSelectRollout(id);
-            }}
-          />
-        </div>
       </div>
     </div>
   );
