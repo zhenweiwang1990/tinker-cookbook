@@ -132,6 +132,7 @@ class CLIConfig:
     
     # Model configuration
     model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Model for training (also used for rollout in on-policy RL)
+    # model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct"  # Model for training (also used for rollout in on-policy RL)
     lora_rank: int = 32
     renderer_name: str | None = None
     load_checkpoint_path: str | None = None  # Optional: path to a specific checkpoint to load. If None, will auto-resume from log_path if checkpoint exists. If set, will load weights from this checkpoint (fresh optimizer, starts from batch 0).
@@ -183,6 +184,9 @@ class CLIConfig:
     # Rollout timeout configuration
     max_task_time_seconds: int = 30 * 60  # Maximum total time for task execution (default: 30 minutes)
     max_turn_time_seconds: int = 5 * 60  # Maximum time per turn for model inference (default: 5 minutes)
+    
+    # Baseline evaluation
+    skip_baseline: bool = False  # If True, skip baseline evaluation and start training directly
 
 
 async def cli_main(cli_config: CLIConfig) -> None:
@@ -580,6 +584,7 @@ async def cli_main(cli_config: CLIConfig) -> None:
         eval_every=cli_config.eval_every,
         save_every=cli_config.save_every,
         num_groups_to_log=cli_config.num_groups_to_log,
+        skip_baseline=cli_config.skip_baseline,  # Pass skip_baseline flag
         async_config=train.AsyncConfig(
             max_steps_off_policy=cli_config.max_steps_off_policy,
             groups_per_batch=cli_config.groups_per_batch,

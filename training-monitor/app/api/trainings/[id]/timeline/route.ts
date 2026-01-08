@@ -24,7 +24,8 @@ export async function GET(
     // Get baselines
     const baselinesResult = await query(`
       SELECT id, status, progress_percent, eval_time, success_rate, 
-             avg_reward, avg_turns, start_time, end_time, created_at
+             avg_reward, avg_turns, avg_turn_time, estimated_total_time, estimated_remaining_time,
+             start_time, end_time, created_at
       FROM baseline
       WHERE training_id = $1
       ORDER BY created_at ASC
@@ -40,6 +41,7 @@ export async function GET(
     const stepsResult = await query(`
       SELECT id, step, batch, status, progress_percent, 
              reward_mean, reward_std, loss, num_trajectories,
+             avg_turn_time, estimated_total_time, estimated_remaining_time,
              start_time, end_time, created_at
       FROM step
       WHERE training_id = $1
@@ -55,7 +57,9 @@ export async function GET(
     // Get evals
     const evalsResult = await query(`
       SELECT id, step, status, progress_percent, eval_time,
-             success_rate, avg_reward, avg_turns, start_time, end_time, created_at
+             success_rate, avg_reward, avg_turns,
+             avg_turn_time, estimated_total_time, estimated_remaining_time,
+             start_time, end_time, created_at
       FROM eval
       WHERE training_id = $1
       ORDER BY step ASC

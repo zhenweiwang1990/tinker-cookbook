@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import styles from './RolloutDetail.module.css';
 import TurnHeader from './TurnHeader';
 import ActionDetails from './ActionDetails';
+import ProgressBar from './ProgressBar';
 
 interface RolloutDetailProps {
   rolloutId: number;
@@ -791,6 +792,18 @@ export default function RolloutDetail({
             </div>
           )}
         </div>
+
+        {/* Progress Bar */}
+        {rollout.progress_percent !== null && rollout.progress_percent !== undefined && (
+          <div style={{ padding: '0 16px 12px' }}>
+            <ProgressBar 
+              percent={rollout.progress_percent} 
+              showLabel={true} 
+              height="14px"
+              isRunning={rollout.status === 'running'}
+            />
+          </div>
+        )}
 
         {/* Task and Validation Details (if available) */}
         {(task || validation) && (

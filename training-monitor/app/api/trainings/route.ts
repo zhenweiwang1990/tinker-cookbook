@@ -11,6 +11,7 @@ export async function GET() {
       SELECT 
         id, run_name, log_path, model_name, status, 
         progress_percent, current_step, total_steps,
+        avg_turn_time, estimated_total_time, estimated_remaining_time,
         start_time, end_time, last_heartbeat,
         created_at, updated_at
       FROM training

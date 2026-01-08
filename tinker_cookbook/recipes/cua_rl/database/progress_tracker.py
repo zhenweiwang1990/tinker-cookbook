@@ -233,7 +233,14 @@ class ProgressTracker:
         # Calculate progress
         completed_turns = current_turn  # 0-indexed, so current_turn is number of completed turns
         total_turns = max_turns
-        progress_percent = min(100.0, (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0)
+        
+        # Key change: If rollout is finished (completed or failed), always show 100%
+        # regardless of actual turns (may have called finish, timeout, error, etc.)
+        if status in ('completed', 'failed'):
+            progress_percent = 100.0
+            completed_turns = total_turns  # Count as full completion
+        else:
+            progress_percent = min(100.0, (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0)
         
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('rollout', rollout_id, fallback=30.0)  # 30s default
@@ -314,23 +321,31 @@ class ProgressTracker:
             max_turns = rollout.max_turns or 20  # Default 20 turns
             total_turns += max_turns
             
-            if rollout.status == 'completed':
-                completed_turns += rollout.num_turns or max_turns
-                completed_rollouts += 1
+            # Key change: Any finished rollout (completed or failed) counts as 100%
+            if rollout.status in ('completed', 'failed'):
+                # Finished rollouts always count as max_turns (100%)
+                # regardless of actual num_turns (may have called finish, timeout, error, etc.)
+                completed_turns += max_turns
+                if rollout.status == 'completed':
+                    completed_rollouts += 1
+                else:
+                    failed_rollouts += 1
             elif rollout.status == 'running':
                 completed_turns += rollout.current_turn or 0
                 running_rollouts += 1
-            elif rollout.status == 'failed':
-                failed_rollouts += 1
             # pending rollouts contribute 0 completed turns
         
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
         # Determine status
-        if completed_rollouts >= len(rollouts):
-            status = "completed"
-        elif failed_rollouts >= len(rollouts):
-            status = "failed"
+        # All rollouts finished (completed or failed) -> group is done
+        finished_rollouts = completed_rollouts + failed_rollouts
+        if finished_rollouts >= len(rollouts):
+            # If all finished, status depends on whether any succeeded
+            if completed_rollouts > 0:
+                status = "completed"
+            else:
+                status = "failed"
         elif running_rollouts > 0 or completed_rollouts > 0:
             status = "running"
         else:
@@ -416,11 +431,13 @@ class ProgressTracker:
                 max_turns = rollout.max_turns or 20
                 total_turns += max_turns
                 
-                if rollout.status == 'completed':
-                    completed_turns += rollout.num_turns or max_turns
+                # Finished rollouts count as 100% (completed or failed)
+                if rollout.status in ('completed', 'failed'):
+                    completed_turns += max_turns
                 elif rollout.status == 'running':
                     completed_turns += rollout.current_turn or 0
             
+            # Finished groups count based on their status
             if group.status == 'completed':
                 completed_groups += 1
             elif group.status == 'running':
@@ -443,10 +460,15 @@ class ProgressTracker:
         progress_percent = min(100.0, rollout_progress + training_progress)
         
         # Determine status
+        finished_groups = completed_groups + failed_groups
         if step.status == 'completed':
             status = "completed"
-        elif failed_groups >= len(groups):
-            status = "failed"
+        elif finished_groups >= len(groups):
+            # All groups finished (some may have failed)
+            if completed_groups > 0:
+                status = "running"  # Move to training phase
+            else:
+                status = "failed"  # All failed
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:
@@ -522,8 +544,9 @@ class ProgressTracker:
                 max_turns = rollout.max_turns or 20
                 total_turns += max_turns
                 
-                if rollout.status == 'completed':
-                    completed_turns += rollout.num_turns or max_turns
+                # Finished rollouts count as 100% (completed or failed)
+                if rollout.status in ('completed', 'failed'):
+                    completed_turns += max_turns
                 elif rollout.status == 'running':
                     completed_turns += rollout.current_turn or 0
             
@@ -537,10 +560,13 @@ class ProgressTracker:
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
         # Determine status
-        if completed_groups >= len(groups):
-            status = "completed"
-        elif failed_groups >= len(groups):
-            status = "failed"
+        finished_groups = completed_groups + failed_groups
+        if finished_groups >= len(groups):
+            # All groups finished
+            if completed_groups > 0:
+                status = "completed"
+            else:
+                status = "failed"
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:
@@ -617,8 +643,9 @@ class ProgressTracker:
                 max_turns = rollout.max_turns or 20
                 total_turns += max_turns
                 
-                if rollout.status == 'completed':
-                    completed_turns += rollout.num_turns or max_turns
+                # Finished rollouts count as 100% (completed or failed)
+                if rollout.status in ('completed', 'failed'):
+                    completed_turns += max_turns
                 elif rollout.status == 'running':
                     completed_turns += rollout.current_turn or 0
             
@@ -632,10 +659,13 @@ class ProgressTracker:
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
         # Determine status
-        if completed_groups >= len(groups):
-            status = "completed"
-        elif failed_groups >= len(groups):
-            status = "failed"
+        finished_groups = completed_groups + failed_groups
+        if finished_groups >= len(groups):
+            # All groups finished
+            if completed_groups > 0:
+                status = "completed"
+            else:
+                status = "failed"
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:

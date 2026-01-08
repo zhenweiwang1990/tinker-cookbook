@@ -31,7 +31,11 @@ export async function GET(
       if (item) {
         // Get groups for this baseline
         const groupsResult = await query(`
-          SELECT * FROM "group" 
+          SELECT 
+            id, group_num, status, progress_percent, completed_rollouts, 
+            num_rollouts, reward_mean, reward_std, start_time, end_time, 
+            created_at, updated_at
+          FROM "group" 
           WHERE source_type = 'baseline' AND baseline_id = $1
           ORDER BY group_num ASC
         `, [itemId]);
@@ -61,7 +65,11 @@ export async function GET(
       if (item) {
         // Get groups for this step
         const groupsResult = await query(`
-          SELECT * FROM "group" 
+          SELECT 
+            id, group_num, status, progress_percent, completed_rollouts, 
+            num_rollouts, reward_mean, reward_std, start_time, end_time, 
+            created_at, updated_at
+          FROM "group" 
           WHERE source_type = 'step' AND step_id = $1
           ORDER BY group_num ASC
         `, [itemId]);
@@ -91,7 +99,11 @@ export async function GET(
       if (item) {
         // Get groups for this eval
         const groupsResult = await query(`
-          SELECT * FROM "group" 
+          SELECT 
+            id, group_num, status, progress_percent, completed_rollouts, 
+            num_rollouts, reward_mean, reward_std, start_time, end_time, 
+            created_at, updated_at
+          FROM "group" 
           WHERE source_type = 'eval' AND eval_id = $1
           ORDER BY group_num ASC
         `, [itemId]);

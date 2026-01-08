@@ -51,8 +51,8 @@ class TinkerCuaAgent:
         gbox_api_key: str,
         tinker_api_key: str,
         tinker_model_path: str,  # e.g., "tinker://.../sampler_weights/000080"
-        # base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
-        base_model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        # base_model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct",
         renderer_name: Optional[str] = None,
         max_turns: int = 20,
         box_type: str = "android",
@@ -276,7 +276,6 @@ class TinkerCuaAgent:
         Returns:
             String signature (normalized JSON of tool name + sorted arguments)
         """
-        import json
         # Create normalized signature: sort keys and convert to JSON string
         normalized_args = json.dumps(arguments, sort_keys=True)
         return f"{tool_name}:{normalized_args}"
@@ -588,7 +587,6 @@ class TinkerCuaAgent:
             return
         
         try:
-            import json
             # Get the turn data that was just saved
             if (hasattr(self.rollout_logger, 'trajectory_data') and 
                 'turns' in self.rollout_logger.trajectory_data):
@@ -999,7 +997,6 @@ class TinkerCuaAgent:
                 # Save env_build data to database immediately (so it's visible during rollout)
                 if self.rollout_recorder is not None:
                     try:
-                        import json
                         # Create a partial trajectory_data_json with just env_build info
                         env_build_data = {
                             "execution_details": {

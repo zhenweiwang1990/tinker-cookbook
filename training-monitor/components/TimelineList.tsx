@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import styles from './TimelineList.module.css';
+import ProgressBar from './ProgressBar';
 
 interface TimelineItem {
   id: number;
@@ -9,6 +10,9 @@ interface TimelineItem {
   display_name: string;
   status: string;
   progress_percent: number;
+  avg_turn_time: number | null;
+  estimated_total_time: number | null;
+  estimated_remaining_time: number | null;
   created_at: string;
   start_time: string | null;
   end_time: string | null;
@@ -152,28 +156,10 @@ export default function TimelineList({
                 <span className={styles.paramValue}>{trainingParams.groups_per_batch}</span>
               </div>
             )}
-            {trainingParams.max_tokens !== null && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>Max Tokens:</span>
-                <span className={styles.paramValue}>{trainingParams.max_tokens}</span>
-              </div>
-            )}
             {trainingParams.temperature !== null && (
               <div className={styles.paramItem}>
                 <span className={styles.paramLabel}>Temperature:</span>
-                <span className={styles.paramValue}>{trainingParams.temperature}</span>
-              </div>
-            )}
-            {trainingParams.kl_penalty_coef !== null && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>KL Penalty:</span>
-                <span className={styles.paramValue}>{trainingParams.kl_penalty_coef}</span>
-              </div>
-            )}
-            {trainingParams.num_substeps !== null && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>Substeps:</span>
-                <span className={styles.paramValue}>{trainingParams.num_substeps}</span>
+                <span className={styles.paramValue}>{trainingParams.temperature.toFixed(2)}</span>
               </div>
             )}
             {trainingParams.max_turns !== null && (
@@ -182,109 +168,104 @@ export default function TimelineList({
                 <span className={styles.paramValue}>{trainingParams.max_turns}</span>
               </div>
             )}
-            {trainingParams.seed !== null && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>Seed:</span>
-                <span className={styles.paramValue}>{trainingParams.seed}</span>
-              </div>
-            )}
-            {trainingParams.box_type && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>Box Type:</span>
-                <span className={styles.paramValue}>{trainingParams.box_type}</span>
-              </div>
-            )}
-            {trainingParams.renderer_name && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>Renderer:</span>
-                <span className={styles.paramValue}>{trainingParams.renderer_name}</span>
-              </div>
-            )}
-            {trainingParams.wandb_project && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>WandB Project:</span>
-                <span className={styles.paramValue}>{trainingParams.wandb_project}</span>
-              </div>
-            )}
-            {trainingParams.wandb_name && (
-              <div className={styles.paramItem}>
-                <span className={styles.paramLabel}>WandB Name:</span>
-                <span className={styles.paramValue}>{trainingParams.wandb_name}</span>
-              </div>
-            )}
-            {trainingParams.log_path && (
-              <div className={styles.paramItem} style={{ gridColumn: '1 / -1' }}>
-                <span className={styles.paramLabel}>训练数据源:</span>
-                <span className={styles.paramValue} title={trainingParams.log_path}>
-                  {trainingParams.log_path.length > 60
-                    ? trainingParams.log_path.substring(0, 60) + '...'
-                    : trainingParams.log_path}
-                </span>
-              </div>
-            )}
           </div>
         </div>
       )}
       <div className={styles.list}>
         {items.length === 0 ? (
-          <div className={styles.empty}>
-            No timeline items yet
-          </div>
+          <div className={styles.empty}>No timeline items yet</div>
         ) : (
           items.map((item) => {
             const isSelected =
               selectedItem?.type === item.type && selectedItem?.id === item.id;
-            
-            // Calculate duration if both start_time and end_time exist
+
+            // Format times
+            const startTime = item.start_time ? new Date(item.start_time) : null;
+            const endTime = item.end_time ? new Date(item.end_time) : null;
+            const now = new Date();
+
+            // Format start time (short format for display)
+            const startTimeText = startTime
+              ? startTime.toLocaleTimeString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : null;
+
+            // Calculate duration or show estimated remaining time
             let durationText = '';
-            if (item.start_time && item.end_time) {
-              const duration = new Date(item.end_time).getTime() - new Date(item.start_time).getTime();
-              const seconds = Math.floor(duration / 1000);
-              const minutes = Math.floor(seconds / 60);
-              const hours = Math.floor(minutes / 60);
-              
-              if (hours > 0) {
-                durationText = `${hours}h ${minutes % 60}m`;
-              } else if (minutes > 0) {
-                durationText = `${minutes}m ${seconds % 60}s`;
+            if (endTime && startTime) {
+              // Completed: show actual duration
+              const durationMs = endTime.getTime() - startTime.getTime();
+              const durationSecs = Math.floor(durationMs / 1000);
+              if (durationSecs < 60) {
+                durationText = `${durationSecs}s`;
+              } else if (durationSecs < 3600) {
+                const mins = Math.floor(durationSecs / 60);
+                const secs = durationSecs % 60;
+                durationText = `${mins}m${secs > 0 ? secs + 's' : ''}`;
               } else {
-                durationText = `${seconds}s`;
+                const hours = Math.floor(durationSecs / 3600);
+                const mins = Math.floor((durationSecs % 3600) / 60);
+                durationText = `${hours}h${mins > 0 ? mins + 'm' : ''}`;
+              }
+            } else if (startTime && item.status === 'running' && item.estimated_remaining_time) {
+              // Running: show estimated remaining time
+              const remainingSecs = Math.floor(item.estimated_remaining_time);
+              if (remainingSecs < 60) {
+                durationText = `ETA: ${remainingSecs}s`;
+              } else if (remainingSecs < 3600) {
+                const mins = Math.floor(remainingSecs / 60);
+                durationText = `ETA: ${mins}m`;
+              } else if (remainingSecs < 86400) {
+                const hours = Math.floor(remainingSecs / 3600);
+                const mins = Math.floor((remainingSecs % 3600) / 60);
+                durationText = `ETA: ${hours}h${mins > 0 ? mins + 'm' : ''}`;
+              } else {
+                const days = Math.floor(remainingSecs / 86400);
+                const hours = Math.floor((remainingSecs % 86400) / 3600);
+                durationText = `ETA: ${days}d${hours > 0 ? hours + 'h' : ''}`;
+              }
+            } else if (startTime && item.status === 'running') {
+              // Running but no estimate: show elapsed time
+              const elapsedMs = now.getTime() - startTime.getTime();
+              const elapsedSecs = Math.floor(elapsedMs / 1000);
+              if (elapsedSecs < 60) {
+                durationText = `${elapsedSecs}s`;
+              } else if (elapsedSecs < 3600) {
+                const mins = Math.floor(elapsedSecs / 60);
+                durationText = `${mins}m`;
+              } else {
+                const hours = Math.floor(elapsedSecs / 3600);
+                const mins = Math.floor((elapsedSecs % 3600) / 60);
+                durationText = `${hours}h${mins > 0 ? mins + 'm' : ''}`;
               }
             }
-            
-            // Format start time
-            const startTimeText = item.start_time 
-              ? new Date(item.start_time).toLocaleTimeString('zh-CN', { 
-                  hour: '2-digit', 
-                  minute: '2-digit',
-                  second: '2-digit'
-                })
-              : '';
-            
+
             return (
               <div
                 key={`${item.type}-${item.id}`}
                 className={`${styles.item} ${
                   isSelected ? styles.selected : ''
-                } ${styles[item.type]}`}
+                }`}
                 onClick={() => onSelect(item.type, item.id)}
               >
-                <div className={styles.typeIcon}>
-                  {item.type === 'baseline' && '📊'}
-                  {item.type === 'step' && '⚙️'}
-                  {item.type === 'eval' && '📈'}
-                </div>
-                <div className={styles.content}>
+                <div className={styles.itemContent}>
                   <div className={styles.name}>{item.display_name}</div>
-                  <div className={styles.timeInfo}>
+                  <div className={styles.metadata}>
                     {startTimeText && (
                       <span className={styles.startTime} title="开始时间">
                         🕐 {startTimeText}
                       </span>
                     )}
                     {durationText && (
-                      <span className={styles.duration} title="耗时">
+                      <span className={styles.duration} title={item.status === 'running' && item.estimated_remaining_time ? '预计剩余时间' : '耗时'}>
                         ⏱️ {durationText}
+                      </span>
+                    )}
+                    {item.status === 'running' && item.avg_turn_time && (
+                      <span className={styles.turnSpeed} title="平均每轮耗时">
+                        ⚡ {item.avg_turn_time.toFixed(1)}s/turn
                       </span>
                     )}
                   </div>
@@ -298,8 +279,13 @@ export default function TimelineList({
                     </span>
                   </div>
                   {item.progress_percent !== null && (
-                    <div className={styles.progress}>
-                      {item.progress_percent.toFixed(1)}%
+                    <div className={styles.progressContainer}>
+                      <ProgressBar 
+                        percent={item.progress_percent} 
+                        showLabel={true} 
+                        height="12px"
+                        isRunning={item.status === 'running'}
+                      />
                     </div>
                   )}
                 </div>

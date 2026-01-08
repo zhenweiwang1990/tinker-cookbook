@@ -1,6 +1,7 @@
 'use client';
 
 import styles from './GroupCard.module.css';
+import ProgressBar from './ProgressBar';
 
 interface Rollout {
   id: number;
@@ -29,16 +30,13 @@ export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCar
   // Calculate success rate for this group
   const completedRollouts = rollouts.filter(r => r.status === 'completed');
   const successCount = completedRollouts.filter(r => r.task_success).length;
-  const successRate = completedRollouts.length > 0 ? (successCount / completedRollouts.length) * 100 : 0;
   const isRunning = group.status === 'running' || rollouts.some(r => r.status === 'running');
   const isCompleted = group.status === 'completed';
   
-  // Get success rate color
-  const getSuccessRateClass = () => {
-    if (successRate >= 80) return styles.successHigh;
-    if (successRate >= 50) return styles.successMedium;
-    return styles.successLow;
-  };
+  // Calculate progress percentage
+  const progressPercent = group.progress_percent !== null && group.progress_percent !== undefined 
+    ? group.progress_percent 
+    : 0;
 
   return (
     <div className={`${styles.card} ${isRunning ? styles.cardRunning : ''} ${isCompleted ? styles.cardCompleted : ''}`}>
@@ -53,10 +51,16 @@ export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCar
               {group.status}
             </span>
           </div>
-          <div className={`${styles.successRate} ${getSuccessRateClass()}`}>
-            <span className={styles.successRateValue}>{successRate.toFixed(0)}%</span>
-            <span className={styles.successRateLabel}>success</span>
-          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div style={{ marginBottom: '8px' }}>
+          <ProgressBar 
+            percent={progressPercent} 
+            showLabel={true} 
+            height="12px"
+            isRunning={group.status === 'running'}
+          />
         </div>
 
         <div className={styles.stats}>

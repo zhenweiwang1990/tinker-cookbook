@@ -116,6 +116,7 @@ class CUAEnv(ProblemEnv):
         tinker_model_path: str,
         tinker_api_key: str,
         base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        # base_model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct",
         renderer_name: Optional[str] = None,
         rollout_logger = None,
         rollout_recorder = None,  # RolloutRecorder instance for database recording
@@ -403,6 +404,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
     tinker_api_key: Optional[str] = None
     rollout_model_name: Optional[str] = None  # Not used, kept for compatibility
     model_name_for_tokenizer: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+    # model_name_for_tokenizer: str = "Qwen/Qwen3-VL-235B-A22B-Instruct"
     renderer_name: Optional[str] = None
     convo_prefix: Optional[List[renderers.Message]] = None
     max_turns: int = 20

@@ -259,6 +259,7 @@ class Config:
     eval_every: int = 20  # 0 = disabled
     save_every: int = 20  # 0 = disabled
     load_checkpoint_path: str | None = None
+    skip_baseline: bool = False  # If True, skip baseline evaluation and start training directly
 
     async_config: AsyncConfig | None = None
     stream_minibatch_config: StreamMinibatchConfig | None = None
@@ -1209,7 +1210,7 @@ async def do_sync_training(
         # Set rollout context if available (for CUA and other custom rollouts that support it)
         # This allows custom rollout functions to access current step/batch information
         try:
-            from tinker_cookbook.recipes.cua_rl.rollout import set_rollout_context
+            from tinker_cookbook.recipes.cua_rl.core.rollout import set_rollout_context
             set_rollout_context(step=i_batch, batch=i_batch)
         except (ImportError, AttributeError):
             # set_rollout_context not available (not using CUA rollout), skip silently
@@ -1401,7 +1402,7 @@ async def main(
     logger.info("=" * 80)
 
     # Run baseline evaluation before training starts (if starting from batch 0 and evaluators are configured)
-    if start_batch == 0 and len(evaluators) > 0:
+    if start_batch == 0 and len(evaluators) > 0 and not cfg.skip_baseline:
         logger.info("")
         logger.info("=" * 80)
         logger.info("BASELINE EVALUATION (Before Training)")

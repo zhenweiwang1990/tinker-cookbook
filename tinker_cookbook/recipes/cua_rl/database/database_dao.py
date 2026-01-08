@@ -547,6 +547,12 @@ def get_or_create_group(
     
     existing_group = query.first()
     if existing_group:
+        # Update group status if provided in kwargs
+        if 'status' in kwargs and kwargs['status'] != existing_group.status:
+            update_group(session, existing_group.id, status=kwargs['status'])
+        # Update current_phase if provided
+        if 'current_phase' in kwargs:
+            update_group(session, existing_group.id, current_phase=kwargs['current_phase'])
         return existing_group
     
     # Create new group

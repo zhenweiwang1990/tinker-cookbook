@@ -375,7 +375,7 @@ class RolloutRecorder:
         rollout_time: float,
         **kwargs
     ) -> bool:
-        """Record rollout completion."""
+        """Record rollout completion and update progress."""
         if not self.rollout_db_id:
             logger.warning("[RolloutRecorder] Cannot complete rollout - not initialized")
             return False
@@ -396,11 +396,22 @@ class RolloutRecorder:
             }
             
             dao_update_rollout(self.session, self.rollout_db_id, **update_kwargs)
+            
+            # Update progress using ProgressTracker (this will also cascade to group/step/eval/baseline/training)
+            max_turns = kwargs.get('max_turns', self.max_turns or 20)
+            progress_stats = self.progress_tracker.update_rollout_progress(
+                rollout_id=self.rollout_db_id,
+                current_turn=num_turns,
+                max_turns=max_turns,
+                status="completed",
+            )
+            
             self.session.commit()
             
             logger.info(
                 f"[RolloutRecorder] Completed rollout: UUID={self.rollout_uuid}, "
-                f"success={task_success}, reward={reward:.4f}"
+                f"success={task_success}, reward={reward:.4f}, "
+                f"progress=100%, turns={num_turns}/{max_turns}"
             )
             
             return True

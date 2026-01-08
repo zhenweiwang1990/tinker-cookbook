@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import styles from './TrainingList.module.css';
+import ProgressBar from './ProgressBar';
 
 interface Training {
   id: number;
@@ -99,7 +100,12 @@ export default function TrainingList({ selectedId, onSelect }: TrainingListProps
             </div>
             {training.progress_percent !== null && (
               <div className={styles.progress}>
-                {training.progress_percent.toFixed(1)}%
+                <ProgressBar 
+                  percent={training.progress_percent} 
+                  showLabel={true} 
+                  height="12px"
+                  isRunning={training.status === 'running'}
+                />
               </div>
             )}
           </div>
