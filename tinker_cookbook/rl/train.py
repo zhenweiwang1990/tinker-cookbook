@@ -260,6 +260,7 @@ class Config:
     save_every: int = 20  # 0 = disabled
     load_checkpoint_path: str | None = None
     skip_baseline: bool = False  # If True, skip baseline evaluation and start training directly
+    baseline_only: bool = False  # If True, only run baseline evaluation and exit (no training)
 
     async_config: AsyncConfig | None = None
     stream_minibatch_config: StreamMinibatchConfig | None = None
@@ -1462,6 +1463,15 @@ async def main(
         
         logger.info("=" * 80)
         logger.info("")
+
+    # If baseline_only flag is set, exit after baseline evaluation
+    if cfg.baseline_only:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("BASELINE ONLY MODE - Exiting after baseline evaluation")
+        logger.info("=" * 80)
+        logger.info("")
+        return
 
     # Training loop
     if cfg.async_config is not None:

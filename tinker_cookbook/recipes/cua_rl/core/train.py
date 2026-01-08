@@ -187,6 +187,7 @@ class CLIConfig:
     
     # Baseline evaluation
     skip_baseline: bool = False  # If True, skip baseline evaluation and start training directly
+    baseline_only: bool = False  # If True, only run baseline evaluation and exit (no training)
 
 
 async def cli_main(cli_config: CLIConfig) -> None:
@@ -585,6 +586,7 @@ async def cli_main(cli_config: CLIConfig) -> None:
         save_every=cli_config.save_every,
         num_groups_to_log=cli_config.num_groups_to_log,
         skip_baseline=cli_config.skip_baseline,  # Pass skip_baseline flag
+        baseline_only=cli_config.baseline_only,  # Pass baseline_only flag
         async_config=train.AsyncConfig(
             max_steps_off_policy=cli_config.max_steps_off_policy,
             groups_per_batch=cli_config.groups_per_batch,
