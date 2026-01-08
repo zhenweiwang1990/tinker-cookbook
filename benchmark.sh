@@ -40,12 +40,12 @@ MODEL_PATH=""                              # Optional: checkpoint path for fine-
 # Evaluation dataset configuration
 EVAL_SOURCE_TYPE="task_adapter"
 EVAL_SPLIT_TYPE="eval"
-TRAIN_RATIO=0.99
+TRAIN_RATIO=0
 SEED=42
 
 # Benchmark settings
 BENCHMARK_NAME=""                          # Optional: custom name for this benchmark run
-MAX_TURNS=3
+MAX_TURNS=20
 TEMPERATURE=1.0
 MAX_TOKENS=2048
 
@@ -53,8 +53,8 @@ MAX_TOKENS=2048
 BOX_TYPE="android"
 
 # Coordinate generation mode
-COORDINATE_MODE="gbox"                    # gbox or direct
-COORDINATE_SCALE=""                       # auto (empty), true, or false
+COORDINATE_MODE="direct"                    # gbox or direct
+COORDINATE_SCALE="true"                       # auto (empty), true, or false
 
 # Concurrency and timeout
 MAX_CONCURRENT_ROLLOUTS=8
