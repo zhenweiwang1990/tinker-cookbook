@@ -77,8 +77,55 @@ $DOCKER_COMPOSE up -d
 echo ""
 echo "Services started!"
 echo ""
+echo "Waiting for services to be healthy..."
+
+# Wait for services to be healthy
+MAX_WAIT=60
+WAIT_TIME=0
+while [ $WAIT_TIME -lt $MAX_WAIT ]; do
+    # Check if both services are healthy
+    POSTGRES_HEALTHY=$($DOCKER_COMPOSE ps postgres | grep -q "healthy" && echo "yes" || echo "no")
+    MONITOR_HEALTHY=$($DOCKER_COMPOSE ps training-monitor | grep -q "Up" && echo "yes" || echo "no")
+    
+    if [ "$POSTGRES_HEALTHY" = "yes" ] && [ "$MONITOR_HEALTHY" = "yes" ]; then
+        echo "✓ Services are healthy"
+        break
+    fi
+    
+    sleep 2
+    WAIT_TIME=$((WAIT_TIME + 2))
+done
+
+if [ $WAIT_TIME -ge $MAX_WAIT ]; then
+    echo "⚠️  Services may not be fully ready yet"
+fi
+
+echo ""
+echo "Initializing database schema..."
+cd "$PROJECT_DIR/.."  # Go to tinker-cookbook root
+
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "⚠️  Warning: 'uv' not found. Skipping automatic database initialization."
+    echo "   Please run manually: ./training-monitor/scripts/init-database.sh"
+else
+    # Run database initialization
+    cd tinker_cookbook/recipes/cua_rl
+    if uv run python migrate_database.py 2>&1 | grep -q "SUCCESS\|up to date"; then
+        echo "✓ Database schema initialized"
+    else
+        echo "⚠️  Database initialization may have failed"
+        echo "   Please run manually: ./training-monitor/scripts/init-database.sh"
+    fi
+fi
+
+cd "$PROJECT_DIR"
+
+echo ""
+echo "============================================"
 echo "Training monitor: http://localhost:${PORT}"
-echo "PostgreSQL: localhost:5432"
+echo "PostgreSQL: localhost:5433"
+echo "============================================"
 echo ""
 echo "To view logs:"
 echo "  $DOCKER_COMPOSE logs -f"

@@ -1,4 +1,4 @@
-.PHONY: help build start stop logs restart clean
+.PHONY: help build start stop logs restart clean init-db
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -7,7 +7,7 @@ help: ## Show this help message
 build: ## Build Docker image
 	docker build -t cua-rl-training-monitor:latest .
 
-start: ## Start the container
+start: ## Start the container (auto-initializes database)
 	./scripts/docker-start.sh
 
 stop: ## Stop the container
@@ -17,6 +17,9 @@ logs: ## View container logs
 	./scripts/docker-logs.sh
 
 restart: stop start ## Restart the container
+
+init-db: ## Initialize/update database schema
+	./scripts/init-database.sh
 
 clean: ## Remove container and image
 	docker stop training-monitor 2>/dev/null || true

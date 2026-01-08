@@ -4,15 +4,33 @@ Quick access scripts for training and benchmarking Computer Use Agent (CUA) mode
 
 ## Quick Start
 
+### Prerequisites
+
+1. **Start the database** (training-monitor includes PostgreSQL):
+
+```bash
+cd training-monitor
+make start
+# or
+./scripts/docker-start.sh
+```
+
+This starts PostgreSQL on port 5433 and the web UI on port 3001.
+
+2. **Set environment variables**:
+
+```bash
+export GBOX_API_KEY=your_api_key
+export TINKER_API_KEY=your_tinker_api_key
+```
+
 ### Training
 
 ```bash
-# Set environment variables
-export GBOX_API_KEY=your_api_key
-export TINKER_API_KEY=your_tinker_api_key
-
 # Run training with defaults
 ./train.sh
+
+# Database migrations run automatically! No manual setup needed.
 
 # View all options
 ./train.sh --help
@@ -151,8 +169,21 @@ export TINKER_API_KEY=your_tinker_api_key
 **Database connection failed:**
 ```bash
 cd training-monitor
-docker-compose up -d
+make start
+# or check if containers are running
+docker-compose ps
 ```
+
+**Database schema error ("column does not exist"):**
+
+This should never happen as migrations run automatically, but if it does:
+
+```bash
+cd tinker_cookbook/recipes/cua_rl
+uv run python migrate_database.py
+```
+
+See `tinker_cookbook/recipes/cua_rl/DATABASE_SETUP.md` for details.
 
 **Log directory exists:**
 ```bash

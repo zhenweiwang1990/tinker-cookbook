@@ -69,13 +69,14 @@ def init_database(db_url: Optional[str] = None, echo: bool = False) -> None:
         pool_recycle=3600,  # Recycle connections after 1 hour
     )
     
-    # Create all tables (for new databases)
-    Base.metadata.create_all(engine)
-    
-    # Run Alembic migrations to ensure schema is up to date
+    # Run Alembic migrations first to ensure schema is up to date
+    # This is done BEFORE create_all to avoid conflicts
+    migration_success = False
     try:
         from alembic import command
         from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
         
         # Get alembic.ini path (should be in the parent directory, not in database/)
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,13 +88,42 @@ def init_database(db_url: Optional[str] = None, echo: bool = False) -> None:
             alembic_cfg = Config(alembic_ini_path)
             # Set database URL in config
             alembic_cfg.set_main_option("sqlalchemy.url", database_url)
-            # Run migrations
-            command.upgrade(alembic_cfg, "head")
-            logger.info("Alembic migrations applied successfully")
+            
+            # Check if database needs initialization
+            with engine.connect() as conn:
+                context = MigrationContext.configure(conn)
+                current_rev = context.get_current_revision()
+                
+                if current_rev is None:
+                    # Database is uninitialized, create base schema first
+                    logger.info("Database is uninitialized, creating initial schema...")
+                    Base.metadata.create_all(engine)
+                    # Stamp with initial revision
+                    command.stamp(alembic_cfg, "head")
+                    logger.info("Database initialized with current schema")
+                else:
+                    # Database exists, run migrations
+                    script = ScriptDirectory.from_config(alembic_cfg)
+                    head_rev = script.get_current_head()
+                    
+                    if current_rev != head_rev:
+                        logger.info(f"Running migrations from {current_rev} to {head_rev}...")
+                        command.upgrade(alembic_cfg, "head")
+                        logger.info("Migrations applied successfully")
+                    else:
+                        logger.info(f"Database schema is up to date (revision: {current_rev})")
+            
+            migration_success = True
         else:
-            logger.warning(f"Alembic config not found at {alembic_ini_path}, skipping migrations")
+            logger.error(f"Alembic config not found at {alembic_ini_path}")
+            raise RuntimeError(f"Cannot initialize database: alembic.ini not found at {alembic_ini_path}")
     except Exception as e:
-        logger.warning(f"Failed to run Alembic migrations: {e}. Tables may need manual migration.")
+        logger.error(f"Failed to run database migrations: {e}")
+        logger.error("Please run: cd tinker_cookbook/recipes/cua_rl && uv run python migrate_database.py")
+        raise RuntimeError(f"Database migration failed: {e}. Cannot continue.") from e
+    
+    if not migration_success:
+        raise RuntimeError("Database migration did not complete successfully")
     
     # Create session factory
     _session_factory = sessionmaker(bind=engine)
