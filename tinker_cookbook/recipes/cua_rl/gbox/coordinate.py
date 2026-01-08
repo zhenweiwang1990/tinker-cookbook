@@ -11,11 +11,16 @@ except ImportError:
     logging.warning("gbox_sdk not installed. Install with: pip install gbox-sdk")
 
 from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.gbox.base_coordinate_generator import BaseCoordinateGenerator
 
 logger = logging.getLogger(__name__)
 
 
-class CuaGBoxCoordinateGenerator:
+# Alias for backward compatibility
+CuaGBoxCoordinateGenerator = None  # Will be set below
+
+
+class GBoxCoordinateGenerator(BaseCoordinateGenerator):
     """Shared coordinate generation using GBox model."""
     
     def __init__(self, api_key: str, model: str = "gbox-handy-1"):
@@ -56,8 +61,8 @@ class CuaGBoxCoordinateGenerator:
         self,
         screenshot_uri: str,
         action_type: str,
-        target: str,
-        end_target: Optional[str] = None,
+        target: str | Dict[str, Any],  # Can be string (GBox mode) or dict (Direct mode fallback)
+        end_target: Optional[str | Dict[str, Any]] = None,
         direction: Optional[str] = None,
         rollout_logger: Optional[RolloutLogger] = None,
     ) -> Dict[str, Any]:
@@ -66,35 +71,39 @@ class CuaGBoxCoordinateGenerator:
         Args:
             screenshot_uri: Screenshot URI (base64 data URI or URL)
             action_type: Type of action ("click", "tap", "drag", "scroll")
-            target: Target element description (natural language)
+            target: Target element description (natural language string) or dict (from Pydantic model)
             end_target: End target for drag actions
             direction: Direction for scroll actions
             
         Returns:
             Coordinate generation response with coordinates
         """
+        # Extract string description from target if it's a dict (from Pydantic model)
+        target_str = target.get("element", str(target)) if isinstance(target, dict) else target
+        end_target_str = end_target.get("element", str(end_target)) if isinstance(end_target, dict) else end_target
+        
         # Build action object based on type
         if action_type == "click":
             action = {
                 "type": "click",
-                "target": target,
+                "target": target_str,
             }
         elif action_type == "tap":
             # Tap is similar to click for coordinate generation
             action = {
                 "type": "click",  # Use click type for coordinate generation
-                "target": target,
+                "target": target_str,
             }
         elif action_type == "drag":
             action = {
                 "type": "drag",
-                "target": target,
-                "destination": end_target or target,
+                "target": target_str,
+                "destination": end_target_str or target_str,
             }
         elif action_type == "scroll":
             action = {
                 "type": "scroll",
-                "location": target,
+                "location": target_str,
                 "direction": direction or "down",
             }
         else:
@@ -128,4 +137,8 @@ class CuaGBoxCoordinateGenerator:
         except Exception as e:
             logger.error(f"[GBox Coordinate] Failed to generate coordinates: {e}", exc_info=True)
             raise
+
+
+# Backward compatibility alias
+CuaGBoxCoordinateGenerator = GBoxCoordinateGenerator
 

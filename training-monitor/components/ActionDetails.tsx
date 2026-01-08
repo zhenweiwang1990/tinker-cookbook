@@ -108,12 +108,39 @@ export const ActionDetails: React.FC<ActionDetailsProps> = ({
             <>
               {actionResult.coordinates.x !== undefined && actionResult.coordinates.y !== undefined && (
                 <span>
-                  <strong style={{ color: '#444' }}>Coords:</strong>{' '}
+                  <strong style={{ color: '#444' }}>
+                    {actionResult.coordinates_scaled ? 'Scaled Coords' : 'Coords'}:
+                  </strong>{' '}
                   <code style={{ 
                     backgroundColor: '#fff',
                     padding: '1px 5px',
                     borderRadius: '2px',
                     border: '1px solid #dee2e6',
+                    fontSize: '11px'
+                  }}>
+                    ({actionResult.coordinates.x}, {actionResult.coordinates.y})
+                  </code>
+                </span>
+              )}
+              {/* Show original coordinates if they exist (coordinate scaling was used) */}
+              {actionResult.original_coordinates && actionResult.original_coordinates.x !== undefined && actionResult.original_coordinates.y !== undefined && (
+                <span>
+                  <strong style={{ color: '#444' }}>Original:</strong>{' '}
+                  <code style={{ 
+                    backgroundColor: '#fff3cd',
+                    padding: '1px 5px',
+                    borderRadius: '2px',
+                    border: '1px solid #ffeaa7',
+                    fontSize: '11px'
+                  }}>
+                    ({actionResult.original_coordinates.x}, {actionResult.original_coordinates.y})
+                  </code>
+                  {' '}→{' '}
+                  <code style={{ 
+                    backgroundColor: '#d4edda',
+                    padding: '1px 5px',
+                    borderRadius: '2px',
+                    border: '1px solid #c3e6cb',
                     fontSize: '11px'
                   }}>
                     ({actionResult.coordinates.x}, {actionResult.coordinates.y})

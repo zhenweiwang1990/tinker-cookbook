@@ -64,6 +64,10 @@ class TinkerCuaAgent:
         rollout_id: Optional[str] = None,  # Rollout ID for database recording
         max_task_time_seconds: int = 60 * 60,  # Maximum total time for task execution (default: 60 minutes)
         max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
+        coordinate_mode: str = "gbox",  # "gbox" or "direct"
+        coordinate_scale: Optional[bool] = None,  # Auto: True for direct mode, False for gbox mode
+        x_scale_ratio: Optional[float] = None,  # X scaling ratio (default: screen_width / 1000)
+        y_scale_ratio: Optional[float] = None,  # Y scaling ratio (default: screen_height / 1000)
     ):
         """
         Initialize Tinker CUA Agent.
@@ -80,6 +84,15 @@ class TinkerCuaAgent:
             temperature: Sampling temperature
             max_task_time_seconds: Maximum total time for task execution (default: 30 minutes)
             max_turn_time_seconds: Maximum time per turn for model inference (default: 5 minutes)
+            coordinate_mode: Coordinate generation mode
+                - "gbox": Use GBox external model (gbox-handy-1) to generate coordinates
+                - "direct": VLM directly outputs coordinates in tool calls
+            coordinate_scale: Whether to apply coordinate scaling (None = auto-detect based on mode)
+                - None (auto): True for direct mode, False for gbox mode
+                - False: Model outputs in actual screen pixels (system prompt includes screen dimensions)
+                - True: Model outputs in normalized space (e.g., 0-1000), scaled to actual pixels
+            x_scale_ratio: X scaling ratio (default: screen_width / 1000)
+            y_scale_ratio: Y scaling ratio (default: screen_height / 1000)
         """
         self.gbox_api_key = gbox_api_key
         self.tinker_api_key = tinker_api_key
@@ -95,6 +108,18 @@ class TinkerCuaAgent:
         self.rollout_id = rollout_id
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
+        self.coordinate_mode = coordinate_mode  # Store coordinate mode
+        
+        # Auto-detect coordinate_scale if not explicitly set
+        if coordinate_scale is None:
+            # Direct mode: default to True (use scaling)
+            # GBox mode: default to False (no scaling needed)
+            self.coordinate_scale = (coordinate_mode == "direct")
+        else:
+            self.coordinate_scale = coordinate_scale
+        
+        self.x_scale_ratio = x_scale_ratio
+        self.y_scale_ratio = y_scale_ratio
         
         # Track termination reason for reporting
         self.termination_reason = None  # Will be set when task ends
@@ -132,7 +157,26 @@ class TinkerCuaAgent:
         
         # Initialize GBox components
         self.gbox_client = CuaGBoxClient(api_key=gbox_api_key, box_type=box_type)
-        self.coord_generator = CuaGBoxCoordinateGenerator(api_key=gbox_api_key)
+        
+        # Initialize coordinate generator based on mode
+        if coordinate_mode == "gbox":
+            logger.info(f"[Agent Init] Using GBox coordinate mode (external model)")
+            self.coord_generator = CuaGBoxCoordinateGenerator(api_key=gbox_api_key)
+        elif coordinate_mode == "direct":
+            scale_info = "with scaling" if self.coordinate_scale else "without scaling"
+            logger.info(f"[Agent Init] Using Direct coordinate mode ({scale_info})")
+            from tinker_cookbook.recipes.cua_rl.gbox.direct_coordinate_generator import DirectCoordinateGenerator
+            # Note: Screen dimensions will be updated dynamically after first screenshot
+            self.coord_generator = DirectCoordinateGenerator(
+                coordinate_scale=self.coordinate_scale,  # Use auto-detected value
+                x_scale_ratio=self.x_scale_ratio,
+                y_scale_ratio=self.y_scale_ratio,
+            )
+        else:
+            raise ValueError(
+                f"Unknown coordinate_mode: {coordinate_mode}. "
+                f"Must be 'gbox' or 'direct'"
+            )
         
         # Agent state
         self.task_completed = False
@@ -245,6 +289,34 @@ class TinkerCuaAgent:
         header, encoded = data_uri.split(",", 1)
         image_data = base64.b64decode(encoded)
         return Image.open(io.BytesIO(image_data)).convert("RGB")
+    
+    def _get_screen_dimensions(self, screenshot_uri: str) -> tuple[int, int]:
+        """
+        Extract screen dimensions from screenshot.
+        
+        Args:
+            screenshot_uri: Screenshot data URI
+            
+        Returns:
+            Tuple of (width, height) in pixels
+            
+        Raises:
+            RuntimeError: If screen dimensions cannot be extracted
+        """
+        try:
+            img = self._data_uri_to_pil(screenshot_uri)
+            width, height = img.size
+            
+            # Validate dimensions are reasonable
+            if width <= 0 or height <= 0:
+                raise ValueError(f"Invalid screen dimensions: {width}x{height}")
+            
+            return width, height
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to extract screen dimensions from screenshot: {e}. "
+                f"In Direct coordinate mode, screen dimensions are required."
+            ) from e
     
     def _build_messages_with_screenshot(
         self,
@@ -739,12 +811,17 @@ class TinkerCuaAgent:
             # Determine which app to use based on task (needed for system prompt)
             app_name = self._identify_app_from_task(task_description)
             
-            # Create system prompt
+            # Create system prompt (will be updated with screen dimensions on first screenshot if not scaled)
             prompt_start = time.time()
             self.system_prompt = create_system_prompt(
                 task_description=task_description,
                 max_turns=self.max_turns,
                 app_name=app_name,
+                box_type=self.box_type,  # Pass box type
+                coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
+                coordinate_scale=self.coordinate_scale,  # Pass coordinate scale setting
+                # Screen dimensions will be None initially
+                # Will be updated after first screenshot if in Direct mode without scaling
             )
             prompt_time = time.time() - prompt_start
             
@@ -1075,6 +1152,62 @@ class TinkerCuaAgent:
                 else:
                     logger.info(f"[Turn {turn}] ✓ Screenshot taken in {screenshot_time:.3f}s")
                     logger.info(f"[Turn {turn}] Screenshot URI: {screenshot_uri[:100]}...")
+                
+                # On first turn in Direct mode, extract screen dimensions
+                if turn == 1 and self.coordinate_mode == "direct":
+                    # Extract screen dimensions - fail fast if cannot extract
+                    screen_width, screen_height = self._get_screen_dimensions(screenshot_uri)
+                    logger.info(f"[Turn {turn}] Detected screen dimensions: {screen_width}x{screen_height}")
+                    
+                    # Update DirectCoordinateGenerator with actual screen dimensions
+                    # This is needed for both scaling (to compute ratios) and boundary checks
+                    if hasattr(self.coord_generator, 'screen_width'):
+                        self.coord_generator.screen_width = screen_width
+                        self.coord_generator.screen_height = screen_height
+                        self.coord_generator.default_x = screen_width // 2
+                        self.coord_generator.default_y = screen_height // 2
+                        
+                        # Update scale ratios if coordinate scaling is enabled
+                        if self.coordinate_scale:
+                            # Use custom ratios if provided, otherwise default to screen/1000
+                            self.coord_generator.x_scale_ratio = (
+                                self.x_scale_ratio if self.x_scale_ratio is not None 
+                                else screen_width / 1000.0
+                            )
+                            self.coord_generator.y_scale_ratio = (
+                                self.y_scale_ratio if self.y_scale_ratio is not None 
+                                else screen_height / 1000.0
+                            )
+                            logger.info(
+                                f"[Turn {turn}] Updated coordinate scaling: "
+                                f"ratios=({self.coord_generator.x_scale_ratio:.3f}, {self.coord_generator.y_scale_ratio:.3f})"
+                            )
+                    
+                    # Update system prompt with actual screen dimensions (only if not using scaling)
+                    if not self.coordinate_scale:
+                        self.system_prompt = create_system_prompt(
+                            task_description=task_description,
+                            max_turns=self.max_turns,
+                            app_name=app_name,
+                            box_type=self.box_type,  # Pass box type
+                            coordinate_mode=self.coordinate_mode,
+                            coordinate_scale=self.coordinate_scale,
+                            screen_width=screen_width,
+                            screen_height=screen_height,
+                        )
+                        
+                        # Update messages with new system prompt
+                        self.messages[0] = renderers.Message(role="system", content=self.system_prompt)
+                        
+                        if self.rollout_logger:
+                            self.rollout_logger.log(
+                                f"[Turn {turn}] Updated system prompt with screen dimensions: {screen_width}x{screen_height}"
+                            )
+                    else:
+                        if self.rollout_logger:
+                            self.rollout_logger.log(
+                                f"[Turn {turn}] Coordinate scaling enabled - screen dimensions not included in prompt"
+                            )
                 
                 # Build user message with screenshot
                 model_input_prep_start = time.time()

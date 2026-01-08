@@ -51,6 +51,10 @@ class BenchmarkConfig:
     max_task_time_seconds: int = 30 * 60
     max_turn_time_seconds: int = 5 * 60
     
+    # Coordinate generation mode
+    coordinate_mode: str = "gbox"  # "gbox" or "direct"
+    coordinate_scale: bool | None = None  # Auto-detect based on mode if None
+    
     # Logging
     log_path: str = "./benchmark_logs"
     
@@ -121,6 +125,8 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
         max_concurrent_rollouts=config.max_concurrent_rollouts,
         max_task_time_seconds=config.max_task_time_seconds,
         max_turn_time_seconds=config.max_turn_time_seconds,
+        coordinate_mode=config.coordinate_mode,  # Pass coordinate mode
+        coordinate_scale=config.coordinate_scale,  # Pass coordinate scale
         
         # CRITICAL: Only run baseline, no training!
         skip_baseline=False,  # Run baseline evaluation

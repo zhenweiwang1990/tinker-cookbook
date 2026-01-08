@@ -1,20 +1,20 @@
-# Rollout 并发控制
+# Rollout Concurrency Control
 
-## 概述
+## Overview
 
-CUA RL 训练系统现在支持全局 rollout 并发控制，可以限制同时运行的 rollout 任务数量。这对于控制资源使用（如 GBox 实例数量）非常有用。
+The CUA RL training system now supports global rollout concurrency control, which limits the number of rollout tasks running simultaneously. This is useful for controlling resource usage (e.g., GBox instance count).
 
-## 配置参数
+## Configuration Parameter
 
-在 `CLIConfig` 中新增了 `max_concurrent_rollouts` 参数：
+A new `max_concurrent_rollouts` parameter has been added to `CLIConfig`:
 
 ```python
-max_concurrent_rollouts: int = 8  # 默认值为 8
+max_concurrent_rollouts: int = 8  # Default value is 8
 ```
 
-## 使用方式
+## Usage
 
-### 方式 1: 命令行参数
+### Method 1: Command Line Argument
 
 ```bash
 python tinker_cookbook/recipes/cua_rl/core/train.py \
@@ -23,7 +23,7 @@ python tinker_cookbook/recipes/cua_rl/core/train.py \
   --other-params...
 ```
 
-### 方式 2: 配置对象
+### Method 2: Configuration Object
 
 ```python
 from tinker_cookbook.recipes.cua_rl.core.train import CLIConfig, cli_main
@@ -31,43 +31,43 @@ import asyncio
 
 config = CLIConfig(
     model_name="Qwen/Qwen3-VL-30B-A3B-Instruct",
-    max_concurrent_rollouts=8,  # 设置最大并发为 8
+    max_concurrent_rollouts=8,  # Set max concurrency to 8
     group_size=4,
     groups_per_batch=2,
-    # ... 其他配置
+    # ... other configurations
 )
 
 asyncio.run(cli_main(config))
 ```
 
-## 影响范围
+## Scope of Impact
 
-该并发控制会应用于所有 rollout 场景：
+This concurrency control applies to all rollout scenarios:
 
-1. **Baseline 评估**: 训练开始前的基线评估
-2. **训练 Rollout**: 每个 training step 的 rollout
-3. **定期评估**: 训练过程中的定期评估 (eval_every)
+1. **Baseline Evaluation**: Baseline evaluation before training starts
+2. **Training Rollouts**: Rollouts at each training step
+3. **Periodic Evaluations**: Periodic evaluations during training (eval_every)
 
-所有场景共享同一个 semaphore，确保全局并发不超过设定值。
+All scenarios share the same semaphore, ensuring global concurrency does not exceed the configured limit.
 
-## 工作原理
+## How It Works
 
-系统使用 `asyncio.Semaphore` 来控制并发：
+The system uses `asyncio.Semaphore` to control concurrency:
 
 ```python
-# 在 cli_main 中创建全局 semaphore
+# Create global semaphore in cli_main
 _rollout_semaphore = asyncio.Semaphore(cli_config.max_concurrent_rollouts)
 
-# 在每个 rollout 中使用
+# Use in each rollout
 async with _rollout_semaphore:
     result = await do_actual_rollout(...)
 ```
 
-## 示例场景
+## Example Scenarios
 
-### 场景 1: 大规模评估任务
+### Scenario 1: Large-Scale Evaluation Tasks
 
-如果您有 20 个评估任务，但只想同时运行 5 个：
+If you have 20 evaluation tasks but only want to run 5 simultaneously:
 
 ```bash
 python tinker_cookbook/recipes/cua_rl/core/train.py \
@@ -75,9 +75,9 @@ python tinker_cookbook/recipes/cua_rl/core/train.py \
   --eval-tasks '{"source_type": "demo_eval", "limit": 20}'
 ```
 
-### 场景 2: 资源受限环境
+### Scenario 2: Resource-Constrained Environment
 
-如果您的 GBox 资源有限，可以降低并发数：
+If your GBox resources are limited, you can reduce concurrency:
 
 ```bash
 python tinker_cookbook/recipes/cua_rl/core/train.py \
@@ -86,27 +86,27 @@ python tinker_cookbook/recipes/cua_rl/core/train.py \
   --groups-per-batch 2
 ```
 
-这样最多同时运行 2 个 rollout（每个 rollout 内部仍有 4 个任务）。
+This will run at most 2 rollouts simultaneously (each rollout still has 4 tasks internally).
 
-## 性能考虑
+## Performance Considerations
 
-- **较高并发** (如 16-32): 适合有充足 GBox 资源的情况，可以加快训练速度
-- **中等并发** (如 8): 默认值，平衡速度和资源使用
-- **较低并发** (如 2-4): 适合资源受限或调试场景
+- **High Concurrency** (e.g., 16-32): Suitable when you have ample GBox resources, can speed up training
+- **Medium Concurrency** (e.g., 8): Default value, balances speed and resource usage
+- **Low Concurrency** (e.g., 2-4): Suitable for resource-constrained environments or debugging
 
-## 注意事项
+## Important Notes
 
-1. `max_concurrent_rollouts` 控制的是 **rollout 级别** 的并发，每个 rollout 内部仍会根据 `group_size` 并发执行多个任务
-2. 实际的 GBox 实例数 = `max_concurrent_rollouts × group_size`（最坏情况）
-3. 建议根据可用的 GBox 配额来设置这个值
+1. `max_concurrent_rollouts` controls **rollout-level** concurrency; each rollout still executes multiple tasks concurrently based on `group_size`
+2. Actual GBox instance count = `max_concurrent_rollouts × group_size` (worst case)
+3. It's recommended to set this value based on your available GBox quota
 
-## 日志输出
+## Log Output
 
-启动时会在日志中看到：
+At startup, you will see in the logs:
 
 ```
 [Concurrency] Set max concurrent rollouts to 8
 ```
 
-这确认了并发控制已经生效。
+This confirms that concurrency control is in effect.
 

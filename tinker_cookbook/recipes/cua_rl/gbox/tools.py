@@ -4,8 +4,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from typing import Dict, Any, Optional, List, Union
+from pydantic import BaseModel, Field, field_validator
 
 from tinker_cookbook.recipes.cua_rl.gbox.client import CuaGBoxClient
 from tinker_cookbook.recipes.cua_rl.gbox.coordinate import CuaGBoxCoordinateGenerator
@@ -28,6 +28,32 @@ class TargetElement(BaseModel):
     size: Optional[str] = Field(None, description="Size of the element (small, medium, large)")
     location: Optional[str] = Field(None, description="Location on screen")
     shape: Optional[str] = Field(None, description="Shape of the element")
+    
+    # Direct mode fields - VLM directly outputs coordinates
+    # Support both formats: separate x/y or coordinates list
+    coordinates: Optional[List[int]] = Field(None, description="Coordinates as [x, y] in pixels (Direct mode)")
+    x: Optional[int] = Field(None, description="X coordinate in pixels (Direct mode only)")
+    y: Optional[int] = Field(None, description="Y coordinate in pixels (Direct mode only)")
+    confidence: Optional[float] = Field(None, description="Confidence score 0.0-1.0 (Direct mode only)")
+    
+    @field_validator('x', 'y', mode='before')
+    @classmethod
+    def extract_from_coordinates(cls, v, info):
+        """Extract x or y from coordinates list if provided."""
+        # If x/y is already provided, use it
+        if v is not None:
+            return v
+        
+        # Check if coordinates list is provided
+        coordinates = info.data.get('coordinates')
+        if coordinates and isinstance(coordinates, list) and len(coordinates) >= 2:
+            # Extract x or y based on field name
+            if info.field_name == 'x':
+                return coordinates[0]
+            elif info.field_name == 'y':
+                return coordinates[1]
+        
+        return v
 
 
 # ============================================================================
@@ -94,19 +120,28 @@ async def perform_action_impl(
             logger.info(f"[Tool: perform_action] Tap target: {target_desc}")
         
         # Generate coordinates
+        # Pass the original target object (not just description) to coord_generator
+        # so it can extract coordinates in Direct mode
         coord_start = time.time()
         if not rollout_logger:
             logger.info(f"[Tool: perform_action] Generating coordinates for tap...")
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="tap",
-            target=target_desc,
+            target=target.model_dump() if target else target_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
         
         coords = result.get("response", {}).get("coordinates", {}) or result.get("coordinates", {})
         x, y = coords.get("x", 0), coords.get("y", 0)
+        
+        # Extract original coordinates if present (for Direct mode with scaling)
+        original_coords = None
+        coordinates_scaled = False
+        if "original_x" in coords and "original_y" in coords:
+            original_coords = {"x": coords["original_x"], "y": coords["original_y"]}
+            coordinates_scaled = coords.get("scaled", False)
         
         # Execute tap using GBox tap API
         tap_start = time.time()
@@ -122,6 +157,8 @@ async def perform_action_impl(
                 action_type="tap",
                 target_desc=target_desc,
                 coordinates={"x": x, "y": y},
+                original_coordinates=original_coords,
+                coordinates_scaled=coordinates_scaled,
                 coord_time=coord_time,
                 exec_time=tap_time,
                 total_time=action_total_time,
@@ -153,13 +190,20 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="click",
-            target=target_desc,
+            target=target.model_dump() if target else target_desc,  # Pass dict with coords
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
         
         coords = result.get("response", {}).get("coordinates", {}) or result.get("coordinates", {})
         x, y = coords.get("x", 0), coords.get("y", 0)
+        
+        # Extract original coordinates if present (for Direct mode with scaling)
+        original_coords = None
+        coordinates_scaled = False
+        if "original_x" in coords and "original_y" in coords:
+            original_coords = {"x": coords["original_x"], "y": coords["original_y"]}
+            coordinates_scaled = coords.get("scaled", False)
         
         button_type = option or "left"
         double_click = button_type == "double"
@@ -178,6 +222,8 @@ async def perform_action_impl(
                 action_type="click",
                 target_desc=target_desc,
                 coordinates={"x": x, "y": y},
+                original_coordinates=original_coords,
+                coordinates_scaled=coordinates_scaled,
                 coord_time=coord_time,
                 exec_time=click_time,
                 total_time=action_total_time,
@@ -305,8 +351,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_desc,
-            end_target=end_desc,
+            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
+            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start

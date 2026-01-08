@@ -50,6 +50,10 @@ class CUAEnv(ProblemEnv):
         max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
         max_task_time_seconds: int = 30 * 60,  # Maximum total time for task execution (default: 30 minutes)
         max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
+        coordinate_mode: str = "gbox",  # Coordinate generation mode: "gbox" or "direct"
+        coordinate_scale: Optional[bool] = None,  # Auto: True for direct, False for gbox
+        x_scale_ratio: Optional[float] = None,  # X scaling ratio
+        y_scale_ratio: Optional[float] = None,  # Y scaling ratio
     ):
         """
         Initialize CUA Environment.
@@ -66,6 +70,7 @@ class CUAEnv(ProblemEnv):
             format_coef: Format coefficient (not used for CUA)
             max_task_time_seconds: Maximum total time for task execution (default: 30 minutes)
             max_turn_time_seconds: Maximum time per turn for model inference (default: 5 minutes)
+            coordinate_mode: Coordinate generation mode ("gbox" or "direct")
         """
         # Initialize parent with renderer (needed for training conversion)
         super().__init__(renderer or renderers.RoleColonRenderer(None), convo_prefix, format_coef=format_coef)
@@ -79,6 +84,10 @@ class CUAEnv(ProblemEnv):
         self.task = task  # Store task object for validation
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
+        self.coordinate_mode = coordinate_mode  # Store coordinate mode
+        self.coordinate_scale = coordinate_scale
+        self.x_scale_ratio = x_scale_ratio
+        self.y_scale_ratio = y_scale_ratio
         
         # TinkerCuaAgent instance (created lazily during rollout)
         self._agent: Optional[TinkerCuaAgent] = None
@@ -179,6 +188,10 @@ class CUAEnv(ProblemEnv):
             rollout_id=rollout_id,  # rollout_id is now a UUID
             max_task_time_seconds=self.max_task_time_seconds,
             max_turn_time_seconds=self.max_turn_time_seconds,
+            coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
+            coordinate_scale=self.coordinate_scale,
+            x_scale_ratio=self.x_scale_ratio,
+            y_scale_ratio=self.y_scale_ratio,
         )
         # Pass task object to agent for validation
         if self.task:
@@ -302,6 +315,10 @@ class CUADataset(RLDataset):
         max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
         max_task_time_seconds: int = 30 * 60,  # Maximum total time for task execution (default: 30 minutes)
         max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
+        coordinate_mode: str = "gbox",  # Coordinate generation mode: "gbox" or "direct"
+        coordinate_scale: Optional[bool] = None,  # Auto: True for direct, False for gbox
+        x_scale_ratio: Optional[float] = None,  # X scaling ratio
+        y_scale_ratio: Optional[float] = None,  # Y scaling ratio
     ):
         self.tasks = tasks
         self.batch_size = batch_size
@@ -317,6 +334,10 @@ class CUADataset(RLDataset):
         self.max_recent_turns = max_recent_turns
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
+        self.coordinate_mode = coordinate_mode  # Store coordinate mode
+        self.coordinate_scale = coordinate_scale
+        self.x_scale_ratio = x_scale_ratio
+        self.y_scale_ratio = y_scale_ratio
         
         # Shuffle tasks with seed
         import random
@@ -373,10 +394,14 @@ class CUADataset(RLDataset):
                 max_turns=self.max_turns,
                 box_type=self.box_type,
                 task=_captured_task,
-                max_recent_turns=self.max_recent_turns,
-                max_task_time_seconds=self.max_task_time_seconds,
-                max_turn_time_seconds=self.max_turn_time_seconds,
-            )
+            max_recent_turns=self.max_recent_turns,
+            max_task_time_seconds=self.max_task_time_seconds,
+            max_turn_time_seconds=self.max_turn_time_seconds,
+            coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
+            coordinate_scale=self.coordinate_scale,
+            x_scale_ratio=self.x_scale_ratio,
+            y_scale_ratio=self.y_scale_ratio,
+        )
         
         return ProblemGroupBuilder(
             env_thunk=make_env,
@@ -415,6 +440,10 @@ class CUADatasetBuilder(RLDatasetBuilder):
     training_id: Optional[int] = None  # Training ID for database records
     max_task_time_seconds: int = 30 * 60  # Maximum total time for task execution (default: 30 minutes)
     max_turn_time_seconds: int = 5 * 60  # Maximum time per turn for model inference (default: 5 minutes)
+    coordinate_mode: str = "gbox"  # Coordinate generation mode: "gbox" or "direct"
+    coordinate_scale: Optional[bool] = None  # Auto: True for direct, False for gbox
+    x_scale_ratio: Optional[float] = None  # X scaling ratio (default: screen_width / 1000)
+    y_scale_ratio: Optional[float] = None  # Y scaling ratio (default: screen_height / 1000)
     
     async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
         from tinker_cookbook.tokenizer_utils import get_tokenizer
@@ -485,6 +514,10 @@ class CUADatasetBuilder(RLDatasetBuilder):
             max_recent_turns=self.max_recent_turns,
             max_task_time_seconds=self.max_task_time_seconds,
             max_turn_time_seconds=self.max_turn_time_seconds,
+            coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
+            coordinate_scale=self.coordinate_scale,
+            x_scale_ratio=self.x_scale_ratio,
+            y_scale_ratio=self.y_scale_ratio,
         )
         
         # Load evaluation tasks if provided
@@ -530,6 +563,7 @@ class CUADatasetBuilder(RLDatasetBuilder):
                 seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
                 max_task_time_seconds=self.max_task_time_seconds,
                 max_turn_time_seconds=self.max_turn_time_seconds,
+                coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
             )
         
         # Force flush before returning

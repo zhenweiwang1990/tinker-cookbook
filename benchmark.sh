@@ -52,6 +52,10 @@ MAX_TOKENS=2048
 # Box configuration
 BOX_TYPE="android"
 
+# Coordinate generation mode
+COORDINATE_MODE="gbox"                    # gbox or direct
+COORDINATE_SCALE=""                       # auto (empty), true, or false
+
 # Concurrency and timeout
 MAX_CONCURRENT_ROLLOUTS=8
 MAX_TASK_TIME=1800                         # 30 minutes
@@ -126,6 +130,14 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH="$2"
             shift 2
             ;;
+        --coordinate-mode)
+            COORDINATE_MODE="$2"
+            shift 2
+            ;;
+        --coordinate-scale)
+            COORDINATE_SCALE="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -153,6 +165,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-task-time SECONDS         Max time per task (default: 1800)"
             echo "  --max-turn-time SECONDS         Max time per turn (default: 300)"
             echo "  --log-path PATH                 Log directory path (default: ./benchmark_logs)"
+            echo "  --coordinate-mode MODE          Coordinate mode: gbox/direct (default: gbox)"
             echo ""
             echo "Examples:"
             echo "  # Basic benchmark with Tinker"
@@ -235,6 +248,7 @@ echo "  Concurrent Rollouts: $MAX_CONCURRENT_ROLLOUTS"
 echo "  Max Task Time:      ${MAX_TASK_TIME}s"
 echo "  Max Turn Time:      ${MAX_TURN_TIME}s"
 echo "  Log Path:           $LOG_PATH"
+echo "  Coordinate Mode:    $COORDINATE_MODE"
 echo "----------------------------------------"
 echo ""
 
@@ -272,7 +286,14 @@ CMD="$CMD \
     max_concurrent_rollouts=$MAX_CONCURRENT_ROLLOUTS \
     max_task_time_seconds=$MAX_TASK_TIME \
     max_turn_time_seconds=$MAX_TURN_TIME \
-    log_path=\"$LOG_PATH\""
+    log_path=\"$LOG_PATH\" \
+    coordinate_mode=$COORDINATE_MODE"
+
+# Add coordinate_scale if provided
+if [ -n "$COORDINATE_SCALE" ]; then
+    CMD="$CMD \
+    coordinate_scale=$COORDINATE_SCALE"
+fi
 
 # ============================================================================
 # Execute Benchmark

@@ -185,6 +185,10 @@ class CLIConfig:
     max_task_time_seconds: int = 30 * 60  # Maximum total time for task execution (default: 30 minutes)
     max_turn_time_seconds: int = 5 * 60  # Maximum time per turn for model inference (default: 5 minutes)
     
+    # Coordinate generation mode
+    coordinate_mode: str = "gbox"  # "gbox" (use GBox external model) or "direct" (VLM outputs coordinates)
+    coordinate_scale: bool | None = None  # Auto-detect based on mode if None (True for direct, False for gbox)
+    
     # Baseline evaluation
     skip_baseline: bool = False  # If True, skip baseline evaluation and start training directly
     baseline_only: bool = False  # If True, only run baseline evaluation and exit (no training)
@@ -362,6 +366,8 @@ async def cli_main(cli_config: CLIConfig) -> None:
         training_id=training_id,  # Pass training ID
         max_task_time_seconds=cli_config.max_task_time_seconds,
         max_turn_time_seconds=cli_config.max_turn_time_seconds,
+        coordinate_mode=cli_config.coordinate_mode,  # Pass coordinate mode
+        coordinate_scale=cli_config.coordinate_scale,  # Pass coordinate scale
     )
     # Don't close db_session here - it will be used when dataset_builder.__call__() is invoked
     # The session will be managed by the global database context

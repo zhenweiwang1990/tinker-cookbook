@@ -370,17 +370,34 @@ class RolloutLogger:
         start_target: Optional[str] = None,
         end_target: Optional[str] = None,
         coordinates: Optional[Dict[str, Any]] = None,
+        original_coordinates: Optional[Dict[str, Any]] = None,
+        coordinates_scaled: bool = False,
         coord_time: Optional[float] = None,
         exec_time: Optional[float] = None,
         total_time: Optional[float] = None,
     ):
-        """Log action execution (combined format)."""
+        """Log action execution (combined format).
+        
+        Args:
+            action_type: Type of action (tap, click, drag, etc.)
+            target_desc: Description of target element
+            start_target: Description of start target (for drag)
+            end_target: Description of end target (for drag)
+            coordinates: Final coordinates used for execution (scaled if coordinate scaling is enabled)
+            original_coordinates: Original coordinates from model (only present if coordinate scaling is enabled)
+            coordinates_scaled: Whether coordinates were scaled
+            coord_time: Time to generate coordinates
+            exec_time: Time to execute action
+            total_time: Total time for action
+        """
         action_info = {
             "action_type": action_type,
             "target": target_desc,
             "start_target": start_target,
             "end_target": end_target,
             "coordinates": coordinates,
+            "original_coordinates": original_coordinates,
+            "coordinates_scaled": coordinates_scaled,
             "coord_time": coord_time,
             "exec_time": exec_time,
             "total_time": total_time,
@@ -409,8 +426,29 @@ class RolloutLogger:
                     coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
                     exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
                     total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                    colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
-                    colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                    
+                    # Format coordinate display with scaling info
+                    if coordinates_scaled and original_coordinates:
+                        orig_start = original_coordinates.get("start", {})
+                        orig_end = original_coordinates.get("end", {})
+                        colored_start_coords = self._color(
+                            f"({orig_start.get('x', 0)}, {orig_start.get('y', 0)})",
+                            "CYAN"
+                        ) + " → " + self._color(
+                            f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})",
+                            "YELLOW"
+                        )
+                        colored_end_coords = self._color(
+                            f"({orig_end.get('x', 0)}, {orig_end.get('y', 0)})",
+                            "CYAN"
+                        ) + " → " + self._color(
+                            f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})",
+                            "YELLOW"
+                        )
+                    else:
+                        colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
+                        colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                    
                     line2 = (
                         f"  ↳ Coords: start={colored_start_coords} | "
                         f"end={colored_end_coords} | "
@@ -429,7 +467,21 @@ class RolloutLogger:
                     coord_time_str = f"{coord_time:.3f}s" if coord_time is not None else "N/A"
                     exec_time_str = f"{exec_time:.3f}s" if exec_time is not None else "N/A"
                     total_time_str = f"{total_time:.3f}s" if total_time is not None else "N/A"
-                    colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                    
+                    # Format coordinate display with scaling info
+                    if coordinates_scaled and original_coordinates:
+                        orig_x = original_coordinates.get('x', 0)
+                        orig_y = original_coordinates.get('y', 0)
+                        scaled_x = coordinates.get('x', 0)
+                        scaled_y = coordinates.get('y', 0)
+                        colored_coords = (
+                            self._color(f"({orig_x}, {orig_y})", "CYAN") +
+                            " → " +
+                            self._color(f"({scaled_x}, {scaled_y})", "YELLOW")
+                        )
+                    else:
+                        colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                    
                     line2 = (
                         f"  ↳ Coords: {colored_coords} | "
                         f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"
@@ -599,6 +651,8 @@ class RolloutLogger:
         start_target = action_info.get("start_target")
         end_target = action_info.get("end_target")
         coordinates = action_info.get("coordinates")
+        original_coordinates = action_info.get("original_coordinates")
+        coordinates_scaled = action_info.get("coordinates_scaled", False)
         coord_time = action_info.get("coord_time")
         exec_time = action_info.get("exec_time")
         total_time = action_info.get("total_time")
@@ -619,8 +673,29 @@ class RolloutLogger:
             if coordinates:
                 start_coords = coordinates.get("start", {})
                 end_coords = coordinates.get("end", {})
-                colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
-                colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                
+                # Format coordinate display with scaling info
+                if coordinates_scaled and original_coordinates:
+                    orig_start = original_coordinates.get("start", {})
+                    orig_end = original_coordinates.get("end", {})
+                    colored_start_coords = self._color(
+                        f"({orig_start.get('x', 0)}, {orig_start.get('y', 0)})",
+                        "CYAN"
+                    ) + " → " + self._color(
+                        f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})",
+                        "YELLOW"
+                    )
+                    colored_end_coords = self._color(
+                        f"({orig_end.get('x', 0)}, {orig_end.get('y', 0)})",
+                        "CYAN"
+                    ) + " → " + self._color(
+                        f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})",
+                        "YELLOW"
+                    )
+                else:
+                    colored_start_coords = self._color(f"({start_coords.get('x', 0)}, {start_coords.get('y', 0)})", "YELLOW")
+                    colored_end_coords = self._color(f"({end_coords.get('x', 0)}, {end_coords.get('y', 0)})", "YELLOW")
+                
                 line2 = (
                     f"  ↳ Coords: start={colored_start_coords} | "
                     f"end={colored_end_coords} | "
@@ -633,7 +708,20 @@ class RolloutLogger:
             if target_desc:
                 line1 += f" | target={target_desc}"
             if coordinates:
-                colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                # Format coordinate display with scaling info
+                if coordinates_scaled and original_coordinates:
+                    orig_x = original_coordinates.get('x', 0)
+                    orig_y = original_coordinates.get('y', 0)
+                    scaled_x = coordinates.get('x', 0)
+                    scaled_y = coordinates.get('y', 0)
+                    colored_coords = (
+                        self._color(f"({orig_x}, {orig_y})", "CYAN") +
+                        " → " +
+                        self._color(f"({scaled_x}, {scaled_y})", "YELLOW")
+                    )
+                else:
+                    colored_coords = self._color(f"({coordinates.get('x', 0)}, {coordinates.get('y', 0)})", "YELLOW")
+                
                 line2 = (
                     f"  ↳ Coords: {colored_coords} | "
                     f"coord_time={coord_time_str} | exec_time={exec_time_str} | total={total_time_str}"

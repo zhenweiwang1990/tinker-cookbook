@@ -70,6 +70,10 @@ MAX_TURN_TIME=300             # 5 minutes
 # Box configuration
 BOX_TYPE="android"            # android or pc
 
+# Coordinate generation mode
+COORDINATE_MODE="gbox"        # gbox or direct
+COORDINATE_SCALE=""           # auto (empty), true, or false (default: auto-detect based on mode)
+
 # ============================================================================
 # Parse Command Line Arguments
 # ============================================================================
@@ -184,6 +188,14 @@ while [[ $# -gt 0 ]]; do
             MAX_TURN_TIME="$2"
             shift 2
             ;;
+        --coordinate-mode)
+            COORDINATE_MODE="$2"
+            shift 2
+            ;;
+        --coordinate-scale)
+            COORDINATE_SCALE="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -225,6 +237,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --box-type TYPE                 Box type: android/pc (default: android)"
             echo "  --max-task-time SECONDS         Max time per task (default: 1800)"
             echo "  --max-turn-time SECONDS         Max time per turn (default: 300)"
+            echo "  --coordinate-mode MODE          Coordinate mode: gbox/direct (default: gbox)"
             echo ""
             echo "Examples:"
             echo "  # Basic training"
@@ -317,6 +330,7 @@ echo "  Behavior if Exists: $BEHAVIOR_IF_EXISTS"
 echo "  Box Type:           $BOX_TYPE"
 echo "  Max Task Time:      ${MAX_TASK_TIME}s"
 echo "  Max Turn Time:      ${MAX_TURN_TIME}s"
+echo "  Coordinate Mode:    $COORDINATE_MODE"
 echo "----------------------------------------"
 echo ""
 
@@ -351,7 +365,14 @@ CMD="uv run python -m tinker_cookbook.recipes.cua_rl.train \
     behavior_if_log_dir_exists=$BEHAVIOR_IF_EXISTS \
     box_type=$BOX_TYPE \
     max_task_time_seconds=$MAX_TASK_TIME \
-    max_turn_time_seconds=$MAX_TURN_TIME"
+    max_turn_time_seconds=$MAX_TURN_TIME \
+    coordinate_mode=$COORDINATE_MODE"
+
+# Add coordinate_scale if provided
+if [ -n "$COORDINATE_SCALE" ]; then
+    CMD="$CMD \
+    coordinate_scale=$COORDINATE_SCALE"
+fi
 
 # ============================================================================
 # Execute Training
