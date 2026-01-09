@@ -121,6 +121,14 @@ class AdbClient:
         if self.enable_command_history:
             self.command_history.append(command)
         
+        # For Android, wrap commands with shell special characters in `sh -c`.
+        # NOTE: `gbox_box.command(command=...)` executes a command string; when the
+        # string contains pipes/redirects we must explicitly invoke a shell to
+        # interpret them. Use `shlex.quote` to pass the full command as a single
+        # `-c` argument.
+        if any(char in command for char in ["|", ">", "<", "&", ";", "&&", "||", "$(", "`"]):
+            command = f"sh -c {shlex.quote(command)}"
+        
         try:
             result = self.gbox_box.command(command=command, timeout=timeout)
             # GBox command returns an object with stdout, stderr, exitCode
@@ -195,8 +203,18 @@ class AdbClient:
                     except Exception as e:
                         raise AdbError(f"Failed to pull file {source}: {e}")
             
-            # Build command string for other commands
-            command = " ".join(shlex.quote(str(arg)) for arg in args_list)
+            # Build command string for other commands.
+            #
+            # IMPORTANT: In GBox mode, callers often pass a *single* full shell
+            # command string, e.g. `_run("shell", "settings list global | grep foo")`.
+            # If we shlex.quote() that entire string, it becomes single-quoted and the
+            # shell won't interpret pipes/redirects. So:
+            # - if there's exactly one arg, treat it as the full command (no quoting)
+            # - otherwise, quote each arg and join (tokenized form)
+            if len(args_list) == 1:
+                command = str(args_list[0])
+            else:
+                command = " ".join(shlex.quote(str(arg)) for arg in args_list)
             return self._run_gbox_command(command)
         else:
             # Local ADB mode

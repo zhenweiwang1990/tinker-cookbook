@@ -290,13 +290,16 @@ class TinkerCuaAgent:
     
     def _identify_app_from_task(self, task_description: str) -> Optional[str]:
         """
-        Identify which app the task belongs to (airbnb or instagram).
+        Identify which app/category the task belongs to (demo, airbnb, instagram, etc.).
+        
+        This is used for system prompt generation and app identification.
+        Note: APK installation is now controlled by task config, not this method.
         
         Args:
             task_description: Task description string
             
         Returns:
-            "airbnb", "instagram", or None if cannot be determined
+            "demo", "airbnb", "instagram", or None if cannot be determined
         """
         # First, try to identify from task object if available
         if self.task is not None:
@@ -308,7 +311,9 @@ class TinkerCuaAgent:
             # Check if task has module path or path attribute
             task_module = getattr(self.task, '__module__', None)
             if task_module:
-                if 'airbnb' in task_module.lower():
+                if 'demo' in task_module.lower():
+                    return "demo"
+                elif 'airbnb' in task_module.lower():
                     return "airbnb"
                 elif 'instagram' in task_module.lower():
                     return "instagram"
@@ -317,20 +322,32 @@ class TinkerCuaAgent:
             task_name = getattr(self.task, 'name', '') or getattr(self.task, 'id', '')
             if task_name:
                 task_name_lower = task_name.lower()
-                if 'airbnb' in task_name_lower:
+                if 'demo' in task_name_lower or 'settings' in task_name_lower:
+                    return "demo"
+                elif 'airbnb' in task_name_lower:
                     return "airbnb"
                 elif 'instagram' in task_name_lower:
                     return "instagram"
             
             # Check tags
             tags = getattr(self.task, 'tags', [])
-            if 'airbnb' in [tag.lower() for tag in tags]:
+            tags_lower = [tag.lower() for tag in tags]
+            if 'demo' in tags_lower:
+                return "demo"
+            elif 'airbnb' in tags_lower:
                 return "airbnb"
-            elif 'instagram' in [tag.lower() for tag in tags]:
+            elif 'instagram' in tags_lower:
                 return "instagram"
         
         # Fallback: identify from task description keywords
         task_lower = task_description.lower()
+        
+        # Demo task indicators (Android Settings)
+        demo_keywords = [
+            'settings', 'brightness', 'wifi', 'airplane mode', 'battery saver',
+            'auto time', 'notifications', 'timeout', 'screen timeout', 'dnd',
+            'do not disturb', 'volume', 'sound', 'display'
+        ]
         
         # Strong Airbnb indicators (more specific)
         airbnb_strong_keywords = [
@@ -348,6 +365,10 @@ class TinkerCuaAgent:
         ]
         
         # Check for strong indicators first
+        for keyword in demo_keywords:
+            if keyword in task_lower:
+                return "demo"
+        
         for keyword in airbnb_strong_keywords:
             if keyword in task_lower:
                 return "airbnb"
@@ -356,7 +377,7 @@ class TinkerCuaAgent:
             if keyword in task_lower:
                 return "instagram"
         
-        # If no clear match, return None (will install both)
+        # If no clear match, return None
         return None
     
     def _data_uri_to_pil(self, data_uri: str) -> Image.Image:
@@ -897,20 +918,42 @@ class TinkerCuaAgent:
         recording_started = False
         
         try:
-            # Determine which app to use based on task (needed for system prompt)
-            app_name = self._identify_app_from_task(task_description)
+            # Get APK configuration from task first (needed for both APK installation and system prompt)
+            # Check both self.task and self.task._original_task (for CUATask wrapper)
+            task_for_config = None
+            if self.task is not None:
+                # First try the task itself
+                if hasattr(self.task, 'get_apk_config'):
+                    task_for_config = self.task
+                # Then try _original_task if it exists (for wrapped tasks)
+                elif hasattr(self.task, '_original_task'):
+                    original = self.task._original_task
+                    if original is not None and hasattr(original, 'get_apk_config'):
+                        task_for_config = original
             
-            # Create system prompt (will be updated with screen dimensions on first screenshot if not scaled)
+            # Get APK config from task
+            from tinker_cookbook.recipes.cua_rl.executor.base import ApkConfig
+            if task_for_config is not None:
+                try:
+                    apk_config = task_for_config.get_apk_config()
+                    logger.info(f"[Task Setup] Using config from task: app_name={apk_config.app_name}, requires_apk={apk_config.requires_apk}")
+                except Exception as e:
+                    logger.warning(f"[Task Setup] Failed to get config from task: {e}, using default")
+                    apk_config = ApkConfig()
+            else:
+                # No task available, default config
+                logger.warning(f"[Task Setup] No task object available, using default config")
+                apk_config = ApkConfig()
+            
+            # Create system prompt using config
             prompt_start = time.time()
             self.system_prompt = create_system_prompt(
                 task_description=task_description,
                 max_turns=self.max_turns,
-                app_name=app_name,
-                box_type=self.box_type,  # Pass box type
-                coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
-                coordinate_scale=self.coordinate_scale,  # Pass coordinate scale setting
-                # Screen dimensions will be None initially
-                # Will be updated after first screenshot if in Direct mode without scaling
+                cua_guide=apk_config.cua_guide,  # Use guide from config
+                box_type=self.box_type,
+                coordinate_mode=self.coordinate_mode,
+                coordinate_scale=self.coordinate_scale,
             )
             prompt_time = time.time() - prompt_start
             
@@ -926,20 +969,9 @@ class TinkerCuaAgent:
             if self.rollout_logger:
                 self.rollout_logger.log_env_build_start()
             
-            # Determine APK URL based on task
-            if app_name == "airbnb":
-                apk_url = "https://activate2-gbox-staging-public-assets.s3.us-west-2.amazonaws.com/test/airbnb.apk"
-                package_name = "com.airbnb.clone"
-            else:
-                # Default: install airbnb APK when app cannot be determined
-                apk_url = "https://activate2-gbox-staging-public-assets.s3.us-west-2.amazonaws.com/test/airbnb.apk"
-                package_name = "com.airbnb.clone"
-                logger.warning(f"[Task Setup] Could not identify app from task, defaulting to airbnb APK")
+            # apk_config is already loaded above, reuse it for environment setup
             
-            # APK size is unknown when using URL (will be determined during download)
-            apk_size_mb = None
-            
-            # Create box without installing APK (we'll do it manually)
+            # Create box without installing APK (we'll do it manually if needed)
             # Always use logger.info (not rollout_logger) for critical debug messages
             import sys
             logger.info(f"[Task Setup] Creating box (this may take a while)...")
@@ -975,67 +1007,81 @@ class TinkerCuaAgent:
             sys.stdout.flush()
             sys.stderr.flush()
             
-            # Install APK
-            # Always use logger.info for critical debug messages to ensure real-time output
-            logger.info(f"[Task Setup] Installing APK from {apk_url}...")
-            sys.stdout.flush()
-            sys.stderr.flush()
-            
-            # Log APK installation start
-            apk_install_stage_start = time.time()
-            if self.rollout_logger:
-                self.rollout_logger.log_env_build_stage(
-                    "APK Installation",
-                    "in_progress",
-                    details={
-                        "apk_url": apk_url,
-                        "apk_size_mb": f"{apk_size_mb:.2f}" if apk_size_mb else "N/A",
-                        "package": package_name,
-                    }
-                )
-            
-            try:
-                await self.gbox_client.install_apk(apk_url, open_app=True)
-                apk_install_time = time.time() - apk_install_stage_start
+            # Install APK if required by task configuration
+            if apk_config.requires_apk:
+                if not apk_config.apk_url or not apk_config.package_name:
+                    error_msg = f"[Task Setup] ✗ Task requires APK but config is incomplete: apk_url={apk_config.apk_url}, package_name={apk_config.package_name}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
                 
-                # Log APK installation success
+                # Always use logger.info for critical debug messages to ensure real-time output
+                logger.info(f"[Task Setup] Installing APK from {apk_config.apk_url}...")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                
+                # Log APK installation start
+                apk_install_stage_start = time.time()
                 if self.rollout_logger:
                     self.rollout_logger.log_env_build_stage(
                         "APK Installation",
-                        "success",
-                        duration=apk_install_time,
+                        "in_progress",
                         details={
-                            "package": package_name,
-                            "app_opened": "true",
+                            "apk_url": apk_config.apk_url,
+                            "package": apk_config.package_name,
+                            "launch_after_install": apk_config.launch_after_install,
                         }
                     )
                 
-                logger.info(f"[Task Setup] ✓ APK installed and app opened")
+                try:
+                    # Install and optionally launch the app
+                    await self.gbox_client.install_apk(apk_config.apk_url, open_app=apk_config.launch_after_install)
+                    apk_install_time = time.time() - apk_install_stage_start
+                    
+                    # Log APK installation success
+                    if self.rollout_logger:
+                        self.rollout_logger.log_env_build_stage(
+                            "APK Installation",
+                            "success",
+                            duration=apk_install_time,
+                            details={
+                                "package": apk_config.package_name,
+                                "app_opened": str(apk_config.launch_after_install),
+                            }
+                        )
+                    
+                    if apk_config.launch_after_install:
+                        logger.info(f"[Task Setup] ✓ APK installed and app opened")
+                    else:
+                        logger.info(f"[Task Setup] ✓ APK installed (app not launched)")
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                except Exception as apk_error:
+                    apk_install_time = time.time() - apk_install_stage_start
+                    error_msg = f"[Task Setup] ✗ Failed to install APK: {apk_error}"
+                    
+                    # Log APK installation error
+                    if self.rollout_logger:
+                        self.rollout_logger.log_env_build_stage(
+                            "APK Installation",
+                            "error",
+                            duration=apk_install_time,
+                            error=str(apk_error)
+                        )
+                    
+                    logger.error(error_msg, exc_info=True)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    raise  # Re-raise to be caught by outer exception handler
+            else:
+                logger.info(f"[Task Setup] No APK installation required for this task")
                 sys.stdout.flush()
                 sys.stderr.flush()
-            except Exception as apk_error:
-                apk_install_time = time.time() - apk_install_stage_start
-                error_msg = f"[Task Setup] ✗ Failed to install APK: {apk_error}"
-                
-                # Log APK installation error
-                if self.rollout_logger:
-                    self.rollout_logger.log_env_build_stage(
-                        "APK Installation",
-                        "error",
-                        duration=apk_install_time,
-                        error=str(apk_error)
-                    )
-                
-                logger.error(error_msg, exc_info=True)
-                sys.stdout.flush()
-                sys.stderr.flush()
-                raise  # Re-raise to be caught by outer exception handler
             
             box_creation_time = time.time() - box_creation_start
             if self.rollout_logger:
-                self.rollout_logger.log(f"[Task Setup] Box created and APK installed in {box_creation_time:.3f}s")
+                self.rollout_logger.log(f"[Task Setup] Box created and environment prepared in {box_creation_time:.3f}s")
             else:
-                logger.info(f"[Task Setup] Task executing on {app_name or 'unknown'} app with max {self.max_turns} turns on the box {box_id}(box prepared in {box_creation_time:.3f}s)")
+                logger.info(f"[Task Setup] Task executing on {apk_config.package_name or 'system'} with max {self.max_turns} turns on the box {box_id} (box prepared in {box_creation_time:.3f}s)")
 
             # Create AdbClient for prehook and app launch
             from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient

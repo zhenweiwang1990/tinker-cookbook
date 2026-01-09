@@ -47,6 +47,8 @@ EVAL_SOURCE_TYPE="task_adapter"
 EVAL_SPLIT_TYPE="eval"
 TRAIN_RATIO=0
 SEED=42
+CATEGORY=""                               # Optional: filter by category (demo, airbnb, instagram)
+TASK_NAMES=""                             # Optional: filter by specific task names (comma-separated)
 
 # Benchmark settings
 BENCHMARK_NAME=""                          # Optional: custom name for this benchmark run
@@ -109,6 +111,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --seed)
             SEED="$2"
+            shift 2
+            ;;
+        --category)
+            CATEGORY="$2"
+            shift 2
+            ;;
+        --task-names|--tasks)
+            TASK_NAMES="$2"
             shift 2
             ;;
         --name|--benchmark-name)
@@ -174,6 +184,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --eval-split SPLIT              Eval split: train/eval (default: eval)"
             echo "  --train-ratio RATIO             Train/eval split ratio (default: 0)"
             echo "  --seed SEED                     Random seed (default: 42)"
+            echo "  --category CATEGORY             Filter by category: demo/airbnb/instagram"
+            echo "  --task-names, --tasks NAMES     Filter by task names (comma-separated, e.g., '12_enable_battery_saver,06_min_brightness')"
             echo ""
             echo "Benchmark Options:"
             echo "  --name, --benchmark-name NAME   Custom name for this benchmark run"
@@ -205,6 +217,15 @@ while [[ $# -gt 0 ]]; do
             echo "  # OpenAI provider"
             echo "  $0 --provider openai --model gpt-4-vision-preview \\"
             echo "     --provider-api-key \$OPENAI_API_KEY"
+            echo ""
+            echo "  # Filter by category"
+            echo "  $0 --category demo"
+            echo ""
+            echo "  # Run specific tasks"
+            echo "  $0 --task-names '12_enable_battery_saver,06_min_brightness'"
+            echo ""
+            echo "  # Combine filters"
+            echo "  $0 --category demo --eval-split train"
             exit 0
             ;;
         *)
@@ -266,6 +287,12 @@ echo "  Source:             $EVAL_SOURCE_TYPE"
 echo "  Split:              $EVAL_SPLIT_TYPE"
 echo "  Train Ratio:        $TRAIN_RATIO"
 echo "  Seed:               $SEED"
+if [ -n "$CATEGORY" ]; then
+    echo "  Category:           $CATEGORY"
+fi
+if [ -n "$TASK_NAMES" ]; then
+    echo "  Task Names:         $TASK_NAMES"
+fi
 echo ""
 echo "Benchmark Settings:"
 if [ -n "$BENCHMARK_NAME" ]; then
@@ -290,7 +317,19 @@ echo ""
 # ============================================================================
 
 # Build evaluation task configuration JSON
-EVAL_TASKS_JSON="{\"source_type\": \"$EVAL_SOURCE_TYPE\", \"split_type\": \"$EVAL_SPLIT_TYPE\", \"train_ratio\": $TRAIN_RATIO, \"seed\": $SEED}"
+EVAL_TASKS_JSON="{\"source_type\": \"$EVAL_SOURCE_TYPE\", \"split_type\": \"$EVAL_SPLIT_TYPE\", \"train_ratio\": $TRAIN_RATIO, \"seed\": $SEED"
+
+# Add optional category filter
+if [ -n "$CATEGORY" ]; then
+    EVAL_TASKS_JSON="$EVAL_TASKS_JSON, \"category\": \"$CATEGORY\""
+fi
+
+# Add optional task_names filter
+if [ -n "$TASK_NAMES" ]; then
+    EVAL_TASKS_JSON="$EVAL_TASKS_JSON, \"task_names\": \"$TASK_NAMES\""
+fi
+
+EVAL_TASKS_JSON="$EVAL_TASKS_JSON}"
 
 # Build the command
 CMD="uv run python -m tinker_cookbook.recipes.cua_rl.benchmark \

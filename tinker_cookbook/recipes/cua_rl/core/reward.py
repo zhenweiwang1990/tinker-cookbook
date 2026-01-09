@@ -820,7 +820,13 @@ async def validate_task_validator_with_details(
     import time
     import io
     import sys
-    
+
+    # We prefer returning a structured failure (success=False) over returning None,
+    # because None causes the UI/DB to lose the underlying error context.
+    validator_name = "unknown_validator"
+    adb_client = None
+    output_capture = io.StringIO()
+
     try:
         # Get validator from task
         if not hasattr(original_task, "get_validator"):
@@ -829,6 +835,7 @@ async def validate_task_validator_with_details(
         validator = original_task.get_validator()
         if not validator or not hasattr(validator, "validate"):
             return None
+        validator_name = validator.__class__.__name__
         
         # Create AdbClient using gbox_client
         from tinker_cookbook.recipes.cua_rl.tasks.adb import AdbClient
@@ -846,48 +853,66 @@ async def validate_task_validator_with_details(
         
         # Create AdbClient with gbox_client and enable command history
         adb_client = AdbClient(gbox_client=gbox_client, enable_command_history=True)
-        
-        # Capture validator output
-        output_capture = io.StringIO()
+
+        # Capture validator output (print statements) for debugging
         old_stdout = sys.stdout
         sys.stdout = output_capture
-        
+
+        start_time = time.time()
+        success = False
+        error: Exception | None = None
         try:
-            # Execute validator
-            start_time = time.time()
-            success = validator.validate(adb_client)
-            execution_time = time.time() - start_time
+            success = bool(validator.validate(adb_client))
+        except Exception as e:
+            error = e
+            success = False
+            logger.warning(f"Task validator raised: {e}", exc_info=True)
         finally:
-            # Restore stdout
+            execution_time = time.time() - start_time
             sys.stdout = old_stdout
-        
-        # Get captured output
-        captured_output = output_capture.getvalue()
-        
-        # Get validator description (class name or method docstring)
-        validator_name = validator.__class__.__name__
-        validator_desc = getattr(validator, "__doc__", None) or f"Validator: {validator_name}"
-        
-        # Get all executed commands
-        command_history = adb_client.get_command_history()
-        if command_history:
-            # Join all commands with newlines for display
-            full_command = "\n".join(command_history)
+
+        captured_output = output_capture.getvalue().strip()
+
+        # Get all executed commands (if any)
+        command_history = []
+        if adb_client is not None:
+            try:
+                command_history = adb_client.get_command_history()
+            except Exception:
+                command_history = []
+
+        full_command = "\n".join(command_history) if command_history else f"Task validator ({validator_name})"
+
+        if error is not None:
+            actual_result = f"Validator exception: {error}"
+            if captured_output:
+                actual_result += f"\n\nCaptured output:\n{captured_output}"
         else:
-            # Fallback to validator name if no commands were recorded
-            full_command = f"Task validator ({validator_name})"
-        
+            actual_result = captured_output if captured_output else ("Validation passed" if success else "Validation failed")
+
         return ADBValidationResult(
             command=full_command,
             expected_result=True,  # Validators return bool, True means success
-            actual_result=captured_output.strip() if captured_output.strip() else ("Validation passed" if success else "Validation failed"),
+            actual_result=actual_result,
             success=success,
             execution_time=execution_time,
             validation_query="task_validator",
         )
     except Exception as e:
+        # Last-resort: return a structured failure so the UI/DB show the error.
         logger.warning(f"Failed to execute task validator: {e}", exc_info=True)
-        return None
+        captured_output = output_capture.getvalue().strip()
+        actual_result = f"Validator execution failed before running: {e}"
+        if captured_output:
+            actual_result += f"\n\nCaptured output:\n{captured_output}"
+        return ADBValidationResult(
+            command=f"Task validator ({validator_name})",
+            expected_result=True,
+            actual_result=actual_result,
+            success=False,
+            execution_time=0.0,
+            validation_query="task_validator",
+        )
 
 
 async def validate_task_completion_with_details(

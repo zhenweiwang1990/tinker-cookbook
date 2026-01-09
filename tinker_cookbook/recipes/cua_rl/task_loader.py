@@ -62,6 +62,8 @@ class TaskSourceConfig:
     tasks_dir: Optional[str] = None  # Path to tasks directory (default: auto-detect)
     train_ratio: float = 0.8  # Ratio for train/eval split (only used if split_type is specified)
     split_type: Optional[str] = None  # "train" or "eval" - which split to use. If None, uses all tasks.
+    category: Optional[str] = None  # Filter by category (e.g., "demo", "airbnb", "instagram")
+    task_names: Optional[str] = None  # Filter by task names (comma-separated, e.g., "12_enable_battery_saver,06_min_brightness")
     
     # Limit number of tasks (for sampling)
     limit: Optional[int] = None
@@ -190,6 +192,8 @@ def load_tasks_from_config(
                 app_name = "airbnb"
             elif 'instagram' in module_path.lower() or 'instagram' in task_path.lower():
                 app_name = "instagram"
+            elif 'demo' in module_path.lower() or 'demo' in task_path.lower():
+                app_name = "demo"
             else:
                 # Fallback: identify from description
                 desc_lower = desc.lower()
@@ -240,18 +244,42 @@ def load_tasks_from_config(
             "Supported: 'demo_training', 'demo_eval', 'demo_all', 'ids', 'file', 'custom', 'task_adapter'"
         )
     
-    # Apply filters for demo sources
-    if config.category is not None:
+    # Apply filters for demo sources (only for demo_* source types, not task_adapter)
+    if config.category is not None and config.source_type.startswith("demo_"):
         category = (
             TaskCategory(config.category) if isinstance(config.category, str) else config.category
         )
         tasks = [t for t in tasks if t.category == category]
     
-    if config.difficulty is not None:
+    if config.difficulty is not None and config.source_type.startswith("demo_"):
         difficulty = (
             TaskDifficulty(config.difficulty) if isinstance(config.difficulty, str) else config.difficulty
         )
         tasks = [t for t in tasks if t.difficulty == difficulty]
+    
+    # Apply category filter for task_adapter (filter by app_name)
+    if config.source_type == "task_adapter" and config.category is not None:
+        category_lower = config.category.lower()
+        filtered_tasks = []
+        for t in tasks:
+            app_name = getattr(t, 'app_name', None)
+            if app_name and app_name.lower() == category_lower:
+                filtered_tasks.append(t)
+        tasks = filtered_tasks
+        logger.info(f"Filtered to {len(tasks)} tasks with category='{config.category}'")
+    
+    # Apply task_names filter for task_adapter
+    if config.source_type == "task_adapter" and config.task_names is not None:
+        # Parse comma-separated task names
+        requested_names = [name.strip() for name in config.task_names.split(',') if name.strip()]
+        if requested_names:
+            filtered_tasks = []
+            for t in tasks:
+                task_name = t.name if hasattr(t, 'name') else None
+                if task_name and task_name in requested_names:
+                    filtered_tasks.append(t)
+            tasks = filtered_tasks
+            logger.info(f"Filtered to {len(tasks)} tasks with task_names={requested_names}")
     
     # Apply limit with optional sampling
     if config.limit is not None and config.limit < len(tasks):
@@ -266,6 +294,7 @@ def load_tasks_from_config(
         f"Loaded {len(tasks)} tasks from source_type='{config.source_type}'"
         + (f", category={config.category}" if config.category else "")
         + (f", difficulty={config.difficulty}" if config.difficulty else "")
+        + (f", task_names={config.task_names}" if config.task_names else "")
         + (f", limit={config.limit}" if config.limit else "")
     )
     

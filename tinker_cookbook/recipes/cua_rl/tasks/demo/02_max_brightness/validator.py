@@ -7,11 +7,12 @@ from ....adb import AdbClient
 class Task02Validator:
     def validate(self, adb_client: AdbClient) -> bool:
         # Check brightness level
+        # Use full path for GBox compatibility
         query = "settings get system screen_brightness"
-        output = adb_client.shell_command(query)
         try:
+            output = adb_client._run("shell", query, capture_output=True)
             brightness = int(output.strip())
             return brightness == 255
-        except ValueError:
+        except (ValueError, Exception):
             return False
 

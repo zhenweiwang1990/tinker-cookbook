@@ -8,6 +8,9 @@ class Task11Validator:
     def validate(self, adb_client: AdbClient) -> bool:
         # Check auto time setting
         query = "settings get global auto_time"
-        output = adb_client.shell_command(query)
-        return output.strip() == "0"  # 0 means disabled
+        try:
+            output = adb_client._run("shell", query, capture_output=True)
+            return output.strip() == "0"  # 0 means disabled
+        except Exception:
+            return False
 

@@ -62,7 +62,7 @@ class CUATask:
         }
 
 # =============================================================================
-# TRAINING TASKS (48 tasks)
+# TRAINING TASKS
 # =============================================================================
 
 DEMO_TRAINING_TASKS = [
@@ -292,20 +292,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "apps", "storage", "gbox"],
     ),
 
-    # Task 25: Create folder in Documents
-    CUATask(
-        id="train_25_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'test' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/test", "exists": True},
-        tags=["system", "file", "folder", "documents"],
-    ),
-
     # Task 26: Check Chrome storage size
     CUATask(
         id="train_26_check_chrome_storage",
@@ -349,21 +335,6 @@ DEMO_TRAINING_TASKS = [
         tags=["settings", "apps", "storage", "instagram"],
     ),
 
-    # Task 33: Create folder in Documents
-    CUATask(
-        id="train_33_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'new_folder' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/new_folder", "exists": True},
-        tags=["system", "file", "folder", "documents"],
-    ),
-
-
     # Task 35: Change screen timeout to 5 minutes
     CUATask(
         id="train_35_timeout_5min",
@@ -391,64 +362,6 @@ DEMO_TRAINING_TASKS = [
         expected_result=600000,
         tags=["settings", "display", "timeout"],
     ),
-
-    # Task 37: Create folder in Documents
-    CUATask(
-        id="train_37_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'project_folder' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/project_folder", "exists": True},
-        tags=["system", "file", "folder", "documents"],
-    ),
-
-    # Task 38: Create folder in Documents
-    CUATask(
-        id="train_38_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'work_folder' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/work_folder", "exists": True},
-        tags=["system", "file", "folder", "documents"],
-    ),
-
-    # Task 39: Create folder in Documents
-    CUATask(
-        id="train_39_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'custom' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/custom", "exists": True},
-        tags=["system", "file", "folder", "documents"],
-    ),
-
-
-    # Task 41: Change screen timeout to 15 minutes
-    CUATask(
-        id="train_41_timeout_15min",
-        name="Change Screen Timeout to 15 Minutes",
-        description="Open Settings, navigate to Display, and set the screen timeout to 15 minutes.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SETTINGS,
-        max_steps=16,
-        validation_type="state",
-        validation_query="screen_timeout",
-        expected_result=900000,
-        tags=["settings", "display", "timeout"],
-    ),
-
 
     # Task 43: Clear all app notifications
     CUATask(
@@ -482,7 +395,7 @@ DEMO_TRAINING_TASKS = [
 ]
 
 # =============================================================================
-# EVALUATION TASKS (16 tasks)
+# EVALUATION TASKS
 # =============================================================================
 
 DEMO_EVAL_TASKS = [
@@ -596,20 +509,6 @@ DEMO_EVAL_TASKS = [
         validation_query="finish_message_contains",
         expected_result="51.54MB",
         tags=["settings", "apps", "storage", "chrome"],
-    ),
-
-    # Eval Task 15: Create folder in Documents
-    CUATask(
-        id="eval_15_create_documents_folder",
-        name="Create Folder in Documents",
-        description="Create a new folder named 'test_folder' in the Documents directory.",
-        difficulty=TaskDifficulty.MEDIUM,
-        category=TaskCategory.SYSTEM,
-        max_steps=16,
-        validation_type="state",
-        validation_query="file_exists",
-        expected_result={"path": "/storage/emulated/0/Documents/test_folder", "exists": True},
-        tags=["system", "file", "folder", "documents"],
     ),
 
     # Eval Task 16: Create folder in Downloads with different name

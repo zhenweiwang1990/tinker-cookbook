@@ -8,7 +8,8 @@ from typing import Optional
 def create_system_prompt(
     task_description: str,
     max_turns: int = 20,
-    app_name: Optional[str] = None,
+    app_name: Optional[str] = None,  # Deprecated, kept for backward compatibility
+    cua_guide: Optional[str] = None,  # New: guide text from config
     box_type: str = "android",  # "android", "linux", "windows", etc.
     coordinate_mode: str = "gbox",  # "gbox" or "direct"
     coordinate_scale: bool = False,  # Whether to apply coordinate scaling (Direct mode only)
@@ -20,7 +21,8 @@ def create_system_prompt(
     Args:
         task_description: Description of the task to complete
         max_turns: Maximum number of turns allowed
-        app_name: Name of the app to operate (e.g., "airbnb", "instagram")
+        app_name: [Deprecated] Name of the app to operate (use cua_guide instead)
+        cua_guide: Guide text for what to operate (e.g., "You need to operate the Airbnb app to complete the task.")
         box_type: Type of GBox environment (android, linux, windows, etc.)
         coordinate_mode: Coordinate generation mode
             - "gbox": Use GBox external model (agent describes elements, GBox generates coords)
@@ -65,14 +67,23 @@ def create_system_prompt(
     # Get current time
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Format app name for display
-    app_info = app_name.capitalize() if app_name else "Unknown"
+    # Determine CUA guide text
+    if cua_guide:
+        # Use provided guide text from config
+        guide_text = cua_guide
+    elif app_name:
+        # Fallback to old app_name format for backward compatibility
+        app_info = app_name.capitalize() if app_name else "Unknown"
+        guide_text = f"You need to operate the {app_info} app to complete the task."
+    else:
+        # Default fallback
+        guide_text = "You need to operate the system to complete the task."
     
     # Replace placeholders
     prompt = template.replace("TASK_DESCRIPTION", task_description)
     prompt = prompt.replace("MAX_TURNS", str(max_turns))
     prompt = prompt.replace("CURRENT_TIME", current_time)
-    prompt = prompt.replace("APP_NAME", app_info)
+    prompt = prompt.replace("CUA_GUIDE", guide_text)
     
     # For Direct mode, replace screen dimension placeholders
     if coordinate_mode == "direct":

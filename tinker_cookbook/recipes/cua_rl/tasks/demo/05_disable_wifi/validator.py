@@ -7,7 +7,11 @@ from ....adb import AdbClient
 class Task05Validator:
     def validate(self, adb_client: AdbClient) -> bool:
         # Check wifi status
+        # Use full path for GBox compatibility
         query = "settings get global wifi_on"
-        output = adb_client.shell_command(query)
-        return output.strip() == "0"  # 0 means disabled
+        try:
+            output = adb_client._run("shell", query, capture_output=True)
+            return output.strip() == "0"  # 0 means disabled
+        except Exception:
+            return False
 

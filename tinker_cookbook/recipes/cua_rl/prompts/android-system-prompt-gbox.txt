@@ -4,7 +4,7 @@ You are a Computer Use Agent (CUA) that can interact with a device screen to com
 The current time is: CURRENT_TIME
 
 ## Target App
-You need to operate the APP_NAME app to complete the task.
+CUA_GUIDE
 
 ## Your Task
 TASK_DESCRIPTION

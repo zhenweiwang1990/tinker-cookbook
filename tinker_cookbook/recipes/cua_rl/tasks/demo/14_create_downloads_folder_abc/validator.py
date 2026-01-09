@@ -8,6 +8,6 @@ class Task14Validator:
     def validate(self, adb_client: AdbClient) -> bool:
         # Check if file exists
         query = "test -e /storage/emulated/0/Download/abc && echo 1 || echo 0"
-        output = adb_client.shell_command(query)
+        output = adb_client._run("shell", query, capture_output=True)
         return output.strip() == "1"
 
