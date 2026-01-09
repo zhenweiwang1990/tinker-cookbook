@@ -113,6 +113,10 @@ async def perform_action_impl(
     box = gbox_client._get_box()
     box_type = gbox_client.box_type
     
+    # Normalize action_type: "type" is an alias for "input"
+    if action_type == "type":
+        action_type = "input"
+    
     if action_type == "tap":
         # Tap action for Android devices
         target_desc = target_to_description(target)
@@ -256,8 +260,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_desc,
-            end_target=end_desc,
+            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords in Direct mode
+            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -278,7 +282,7 @@ async def perform_action_impl(
             start_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=start_desc,
+                target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             start_coord_time = time.time() - start_coord_start
@@ -287,7 +291,7 @@ async def perform_action_impl(
             end_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=end_desc,
+                target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             end_coord_time = time.time() - end_coord_start
@@ -373,7 +377,7 @@ async def perform_action_impl(
             start_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=start_desc,
+                target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             start_coord_time = time.time() - start_coord_start
@@ -382,7 +386,7 @@ async def perform_action_impl(
             end_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=end_desc,
+                target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             end_coord_time = time.time() - end_coord_start
@@ -449,7 +453,7 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="scroll",
-            target=target_desc,
+            target=target.model_dump() if target else target_desc,  # Pass dict with coords in Direct mode
             direction=direction,
             rollout_logger=rollout_logger,
         )
@@ -529,7 +533,7 @@ async def perform_action_impl(
             result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click" if box_type == "linux" else "tap",
-                target=target_desc,
+                target=target_dict.model_dump() if target_dict else target_desc,  # Pass dict with coords in Direct mode
                 rollout_logger=rollout_logger,
             )
             coord_time = time.time() - coord_start
@@ -568,6 +572,7 @@ async def perform_action_impl(
                 coord_time=total_coord_time if target_dict else None,
                 exec_time=total_exec_time,
                 total_time=action_total_time,
+                text=text,  # Add text parameter for display
             )
         else:
             logger.info(f"[Tool: perform_action] ✓ Text typed in {type_time:.3f}s")
@@ -709,8 +714,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_desc,
-            end_target=end_desc,
+            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords in Direct mode
+            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -884,8 +889,8 @@ TOOL_SCHEMAS = {
                 "properties": {
                     "action_type": {
                         "type": "string",
-                        "enum": ["tap", "click", "touch", "swipe", "drag", "scroll", "input", "key_press", "button_press", "long_press"],
-                        "description": "Type of action to perform. Use 'tap'/'touch'/'swipe' for Android, 'click'/'key_press' for PC/Linux."
+                        "enum": ["tap", "click", "touch", "swipe", "drag", "scroll", "input", "type", "key_press", "button_press", "long_press"],
+                        "description": "Type of action to perform. Use 'tap'/'touch'/'swipe' for Android, 'click'/'key_press' for PC/Linux. 'type' is an alias for 'input'."
                     },
                     "option": {
                         "type": "string",

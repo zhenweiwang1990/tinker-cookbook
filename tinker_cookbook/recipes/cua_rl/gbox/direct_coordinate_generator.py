@@ -310,10 +310,14 @@ class DirectCoordinateGenerator(BaseCoordinateGenerator):
         
         # Case 2: target_data is a string (legacy format or error)
         elif isinstance(target_data, str):
+            # Print full string for debugging
+            logger.error(
+                f"[Direct Coordinate] {param_name} is a string (full content): {target_data}"
+            )
             raise ValueError(
                 f"{param_name} is a string, expected dictionary with coordinates. "
                 f"In Direct mode, the model must output coordinates as part of the target. "
-                f"Received: {target_data[:100]}"
+                f"Received: {target_data}"
             )
         
         # Case 3: Unexpected type

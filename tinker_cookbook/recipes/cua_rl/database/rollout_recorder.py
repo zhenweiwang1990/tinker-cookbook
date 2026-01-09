@@ -231,6 +231,30 @@ class RolloutRecorder:
             self.session.rollback()
             return False
     
+    def update(self, **kwargs) -> bool:
+        """
+        Generic update method for rollout fields.
+        
+        Args:
+            **kwargs: Any valid rollout fields to update (e.g., trajectory_data_json, summary_json, etc.)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.rollout_db_id:
+            logger.warning("[RolloutRecorder] Cannot update rollout - not initialized")
+            return False
+        
+        try:
+            dao_update_rollout(self.session, self.rollout_db_id, **kwargs)
+            self.session.commit()
+            return True
+            
+        except Exception as e:
+            logger.error(f"[RolloutRecorder] Failed to update rollout: {e}")
+            self.session.rollback()
+            return False
+    
     def start_turn(self, turn_num: int) -> Optional[int]:
         """
         Record the start of a turn and update progress.

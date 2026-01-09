@@ -29,19 +29,6 @@ def get_recorder():
     return _recorder_var.get()
 
 
-# Dummy session class for backward compatibility
-class DummySession:
-    """Dummy session that routes calls to RolloutRecorder."""
-    
-    def commit(self):
-        """No-op commit (handled by recorder)."""
-        pass
-    
-    def rollback(self):
-        """No-op rollback (handled by recorder)."""
-        pass
-
-
 def record_turn(
     session,  # Ignored - kept for compatibility
     rollout_id,  # Ignored - kept for compatibility

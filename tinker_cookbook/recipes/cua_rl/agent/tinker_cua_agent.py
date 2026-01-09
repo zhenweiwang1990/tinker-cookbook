@@ -127,14 +127,11 @@ class TinkerCuaAgent:
         # Set up compatibility layer for old database recording code
         if rollout_recorder is not None:
             logger.info(f"[TinkerCuaAgent] Initializing with rollout_recorder: {rollout_recorder}, rollout_id={rollout_id}")
-            from tinker_cookbook.recipes.cua_rl.database.compat import set_recorder, DummySession
+            from tinker_cookbook.recipes.cua_rl.database.compat import set_recorder
             set_recorder(rollout_recorder)
-            # Create a dummy session for backward compatibility with existing code
-            self.db_session = DummySession()
-            logger.info(f"[TinkerCuaAgent] set_recorder() called, db_session={self.db_session}")
+            logger.info(f"[TinkerCuaAgent] set_recorder() called")
         else:
             logger.warning(f"[TinkerCuaAgent] rollout_recorder is None! No database recording will occur.")
-            self.db_session = None
         
         # Initialize Tinker service client
         import os
@@ -438,15 +435,46 @@ class TinkerCuaAgent:
             # Convert dict arguments to TargetElement objects
             target = None
             if arguments.get("target"):
-                target = TargetElement(**arguments["target"])
+                target_arg = arguments["target"]
+                # Handle case where target might be a list or other non-dict type
+                if isinstance(target_arg, dict):
+                    target = TargetElement(**target_arg)
+                else:
+                    logger.warning(
+                        f"[Tool Execution] target argument is not a dict (type: {type(target_arg)}), "
+                        f"value: {target_arg}. Expected dict with 'element' key."
+                    )
+                    # Try to create a simple TargetElement with just element field
+                    if isinstance(target_arg, str):
+                        target = TargetElement(element=target_arg)
+                    else:
+                        logger.error(f"[Tool Execution] Cannot convert target to TargetElement: {target_arg}")
             
             start_target = None
             if arguments.get("start_target"):
-                start_target = TargetElement(**arguments["start_target"])
+                start_arg = arguments["start_target"]
+                if isinstance(start_arg, dict):
+                    start_target = TargetElement(**start_arg)
+                else:
+                    logger.warning(
+                        f"[Tool Execution] start_target is not a dict (type: {type(start_arg)}), "
+                        f"value: {start_arg}"
+                    )
+                    if isinstance(start_arg, str):
+                        start_target = TargetElement(element=start_arg)
             
             end_target = None
             if arguments.get("end_target"):
-                end_target = TargetElement(**arguments["end_target"])
+                end_arg = arguments["end_target"]
+                if isinstance(end_arg, dict):
+                    end_target = TargetElement(**end_arg)
+                else:
+                    logger.warning(
+                        f"[Tool Execution] end_target is not a dict (type: {type(end_arg)}), "
+                        f"value: {end_arg}"
+                    )
+                    if isinstance(end_arg, str):
+                        end_target = TargetElement(element=end_arg)
             
             result = await perform_action_impl(
                 action_type=arguments["action_type"],
@@ -671,46 +699,45 @@ class TinkerCuaAgent:
                         break
                 
                 if completed_turn_data:
-                    # Update trajectory_data_json with the completed turn
-                    # First, get existing data from database
+                    # Get existing trajectory data from database
                     from tinker_cookbook.recipes.cua_rl.database.database_dao import get_rollout_by_rollout_id
-                    db_rollout = get_rollout_by_rollout_id(self.db_session, self.rollout_id)
                     
-                    if db_rollout:
-                        # Parse existing trajectory_data_json
-                        existing_data = {}
-                        if db_rollout.trajectory_data_json:
-                            try:
-                                existing_data = json.loads(db_rollout.trajectory_data_json)
-                            except:
-                                existing_data = {}
-                        
-                        # Ensure execution_details exists
-                        if 'execution_details' not in existing_data:
-                            existing_data['execution_details'] = {}
-                        if 'turns' not in existing_data['execution_details']:
-                            existing_data['execution_details']['turns'] = []
-                        
-                        # Add or update this turn's data
-                        turns_list = existing_data['execution_details']['turns']
-                        # Check if turn already exists
-                        turn_exists = False
-                        for i, t in enumerate(turns_list):
-                            if t.get('turn_num') == turn:
-                                turns_list[i] = completed_turn_data
-                                turn_exists = True
-                                break
-                        if not turn_exists:
-                            turns_list.append(completed_turn_data)
-                        
-                        # Save updated data
-                        trajectory_data_json = json.dumps(existing_data, default=str)
-                        self.rollout_recorder.update(
-                            trajectory_data_json=trajectory_data_json
-                        )
-                        logger.debug(f"[Turn {turn}] Saved turn data to database for rollout {self.rollout_id}")
+                    existing_data = {}
+                    rollout = get_rollout_by_rollout_id(self.rollout_recorder.session, self.rollout_id)
+                    if rollout and rollout.trajectory_data_json:
+                        try:
+                            existing_data = json.loads(rollout.trajectory_data_json)
+                        except Exception as parse_error:
+                            logger.warning(f"[Turn {turn}] Failed to parse existing trajectory_data_json: {parse_error}")
+                            existing_data = {}
+                    
+                    # Ensure execution_details exists
+                    if 'execution_details' not in existing_data:
+                        existing_data['execution_details'] = {}
+                    if 'turns' not in existing_data['execution_details']:
+                        existing_data['execution_details']['turns'] = []
+                    
+                    # Add or update this turn's data
+                    turns_list = existing_data['execution_details']['turns']
+                    # Check if turn already exists
+                    turn_exists = False
+                    for i, t in enumerate(turns_list):
+                        if t.get('turn_num') == turn:
+                            turns_list[i] = completed_turn_data
+                            turn_exists = True
+                            break
+                    if not turn_exists:
+                        turns_list.append(completed_turn_data)
+                    
+                    # Save updated data through rollout_recorder
+                    trajectory_data_json = json.dumps(existing_data, default=str)
+                    self.rollout_recorder.update(
+                        trajectory_data_json=trajectory_data_json
+                    )
+                    logger.info(f"[Turn {turn}] ✓ Saved turn data to database (rollout {self.rollout_id})")
         except Exception as e:
-            logger.warning(f"[Turn {turn}] Failed to save turn data to database: {e}")
+            # Log error but don't raise - we don't want to break the rollout
+            logger.error(f"[Turn {turn}] Failed to save turn data to database: {e}", exc_info=True)
     
     async def run_task(
         self,
@@ -837,28 +864,18 @@ class TinkerCuaAgent:
             if self.rollout_logger:
                 self.rollout_logger.log_env_build_start()
             
-            import os
-            # Get the directory of this file (agent/)
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            # Go up one level to cua_rl/, then into tasks/
-            cua_rl_dir = os.path.dirname(current_dir)
-            tasks_dir = os.path.join(cua_rl_dir, "tasks")
-            
-            # Determine APK path based on task
+            # Determine APK URL based on task
             if app_name == "airbnb":
-                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
+                apk_url = "https://activate2-gbox-staging-public-assets.s3.us-west-2.amazonaws.com/test/airbnb.apk"
                 package_name = "com.airbnb.clone"
             else:
                 # Default: install airbnb APK when app cannot be determined
-                apk_path = os.path.join(tasks_dir, "airbnb", "airbnb.apk")
+                apk_url = "https://activate2-gbox-staging-public-assets.s3.us-west-2.amazonaws.com/test/airbnb.apk"
                 package_name = "com.airbnb.clone"
                 logger.warning(f"[Task Setup] Could not identify app from task, defaulting to airbnb APK")
             
-            # Get APK file size
+            # APK size is unknown when using URL (will be determined during download)
             apk_size_mb = None
-            if os.path.exists(apk_path):
-                apk_size_bytes = os.path.getsize(apk_path)
-                apk_size_mb = apk_size_bytes / (1024 * 1024)
             
             # Create box without installing APK (we'll do it manually)
             # Always use logger.info (not rollout_logger) for critical debug messages
@@ -898,7 +915,7 @@ class TinkerCuaAgent:
             
             # Install APK
             # Always use logger.info for critical debug messages to ensure real-time output
-            logger.info(f"[Task Setup] Installing APK from {apk_path}...")
+            logger.info(f"[Task Setup] Installing APK from {apk_url}...")
             sys.stdout.flush()
             sys.stderr.flush()
             
@@ -909,14 +926,14 @@ class TinkerCuaAgent:
                     "APK Installation",
                     "in_progress",
                     details={
-                        "apk_path": os.path.basename(apk_path),
+                        "apk_url": apk_url,
                         "apk_size_mb": f"{apk_size_mb:.2f}" if apk_size_mb else "N/A",
                         "package": package_name,
                     }
                 )
             
             try:
-                await self.gbox_client.install_apk(apk_path, open_app=True)
+                await self.gbox_client.install_apk(apk_url, open_app=True)
                 apk_install_time = time.time() - apk_install_stage_start
                 
                 # Log APK installation success
@@ -1308,7 +1325,7 @@ class TinkerCuaAgent:
                                 }
                         
                         record_observation(
-                            self.db_session,
+                            None,  # session parameter is ignored by compat layer
                             None,  # turn_id is ignored by compat layer
                             obs_type="screenshot_before",
                             screenshot_uri=screenshot_uri,
@@ -1320,8 +1337,6 @@ class TinkerCuaAgent:
                         logger.debug(f"[Turn {turn}] Recorded Before screenshot and model_input for turn {turn}")
                     except Exception as e:
                         logger.warning(f"[Turn {turn}] Failed to record Before screenshot/model_input: {e}")
-                        if self.db_session:
-                            self.db_session.rollback()
                 
                 logger.info(f"[Turn {turn}] About to call _sample_with_tinker()...")
                 # Add timeout for model inference (configurable per turn)
@@ -1635,7 +1650,7 @@ class TinkerCuaAgent:
                             
                             # Record turn (this will create the turn if it doesn't exist)
                             final_turn_id = record_turn(
-                                self.db_session,
+                                None,  # session parameter is ignored by compat layer
                                 self.rollout_id,
                                 turn,
                                 reward=0.0,  # Reward will be calculated later
@@ -1658,7 +1673,7 @@ class TinkerCuaAgent:
                                     tool_name = tool_call.get("name")
                                     tool_args = tool_call.get("args", {})
                                     record_action(
-                                        self.db_session,
+                                        None,  # session parameter is ignored by compat layer
                                         final_turn_id,
                                         action_type="tool_call",
                                         tool_name=tool_name,
@@ -1682,7 +1697,7 @@ class TinkerCuaAgent:
                                     
                                     # Record after screenshot
                                     record_observation(
-                                        self.db_session,
+                                        None,  # session parameter is ignored by compat layer
                                         None,  # turn_id ignored by compat
                                         obs_type="screenshot_after",
                                         screenshot_uri=after_screenshot_uri,
@@ -1695,7 +1710,7 @@ class TinkerCuaAgent:
                                 # Record model response as observation for real-time UI
                                 try:
                                     record_observation(
-                                        self.db_session,
+                                        None,  # session parameter is ignored by compat layer
                                         None,  # turn_id ignored by compat
                                         obs_type="model_response",
                                         text_content=response_text,
@@ -1706,8 +1721,6 @@ class TinkerCuaAgent:
                             
                         except Exception as e:
                             logger.warning(f"[Turn {turn}] Failed to record turn/action in database: {e}")
-                            if self.db_session:
-                                self.db_session.rollback()
                     
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
@@ -1757,7 +1770,7 @@ class TinkerCuaAgent:
                             
                             # Record turn end (this will create the turn if it doesn't exist)
                             final_turn_id = record_turn(
-                                self.db_session,
+                                None,  # session parameter is ignored by compat layer
                                 self.rollout_id,
                                 turn,
                                 reward=0.0,  # Reward will be calculated later
@@ -1776,8 +1789,6 @@ class TinkerCuaAgent:
                             pass  # Commit handled by rollout_recorder
                         except Exception as e:
                             logger.warning(f"[Turn {turn}] Failed to record turn/observation in database: {e}")
-                            if self.db_session:
-                                self.db_session.rollback()
                     
                     if self.rollout_logger:
                         self.rollout_logger.end_turn(turn)
@@ -1795,7 +1806,7 @@ class TinkerCuaAgent:
                 turn_time = time.time() - turn_start_time
                 
                 # Record turn, actions, and observations in database
-                if self.db_session is not None and self.rollout_id is not None:
+                if self.rollout_id is not None:
                     try:
                         from tinker_cookbook.recipes.cua_rl.database.compat import record_turn, record_action, record_observation
                         from datetime import datetime
@@ -1815,7 +1826,7 @@ class TinkerCuaAgent:
                         
                         # Record turn end (this will create the turn if it doesn't exist)
                         final_turn_id = record_turn(
-                            self.db_session,
+                            None,  # session parameter is ignored by compat layer
                             self.rollout_id,
                             turn,
                             reward=0.0,  # Reward will be calculated later
@@ -1836,7 +1847,7 @@ class TinkerCuaAgent:
                                 tool_name = tool_call.get("name")
                                 tool_args = tool_call.get("args", {})
                                 record_action(
-                                    self.db_session,
+                                    None,  # session parameter is ignored by compat layer
                                     final_turn_id,
                                     action_type="tool_call",
                                     tool_name=tool_name,
@@ -1853,8 +1864,6 @@ class TinkerCuaAgent:
                         pass  # Commit handled by rollout_recorder
                     except Exception as e:
                         logger.warning(f"[Turn {turn}] Failed to record turn/action/observation in database: {e}")
-                        if self.db_session:
-                            self.db_session.rollback()
                 
                 if self.rollout_logger:
                     self.rollout_logger.end_turn(turn)
@@ -2011,7 +2020,7 @@ class TinkerCuaAgent:
                             success=validation_result.success,
                             execution_time=validation_result.execution_time,
                             validation_query=validation_result.validation_query,
-                            screenshot_uri=self.validation_screenshot_uri,
+                            screenshot_uri=getattr(self, 'validation_screenshot_uri', None),
                             termination_reason=self.termination_reason,
                         )
                     else:

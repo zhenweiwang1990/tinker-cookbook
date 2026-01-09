@@ -375,11 +375,14 @@ class RolloutLogger:
         coord_time: Optional[float] = None,
         exec_time: Optional[float] = None,
         total_time: Optional[float] = None,
+        text: Optional[str] = None,  # For input/type actions
+        direction: Optional[str] = None,  # For scroll/swipe actions
+        **kwargs  # Catch-all for other action-specific parameters
     ):
         """Log action execution (combined format).
         
         Args:
-            action_type: Type of action (tap, click, drag, etc.)
+            action_type: Type of action (tap, click, drag, input, type, etc.)
             target_desc: Description of target element
             start_target: Description of start target (for drag)
             end_target: Description of end target (for drag)
@@ -389,6 +392,9 @@ class RolloutLogger:
             coord_time: Time to generate coordinates
             exec_time: Time to execute action
             total_time: Total time for action
+            text: Text input (for input/type actions)
+            direction: Direction (for scroll/swipe actions)
+            **kwargs: Other action-specific parameters (distance, duration, buttons, etc.)
         """
         action_info = {
             "action_type": action_type,
@@ -401,6 +407,9 @@ class RolloutLogger:
             "coord_time": coord_time,
             "exec_time": exec_time,
             "total_time": total_time,
+            "text": text,
+            "direction": direction,
+            **kwargs  # Include all additional parameters
         }
         
         if self.current_turn:

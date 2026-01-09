@@ -41,9 +41,9 @@ export default function DetailPanel({
 
   useEffect(() => {
     fetchDetails();
-    // Auto-refresh disabled - use manual refresh button instead
-    // const interval = setInterval(fetchDetails, 2000); // Auto-refresh every 2 seconds
-    // return () => clearInterval(interval);
+    // Auto-refresh every 10 seconds
+    const interval = setInterval(fetchDetails, 10000);
+    return () => clearInterval(interval);
   }, [type, id]);
 
   if (loading) {

@@ -493,13 +493,18 @@ def create_group(
     if "metrics_json" in kwargs and isinstance(kwargs["metrics_json"], (dict, list)):
         kwargs["metrics_json"] = json_serialize(kwargs["metrics_json"])
     
+    # Extract status and current_phase from kwargs to avoid conflicts
+    status = kwargs.pop("status", "pending")
+    current_phase = kwargs.pop("current_phase", None)
+    
     group = Group(
         source_type=source_type,
         group_num=group_num,
         step_id=step_id,
         eval_id=eval_id,
         baseline_id=baseline_id,
-        status="pending",
+        status=status,
+        current_phase=current_phase,
         start_time=datetime.utcnow(),
         **kwargs
     )

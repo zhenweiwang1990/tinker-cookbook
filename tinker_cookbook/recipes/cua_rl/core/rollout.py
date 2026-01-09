@@ -58,7 +58,7 @@ def _update_parent_progress(db_session, group):
             get_eval, update_eval,
             get_step, update_step
         )
-        from sqlalchemy import func
+        from sqlalchemy import func, Integer
         from tinker_cookbook.recipes.cua_rl.database.database_models import Group
         
         # Determine parent type and ID
@@ -78,7 +78,7 @@ def _update_parent_progress(db_session, group):
         query = db_session.query(
             func.avg(Group.progress_percent).label('avg_progress'),
             func.count(Group.id).label('total_groups'),
-            func.sum(func.cast(Group.status == 'completed', db_session.bind.dialect.type_descriptor(int))).label('completed_groups')
+            func.sum(func.cast(Group.status == 'completed', Integer)).label('completed_groups')
         )
         
         if parent_type == 'baseline':

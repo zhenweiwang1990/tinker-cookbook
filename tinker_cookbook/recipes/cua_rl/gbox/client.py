@@ -111,7 +111,7 @@ class CuaGBoxClient:
         """Install an APK file on the box.
         
         Args:
-            apk_path: Path to local APK file
+            apk_path: Path to local APK file or URL to APK file
             box_id: Optional box ID (defaults to current box)
             open_app: Whether to open the app after installation (default: True)
             
@@ -121,9 +121,14 @@ class CuaGBoxClient:
         box = self._get_box(box_id)
         logger.debug(f"Installing APK from {apk_path}...")
         
-        # Open APK file and install
-        with open(apk_path, "rb") as apk_file:
-            app = box.app.install(apk=apk_file)
+        # Check if apk_path is a URL or local file
+        if apk_path.startswith(('http://', 'https://')):
+            # Install directly from URL
+            app = box.app.install(apk=apk_path)
+        else:
+            # Open local APK file and install
+            with open(apk_path, "rb") as apk_file:
+                app = box.app.install(apk=apk_file)
         
         package_name = app.data.package_name
         logger.info(f"APK installed successfully: {package_name}")
