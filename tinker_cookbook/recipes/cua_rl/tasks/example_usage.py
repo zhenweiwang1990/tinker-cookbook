@@ -30,9 +30,10 @@ async def example_gbox_adb():
         
         # Run SQLite query
         print("Running SQLite query...")
+        package_name = "com.airbnb.clone"
         query_result = adb.run_sqlite_query(
-            package_name="com.airbnb.clone",
-            db_relative_path="/data/data/"+config.get_package_name()+"/databases/airbnbSQLiteSQLite.db",
+            package_name=package_name,
+            db_relative_path=f"/data/data/{package_name}/databases/airbnbSQLiteSQLite.db",
             sql="SELECT COUNT(*) FROM favorites;"
         )
         print(f"Query result: {query_result}")

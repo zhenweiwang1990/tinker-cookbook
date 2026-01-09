@@ -540,7 +540,24 @@ class TinkerCuaAgent:
                 target_arg = arguments["target"]
                 # Handle case where target might be a list or other non-dict type
                 if isinstance(target_arg, dict):
+                    # Standardize on coordinates: [x, y]. If a model outputs x/y, convert.
+                    if "coordinates" not in target_arg and "x" in target_arg and "y" in target_arg:
+                        try:
+                            target_arg = dict(target_arg)
+                            target_arg["coordinates"] = [int(target_arg.pop("x")), int(target_arg.pop("y"))]
+                        except Exception:
+                            # Leave as-is; TargetElement validation will fail loudly.
+                            pass
                     target = TargetElement(**target_arg)
+                elif isinstance(target_arg, (list, tuple)) and len(target_arg) >= 2:
+                    # Be forgiving: some models output coordinates directly as [x, y].
+                    try:
+                        target = TargetElement(
+                            element="direct coordinates",
+                            coordinates=[int(target_arg[0]), int(target_arg[1])],
+                        )
+                    except Exception:
+                        logger.error(f"[Tool Execution] Cannot convert target to TargetElement: {target_arg}")
                 else:
                     logger.warning(
                         f"[Tool Execution] target argument is not a dict (type: {type(target_arg)}), "
@@ -556,7 +573,21 @@ class TinkerCuaAgent:
             if arguments.get("start_target"):
                 start_arg = arguments["start_target"]
                 if isinstance(start_arg, dict):
+                    if "coordinates" not in start_arg and "x" in start_arg and "y" in start_arg:
+                        try:
+                            start_arg = dict(start_arg)
+                            start_arg["coordinates"] = [int(start_arg.pop("x")), int(start_arg.pop("y"))]
+                        except Exception:
+                            pass
                     start_target = TargetElement(**start_arg)
+                elif isinstance(start_arg, (list, tuple)) and len(start_arg) >= 2:
+                    try:
+                        start_target = TargetElement(
+                            element="direct coordinates",
+                            coordinates=[int(start_arg[0]), int(start_arg[1])],
+                        )
+                    except Exception:
+                        logger.error(f"[Tool Execution] Cannot convert start_target to TargetElement: {start_arg}")
                 else:
                     logger.warning(
                         f"[Tool Execution] start_target is not a dict (type: {type(start_arg)}), "
@@ -569,7 +600,21 @@ class TinkerCuaAgent:
             if arguments.get("end_target"):
                 end_arg = arguments["end_target"]
                 if isinstance(end_arg, dict):
+                    if "coordinates" not in end_arg and "x" in end_arg and "y" in end_arg:
+                        try:
+                            end_arg = dict(end_arg)
+                            end_arg["coordinates"] = [int(end_arg.pop("x")), int(end_arg.pop("y"))]
+                        except Exception:
+                            pass
                     end_target = TargetElement(**end_arg)
+                elif isinstance(end_arg, (list, tuple)) and len(end_arg) >= 2:
+                    try:
+                        end_target = TargetElement(
+                            element="direct coordinates",
+                            coordinates=[int(end_arg[0]), int(end_arg[1])],
+                        )
+                    except Exception:
+                        logger.error(f"[Tool Execution] Cannot convert end_target to TargetElement: {end_arg}")
                 else:
                     logger.warning(
                         f"[Tool Execution] end_target is not a dict (type: {type(end_arg)}), "

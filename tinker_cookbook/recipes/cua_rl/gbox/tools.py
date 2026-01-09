@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from typing import Dict, Any, Optional, List, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from tinker_cookbook.recipes.cua_rl.gbox.client import CuaGBoxClient
 from tinker_cookbook.recipes.cua_rl.gbox.coordinate import CuaGBoxCoordinateGenerator
@@ -29,31 +29,17 @@ class TargetElement(BaseModel):
     location: Optional[str] = Field(None, description="Location on screen")
     shape: Optional[str] = Field(None, description="Shape of the element")
     
-    # Direct mode fields - VLM directly outputs coordinates
-    # Support both formats: separate x/y or coordinates list
-    coordinates: Optional[List[int]] = Field(None, description="Coordinates as [x, y] in pixels (Direct mode)")
-    x: Optional[int] = Field(None, description="X coordinate in pixels (Direct mode only)")
-    y: Optional[int] = Field(None, description="Y coordinate in pixels (Direct mode only)")
-    confidence: Optional[float] = Field(None, description="Confidence score 0.0-1.0 (Direct mode only)")
-    
-    @field_validator('x', 'y', mode='before')
-    @classmethod
-    def extract_from_coordinates(cls, v, info):
-        """Extract x or y from coordinates list if provided."""
-        # If x/y is already provided, use it
-        if v is not None:
-            return v
-        
-        # Check if coordinates list is provided
-        coordinates = info.data.get('coordinates')
-        if coordinates and isinstance(coordinates, list) and len(coordinates) >= 2:
-            # Extract x or y based on field name
-            if info.field_name == 'x':
-                return coordinates[0]
-            elif info.field_name == 'y':
-                return coordinates[1]
-        
-        return v
+    # Direct coordinate mode fields:
+    # - We standardize on a single representation: coordinates: [x, y]
+    # - We intentionally do NOT expose separate x/y in the schema to avoid drift.
+    coordinates: Optional[List[int]] = Field(
+        None,
+        description="Direct mode: coordinates as [x, y] (integers).",
+    )
+    confidence: Optional[float] = Field(
+        None,
+        description="Direct mode: confidence score 0.0-1.0 (optional).",
+    )
 
 
 # ============================================================================
@@ -132,7 +118,7 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="tap",
-            target=target.model_dump() if target else target_desc,  # Pass dict with coords in Direct mode
+            target=target.model_dump() if target is not None else target_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -194,7 +180,7 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="click",
-            target=target.model_dump() if target else target_desc,  # Pass dict with coords
+            target=target.model_dump() if target is not None else target_desc,  # Pass dict with coords
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -260,8 +246,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords in Direct mode
-            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords in Direct mode
+            target=start_target.model_dump() if start_target is not None else start_desc,  # Pass dict with coords in Direct mode
+            end_target=end_target.model_dump() if end_target is not None else end_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -282,7 +268,7 @@ async def perform_action_impl(
             start_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
+                target=start_target.model_dump() if start_target is not None else start_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             start_coord_time = time.time() - start_coord_start
@@ -291,7 +277,7 @@ async def perform_action_impl(
             end_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
+                target=end_target.model_dump() if end_target is not None else end_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             end_coord_time = time.time() - end_coord_start
@@ -355,8 +341,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
-            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
+            target=start_target.model_dump() if start_target is not None else start_desc,  # Pass dict with coords
+            end_target=end_target.model_dump() if end_target is not None else end_desc,  # Pass dict with coords
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -377,7 +363,7 @@ async def perform_action_impl(
             start_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords
+                target=start_target.model_dump() if start_target is not None else start_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             start_coord_time = time.time() - start_coord_start
@@ -386,7 +372,7 @@ async def perform_action_impl(
             end_result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click",
-                target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords
+                target=end_target.model_dump() if end_target is not None else end_desc,  # Pass dict with coords
                 rollout_logger=rollout_logger,
             )
             end_coord_time = time.time() - end_coord_start
@@ -453,7 +439,7 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="scroll",
-            target=target.model_dump() if target else target_desc,  # Pass dict with coords in Direct mode
+            target=target.model_dump() if target is not None else target_desc,  # Pass dict with coords in Direct mode
             direction=direction,
             rollout_logger=rollout_logger,
         )
@@ -533,7 +519,7 @@ async def perform_action_impl(
             result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click" if box_type == "linux" else "tap",
-                target=target_dict.model_dump() if target_dict else target_desc,  # Pass dict with coords in Direct mode
+                target=target_dict.model_dump() if target_dict is not None else target_desc,  # Pass dict with coords in Direct mode
                 rollout_logger=rollout_logger,
             )
             coord_time = time.time() - coord_start
@@ -714,8 +700,8 @@ async def perform_action_impl(
         result = await coord_generator.generate_coordinates(
             screenshot_uri=screenshot_uri,
             action_type="drag",
-            target=start_target.model_dump() if start_target else start_desc,  # Pass dict with coords in Direct mode
-            end_target=end_target.model_dump() if end_target else end_desc,  # Pass dict with coords in Direct mode
+            target=start_target.model_dump() if start_target is not None else start_desc,  # Pass dict with coords in Direct mode
+            end_target=end_target.model_dump() if end_target is not None else end_desc,  # Pass dict with coords in Direct mode
             rollout_logger=rollout_logger,
         )
         coord_time = time.time() - coord_start
@@ -797,7 +783,7 @@ async def perform_action_impl(
             result = await coord_generator.generate_coordinates(
                 screenshot_uri=screenshot_uri,
                 action_type="click" if box_type == "linux" else "tap",
-                target=target_desc,
+                target=target.model_dump() if target is not None else target_desc,
                 rollout_logger=rollout_logger,
             )
             coord_time = time.time() - coord_start
@@ -899,19 +885,65 @@ TOOL_SCHEMAS = {
                     },
                     "target": {
                         "type": "object",
-                        "description": "Target element description",
+                        "description": "Target element description. In Direct coordinate mode, include coordinates.",
                         "properties": {
                             "element": {"type": "string"},
                             "label": {"type": "string"},
                             "color": {"type": "string"},
                             "size": {"type": "string"},
                             "location": {"type": "string"},
-                            "shape": {"type": "string"}
+                            "shape": {"type": "string"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "Direct mode: [x, y] in screen pixels (or normalized if scaling is enabled)."
+                            },
+                            "confidence": {"type": "number", "description": "Direct mode: confidence 0..1"}
                         },
                         "required": ["element"]
                     },
-                    "start_target": {"type": "object", "description": "Start target for swipe"},
-                    "end_target": {"type": "object", "description": "End target for swipe"},
+                    "start_target": {
+                        "type": "object",
+                        "description": "Start target for swipe/drag. In Direct coordinate mode, include coordinates.",
+                        "properties": {
+                            "element": {"type": "string"},
+                            "label": {"type": "string"},
+                            "color": {"type": "string"},
+                            "size": {"type": "string"},
+                            "location": {"type": "string"},
+                            "shape": {"type": "string"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 2,
+                                "maxItems": 2
+                            },
+                            "confidence": {"type": "number"}
+                        },
+                        "required": ["element"]
+                    },
+                    "end_target": {
+                        "type": "object",
+                        "description": "End target for swipe/drag. In Direct coordinate mode, include coordinates.",
+                        "properties": {
+                            "element": {"type": "string"},
+                            "label": {"type": "string"},
+                            "color": {"type": "string"},
+                            "size": {"type": "string"},
+                            "location": {"type": "string"},
+                            "shape": {"type": "string"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 2,
+                                "maxItems": 2
+                            },
+                            "confidence": {"type": "number"}
+                        },
+                        "required": ["element"]
+                    },
                     "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                     "distance": {"type": "integer", "description": "Scroll distance in pixels"},
                     "text": {"type": "string", "description": "Text to input"},

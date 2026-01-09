@@ -26,17 +26,20 @@ class DirectCoordinateGenerator(BaseCoordinateGenerator):
        - Coordinates are scaled: actual_x = model_x * x_scale_ratio
        - Useful for models like Qwen3-VL that normalize images to 1000x1000
     
-    Expected format in Direct mode:
+    Expected format in Direct mode (standard):
     {
         "name": "action",
         "args": {
             "action_type": "tap",
             "target": {
                 "element": "login button",
-                "coordinates": [540, 1200]  # or "x": 540, "y": 1200
+                "coordinates": [540, 1200]
             }
         }
     }
+
+    Note: Older/legacy tool calls may provide separate "x"/"y". We keep a fallback
+    parser for robustness, but prompts + schemas standardize on "coordinates".
     """
     
     def __init__(
