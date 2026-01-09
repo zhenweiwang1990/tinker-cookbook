@@ -9,6 +9,8 @@ interface ProgressBarProps {
   height?: string;
   className?: string;
   isRunning?: boolean;  // New prop to control animation
+  color?: string; // Optional fixed color override
+  useThresholdColors?: boolean; // If false, don't vary color by percent
 }
 
 export default function ProgressBar({ 
@@ -16,12 +18,16 @@ export default function ProgressBar({
   showLabel = true, 
   height = '14px',  // Reduced default height
   className = '',
-  isRunning = false  // Default no animation
+  isRunning = false,  // Default no animation
+  color,
+  useThresholdColors = true,
 }: ProgressBarProps) {
   const clampedPercent = Math.max(0, Math.min(100, percent));
   
   // Color coding based on progress
   const getColor = () => {
+    if (color) return color;
+    if (!useThresholdColors) return '#17a2b8'; // Neutral blue
     if (clampedPercent >= 90) return '#28a745'; // Green
     if (clampedPercent >= 60) return '#17a2b8'; // Blue
     if (clampedPercent >= 30) return '#ffc107'; // Yellow

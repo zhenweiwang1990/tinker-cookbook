@@ -81,6 +81,52 @@ class ProgressTracker:
         self.session = session
         # Cache for average turn times (entity_type -> entity_id -> avg_time)
         self._turn_time_cache: Dict[str, Dict[int, float]] = {}
+
+    def _get_rollout_turn_progress(
+        self,
+        rollout: Any,
+        default_max_turns: int = 20,
+    ) -> tuple[int, int]:
+        """
+        Return (completed_turns, effective_total_turns) for a rollout, strictly turn-based.
+
+        Notes:
+        - For finished rollouts (completed/failed/cancelled), effective_total_turns is the actual
+          turns taken (num_turns / current_turn), so that aggregates reach 100% once all rollouts finish.
+        - For unfinished rollouts, effective_total_turns is the budgeted max_turns since we don't yet
+          know whether it will early-stop.
+        - We clamp completed_turns into [0, max_turns] to avoid bad data inflating progress.
+        """
+        max_turns = int(getattr(rollout, "max_turns", None) or default_max_turns)
+
+        status = getattr(rollout, "status", None)
+        if status == "running":
+            completed_turns = int(getattr(rollout, "current_turn", None) or 0)
+        elif status in ("completed", "failed", "cancelled"):
+            # Prefer the authoritative num_turns; fallback to current_turn; last resort 0.
+            completed_turns = getattr(rollout, "num_turns", None)
+            if completed_turns is None:
+                completed_turns = getattr(rollout, "current_turn", None)
+            completed_turns = int(completed_turns or 0)
+        else:
+            # pending / env_creation / agent_init / etc.
+            completed_turns = int(getattr(rollout, "current_turn", None) or 0)
+
+        # Clamp to prevent negative or >max values.
+        if completed_turns < 0:
+            completed_turns = 0
+        if max_turns > 0 and completed_turns > max_turns:
+            completed_turns = max_turns
+
+        # Effective total turns:
+        # - finished rollouts shrink denominator to actual turns (if >0), otherwise fall back to max_turns
+        # - unfinished rollouts keep denominator at max_turns
+        if status in ("completed", "failed", "cancelled"):
+            effective_total_turns = completed_turns if completed_turns > 0 else max_turns
+        else:
+            effective_total_turns = max_turns
+
+        return completed_turns, effective_total_turns
     
     def _calculate_avg_turn_time(
         self,
@@ -203,6 +249,18 @@ class ProgressTracker:
             self._turn_time_cache[entity_type][entity_id] = avg_time
         
         return avg_time
+
+    def _get_training_concurrency(self, training: Any) -> int:
+        """Best-effort max concurrency for wall-time ETA."""
+        try:
+            import json
+
+            cfg = json.loads(training.config_json) if getattr(training, "config_json", None) else {}
+            v = cfg.get("max_concurrent_rollouts") or cfg.get("max_concurrent") or 1
+            v = int(v)
+            return v if v > 0 else 1
+        except Exception:
+            return 1
     
     def update_rollout_progress(
         self,
@@ -230,24 +288,27 @@ class ProgressTracker:
             logger.warning(f"Rollout {rollout_id} not found")
             return ProgressStats(status="failed")
         
-        # Calculate progress
-        completed_turns = current_turn  # 0-indexed, so current_turn is number of completed turns
-        total_turns = max_turns
-        
-        # Key change: If rollout is finished (completed or failed), always show 100%
-        # regardless of actual turns (may have called finish, timeout, error, etc.)
-        if status in ('completed', 'failed'):
-            progress_percent = 100.0
-            completed_turns = total_turns  # Count as full completion
+        # Calculate progress (turn-based; finished rollouts should reach 100% even if early-stop)
+        completed_turns = max(0, int(current_turn))
+        max_turns_i = max(0, int(max_turns))
+        if max_turns_i > 0 and completed_turns > max_turns_i:
+            completed_turns = max_turns_i
+
+        if status in ("completed", "failed", "cancelled"):
+            effective_total_turns = completed_turns if completed_turns > 0 else max_turns_i
         else:
-            progress_percent = min(100.0, (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0)
+            effective_total_turns = max_turns_i
+
+        progress_percent = (
+            (completed_turns / effective_total_turns * 100.0) if effective_total_turns > 0 else 0.0
+        )
         
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('rollout', rollout_id, fallback=30.0)  # 30s default
         
         # Estimate times
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        estimated_total_time = effective_total_turns * avg_turn_time if avg_turn_time else None
+        estimated_remaining_time = (effective_total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
         
         # Determine status
         if status is None:
@@ -269,7 +330,7 @@ class ProgressTracker:
         
         stats = ProgressStats(
             completed_turns=completed_turns,
-            total_turns=total_turns,
+            total_turns=effective_total_turns,
             progress_percent=progress_percent,
             avg_turn_time=avg_turn_time,
             estimated_total_time=estimated_total_time,
@@ -318,22 +379,18 @@ class ProgressTracker:
         failed_rollouts = 0
         
         for rollout in rollouts:
-            max_turns = rollout.max_turns or 20  # Default 20 turns
-            total_turns += max_turns
-            
-            # Key change: Any finished rollout (completed or failed) counts as 100%
-            if rollout.status in ('completed', 'failed'):
-                # Finished rollouts always count as max_turns (100%)
-                # regardless of actual num_turns (may have called finish, timeout, error, etc.)
-                completed_turns += max_turns
-                if rollout.status == 'completed':
-                    completed_rollouts += 1
-                else:
-                    failed_rollouts += 1
-            elif rollout.status == 'running':
-                completed_turns += rollout.current_turn or 0
+            rollout_completed_turns, rollout_effective_total_turns = self._get_rollout_turn_progress(
+                rollout, default_max_turns=20
+            )
+            total_turns += rollout_effective_total_turns
+            completed_turns += rollout_completed_turns
+
+            if rollout.status == "completed":
+                completed_rollouts += 1
+            elif rollout.status == "running":
                 running_rollouts += 1
-            # pending rollouts contribute 0 completed turns
+            elif rollout.status == "failed":
+                failed_rollouts += 1
         
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
@@ -354,9 +411,23 @@ class ProgressTracker:
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('group', group_id, fallback=30.0)
         
-        # Estimate times
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        # Estimate times (wall-time: divide by global concurrency)
+        concurrency = 1
+        try:
+            if group.step_id:
+                training = get_training(self.session, get_step(self.session, group.step_id).training_id)
+                concurrency = self._get_training_concurrency(training) if training else 1
+            elif group.eval_id:
+                training = get_training(self.session, get_eval(self.session, group.eval_id).training_id)
+                concurrency = self._get_training_concurrency(training) if training else 1
+            elif group.baseline_id:
+                training = get_training(self.session, get_baseline(self.session, group.baseline_id).training_id)
+                concurrency = self._get_training_concurrency(training) if training else 1
+        except Exception:
+            concurrency = 1
+
+        estimated_total_time = (total_turns * avg_turn_time / concurrency) if avg_turn_time else None
+        estimated_remaining_time = ((total_turns - completed_turns) * avg_turn_time / concurrency) if avg_turn_time else None
         
         # Update database
         update_kwargs = {
@@ -393,12 +464,11 @@ class ProgressTracker:
         step_id: int,
     ) -> ProgressStats:
         """
-        Update step progress based on its groups (rollout phase) and training metrics.
-        
-        A step has two phases:
-        1. Rollout phase: Running groups to collect trajectories
-        2. Training phase: Training the model on collected trajectories
-        
+        Update step progress based on its rollouts (pure turn-based).
+
+        NOTE: This intentionally ignores "training phase" progress and treats progress
+        strictly as fraction of turns completed over turns budgeted for this step.
+
         Args:
             step_id: Database step ID
             
@@ -409,6 +479,11 @@ class ProgressTracker:
         if not step:
             logger.warning(f"Step {step_id} not found")
             return ProgressStats(status="failed")
+
+        training = get_training(self.session, step.training_id) if step.training_id else None
+        default_max_turns = int(getattr(training, "max_turns", None) or 20)
+        expected_groups = int(getattr(training, "groups_per_batch", None) or 0)
+        expected_rollouts_per_group = int(getattr(training, "group_size", None) or 0)
         
         # Get all groups in this step
         groups = list_groups_by_step(self.session, step_id)
@@ -425,17 +500,25 @@ class ProgressTracker:
         failed_groups = 0
         
         for group in groups:
-            # Get group's total and completed turns
+            # Expected rollouts for this group: prefer group.num_rollouts; fallback to training.group_size; else len(existing).
             group_rollouts = list_rollouts_by_group(self.session, group.id)
+            group_expected_rollouts = int(getattr(group, "num_rollouts", None) or 0)
+            if group_expected_rollouts <= 0:
+                group_expected_rollouts = (
+                    expected_rollouts_per_group if expected_rollouts_per_group > 0 else len(group_rollouts)
+                )
+
+            # Sum effective totals for existing rollouts; add budget for missing rollouts not yet created.
+            existing_rollouts = len(group_rollouts)
+            missing_rollouts = max(0, group_expected_rollouts - existing_rollouts)
+            total_turns += missing_rollouts * default_max_turns
+
             for rollout in group_rollouts:
-                max_turns = rollout.max_turns or 20
-                total_turns += max_turns
-                
-                # Finished rollouts count as 100% (completed or failed)
-                if rollout.status in ('completed', 'failed'):
-                    completed_turns += max_turns
-                elif rollout.status == 'running':
-                    completed_turns += rollout.current_turn or 0
+                rollout_completed_turns, rollout_effective_total_turns = self._get_rollout_turn_progress(
+                    rollout, default_max_turns=default_max_turns
+                )
+                total_turns += rollout_effective_total_turns
+                completed_turns += rollout_completed_turns
             
             # Finished groups count based on their status
             if group.status == 'completed':
@@ -445,30 +528,24 @@ class ProgressTracker:
             elif group.status == 'failed':
                 failed_groups += 1
         
-        # Progress is weighted: 80% rollout, 20% training
-        # This reflects that rollout is the more time-consuming phase
-        rollout_progress = (completed_turns / total_turns * 80.0) if total_turns > 0 else 0.0
-        
-        # Training progress: if training has started, add remaining 20%
-        training_progress = 0.0
-        if step.current_phase == 'training' or step.status == 'completed':
-            training_progress = 20.0
-        elif step.current_phase == 'rollout' and completed_groups >= len(groups):
-            # Rollout completed, training about to start
-            training_progress = 0.0
-        
-        progress_percent = min(100.0, rollout_progress + training_progress)
+        # Add not-yet-created groups into denominator (0 turns completed).
+        if expected_groups > 0:
+            missing_groups = max(0, expected_groups - len(groups))
+            # Missing groups budget: expected_rollouts_per_group * max_turns.
+            if expected_rollouts_per_group > 0:
+                total_turns += missing_groups * expected_rollouts_per_group * default_max_turns
+            else:
+                # If we don't know group size, assume 1 rollout per missing group.
+                total_turns += missing_groups * default_max_turns
+
+        progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
         # Determine status
         finished_groups = completed_groups + failed_groups
-        if step.status == 'completed':
-            status = "completed"
-        elif finished_groups >= len(groups):
-            # All groups finished (some may have failed)
-            if completed_groups > 0:
-                status = "running"  # Move to training phase
-            else:
-                status = "failed"  # All failed
+        expected_group_count = expected_groups if expected_groups > 0 else len(groups)
+        if step.status == 'completed' or (expected_group_count > 0 and finished_groups >= expected_group_count):
+            # Respect DB completion marker, or infer completion once all expected groups have finished.
+            status = "completed" if completed_groups > 0 else "failed"
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:
@@ -477,9 +554,10 @@ class ProgressTracker:
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('step', step_id, fallback=30.0)
         
-        # Estimate times (only for rollout phase, training time is harder to estimate)
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        # Estimate times (wall-time: divide by global concurrency)
+        concurrency = self._get_training_concurrency(training) if training else 1
+        estimated_total_time = (total_turns * avg_turn_time / concurrency) if avg_turn_time else None
+        estimated_remaining_time = ((total_turns - completed_turns) * avg_turn_time / concurrency) if avg_turn_time else None
         
         # Update database
         update_kwargs = {
@@ -537,18 +615,28 @@ class ProgressTracker:
         running_groups = 0
         failed_groups = 0
         
+        # Prefer known total_tasks to keep denominator stable even before groups are created.
+        # This is critical for correct early-run progress: not-yet-started tasks must count as 0 turns done.
+        training = get_training(self.session, eval_obj.training_id) if eval_obj.training_id else None
+        default_max_turns = int(getattr(training, "max_turns", None) or 20)
+        expected_tasks = int(eval_obj.total_tasks or 0)
+
         for group in groups:
-            # Get group's total and completed turns
             group_rollouts = list_rollouts_by_group(self.session, group.id)
+            group_completed = 0
+            group_total = 0
             for rollout in group_rollouts:
-                max_turns = rollout.max_turns or 20
-                total_turns += max_turns
-                
-                # Finished rollouts count as 100% (completed or failed)
-                if rollout.status in ('completed', 'failed'):
-                    completed_turns += max_turns
-                elif rollout.status == 'running':
-                    completed_turns += rollout.current_turn or 0
+                rollout_completed_turns, rollout_effective_total_turns = self._get_rollout_turn_progress(
+                    rollout, default_max_turns=default_max_turns
+                )
+                group_completed += rollout_completed_turns
+                group_total += rollout_effective_total_turns
+
+            # Eval semantics: one task per group; cap to max_turns
+            group_total = min(default_max_turns, group_total or default_max_turns)
+            group_completed = min(group_total, group_completed)
+            total_turns += group_total
+            completed_turns += group_completed
             
             if group.status == 'completed':
                 completed_groups += 1
@@ -557,16 +645,19 @@ class ProgressTracker:
             elif group.status == 'failed':
                 failed_groups += 1
         
+        # Add missing (not-yet-created) tasks into denominator.
+        if expected_tasks > 0:
+            missing_tasks = max(0, expected_tasks - len(groups))
+            total_turns += missing_tasks * default_max_turns
+
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
-        # Determine status
+        # Determine status (must consider tasks not yet started)
+        expected_group_count = expected_tasks if expected_tasks > 0 else len(groups)
         finished_groups = completed_groups + failed_groups
-        if finished_groups >= len(groups):
-            # All groups finished
-            if completed_groups > 0:
-                status = "completed"
-            else:
-                status = "failed"
+        if expected_group_count > 0 and finished_groups >= expected_group_count:
+            # All expected tasks finished
+            status = "completed" if completed_groups > 0 else "failed"
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:
@@ -575,9 +666,10 @@ class ProgressTracker:
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('eval', eval_id, fallback=30.0)
         
-        # Estimate times
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        # Estimate times (wall-time: divide by global concurrency)
+        concurrency = self._get_training_concurrency(training) if training else 1
+        estimated_total_time = (total_turns * avg_turn_time / concurrency) if avg_turn_time else None
+        estimated_remaining_time = ((total_turns - completed_turns) * avg_turn_time / concurrency) if avg_turn_time else None
         
         # Update database
         update_kwargs = {
@@ -636,18 +728,27 @@ class ProgressTracker:
         running_groups = 0
         failed_groups = 0
         
+        # Prefer known total_tasks to keep denominator stable even before groups are created.
+        training = get_training(self.session, baseline.training_id) if baseline.training_id else None
+        default_max_turns = int(getattr(training, "max_turns", None) or 20)
+        expected_tasks = int(baseline.total_tasks or 0)
+
         for group in groups:
-            # Get group's total and completed turns
             group_rollouts = list_rollouts_by_group(self.session, group.id)
+            group_completed = 0
+            group_total = 0
             for rollout in group_rollouts:
-                max_turns = rollout.max_turns or 20
-                total_turns += max_turns
-                
-                # Finished rollouts count as 100% (completed or failed)
-                if rollout.status in ('completed', 'failed'):
-                    completed_turns += max_turns
-                elif rollout.status == 'running':
-                    completed_turns += rollout.current_turn or 0
+                rollout_completed_turns, rollout_effective_total_turns = self._get_rollout_turn_progress(
+                    rollout, default_max_turns=default_max_turns
+                )
+                group_completed += rollout_completed_turns
+                group_total += rollout_effective_total_turns
+
+            # Baseline semantics: one task per group; cap to max_turns
+            group_total = min(default_max_turns, group_total or default_max_turns)
+            group_completed = min(group_total, group_completed)
+            total_turns += group_total
+            completed_turns += group_completed
             
             if group.status == 'completed':
                 completed_groups += 1
@@ -655,17 +756,20 @@ class ProgressTracker:
                 running_groups += 1
             elif group.status == 'failed':
                 failed_groups += 1
-        
+
+        # Add missing (not-yet-created) tasks into denominator.
+        if expected_tasks > 0:
+            missing_tasks = max(0, expected_tasks - len(groups))
+            total_turns += missing_tasks * default_max_turns
+
         progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
-        # Determine status
+        # Determine status (must consider tasks not yet started)
+        expected_group_count = expected_tasks if expected_tasks > 0 else len(groups)
         finished_groups = completed_groups + failed_groups
-        if finished_groups >= len(groups):
-            # All groups finished
-            if completed_groups > 0:
-                status = "completed"
-            else:
-                status = "failed"
+        if expected_group_count > 0 and finished_groups >= expected_group_count:
+            # All expected tasks finished
+            status = "completed" if completed_groups > 0 else "failed"
         elif running_groups > 0 or completed_groups > 0:
             status = "running"
         else:
@@ -674,9 +778,10 @@ class ProgressTracker:
         # Calculate average turn time
         avg_turn_time = self._calculate_avg_turn_time('baseline', baseline_id, fallback=30.0)
         
-        # Estimate times
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        # Estimate times (wall-time: divide by global concurrency)
+        concurrency = self._get_training_concurrency(training) if training else 1
+        estimated_total_time = (total_turns * avg_turn_time / concurrency) if avg_turn_time else None
+        estimated_remaining_time = ((total_turns - completed_turns) * avg_turn_time / concurrency) if avg_turn_time else None
         
         # Update database
         update_kwargs = {
@@ -708,12 +813,15 @@ class ProgressTracker:
         training_id: int,
     ) -> ProgressStats:
         """
-        Update training progress based on baseline, steps, and evals.
-        
-        Training progress formula:
-        - Baseline: 10% (if exists)
-        - Steps: 80% (N steps, weighted equally)
-        - Evals: 10% (N/eval_every evals, weighted equally)
+        Update training progress based on baseline, steps, and evals (pure turn-based).
+
+        Progress is computed as:
+          completed_turns / total_turns
+
+        where total_turns includes not-yet-started work:
+        - Baseline: baseline.total_tasks * max_turns (group_size=1 in eval/baseline)
+        - Steps: total_steps * groups_per_batch * group_size * max_turns
+        - Evals: sum(eval.total_tasks * max_turns) for known evals, plus missing evals if inferable
         
         Args:
             training_id: Database training ID
@@ -725,77 +833,114 @@ class ProgressTracker:
         if not training:
             logger.warning(f"Training {training_id} not found")
             return ProgressStats(status="failed")
-        
-        total_progress = 0.0
+
+        default_max_turns = int(getattr(training, "max_turns", None) or 20)
+        groups_per_batch = int(getattr(training, "groups_per_batch", None) or 0)
+        group_size = int(getattr(training, "group_size", None) or 0)
+
         total_turns = 0
         completed_turns = 0
         
-        # Baseline progress (10%)
+        # Baseline turns (effective total shrinks on early-stop)
         if training.baselines:
             baseline = training.baselines[0]  # Should only be one baseline
-            if baseline.progress_percent is not None:
-                total_progress += baseline.progress_percent * 0.1
-            
-            # Count baseline turns
+
+            # Denominator should include not-yet-created tasks
+            expected_tasks = int(getattr(baseline, "total_tasks", None) or 0)
+
             baseline_groups = list_groups_by_baseline(self.session, baseline.id)
+            total_groups_expected = expected_tasks if expected_tasks > 0 else len(baseline_groups)
+            # For tasks not started yet
+            total_turns += max(0, total_groups_expected - len(baseline_groups)) * default_max_turns
+
+            # Count completed + effective totals for existing groups (cap per task to max_turns)
             for group in baseline_groups:
-                group_rollouts = list_rollouts_by_group(self.session, group.id)
-                for rollout in group_rollouts:
-                    max_turns = rollout.max_turns or 20
-                    total_turns += max_turns
-                    if rollout.status == 'completed':
-                        completed_turns += rollout.num_turns or max_turns
-                    elif rollout.status == 'running':
-                        completed_turns += rollout.current_turn or 0
+                group_completed = 0
+                group_total = 0
+                for rollout in list_rollouts_by_group(self.session, group.id):
+                    rollout_completed, rollout_total = self._get_rollout_turn_progress(
+                        rollout, default_max_turns=default_max_turns
+                    )
+                    group_completed += rollout_completed
+                    group_total += rollout_total
+                group_total = min(default_max_turns, group_total or default_max_turns)
+                group_completed = min(group_total, group_completed)
+                total_turns += group_total
+                completed_turns += group_completed
         
-        # Steps progress (80%)
-        if training.steps and training.total_steps:
-            step_progress_sum = sum(
-                (step.progress_percent or 0.0) for step in training.steps
-            )
-            avg_step_progress = step_progress_sum / training.total_steps
-            total_progress += avg_step_progress * 0.8
-            
-            # Count step turns
+        # Steps turns (effective total shrinks on early-stop; missing rollouts are budgeted)
+        expected_steps = int(getattr(training, "total_steps", None) or 0)
+        expected_step_rollouts_per_step = groups_per_batch * group_size if groups_per_batch > 0 and group_size > 0 else 0
+
+        if training.steps:
+            # Existing steps: compute completed turns from rollouts
             for step in training.steps:
                 step_groups = list_groups_by_step(self.session, step.id)
+
+                # Count existing rollouts and add their effective totals
+                existing_rollouts = 0
                 for group in step_groups:
-                    group_rollouts = list_rollouts_by_group(self.session, group.id)
-                    for rollout in group_rollouts:
-                        max_turns = rollout.max_turns or 20
-                        total_turns += max_turns
-                        if rollout.status == 'completed':
-                            completed_turns += rollout.num_turns or max_turns
-                        elif rollout.status == 'running':
-                            completed_turns += rollout.current_turn or 0
+                    for rollout in list_rollouts_by_group(self.session, group.id):
+                        existing_rollouts += 1
+                        rollout_completed, rollout_total = self._get_rollout_turn_progress(
+                            rollout, default_max_turns=default_max_turns
+                        )
+                        completed_turns += rollout_completed
+                        total_turns += rollout_total
+
+                # Budget for missing rollouts in this step
+                if expected_step_rollouts_per_step > 0:
+                    missing = max(0, expected_step_rollouts_per_step - existing_rollouts)
+                    total_turns += missing * default_max_turns
+
+            # Missing (not-yet-created) steps: budget full turns
+            if expected_steps > 0 and expected_step_rollouts_per_step > 0:
+                missing_steps = max(0, expected_steps - len(training.steps))
+                total_turns += missing_steps * expected_step_rollouts_per_step * default_max_turns
+        else:
+            # No step rows yet, but if total_steps is known, include full budget as 0 completed turns
+            if expected_steps > 0 and expected_step_rollouts_per_step > 0:
+                total_turns += expected_steps * expected_step_rollouts_per_step * default_max_turns
         
-        # Evals progress (10%)
-        if training.evals and training.total_steps:
-            # Number of expected evals based on eval_every
-            # (assume eval_every is constant for simplicity)
-            eval_progress_sum = sum(
-                (eval_obj.progress_percent or 0.0) for eval_obj in training.evals
-            )
-            # Estimate number of evals based on total_steps and current eval count
-            # For simplicity, weight by actual evals completed
-            if training.evals:
-                avg_eval_progress = eval_progress_sum / len(training.evals)
-                total_progress += avg_eval_progress * 0.1
-            
-            # Count eval turns
+        # Evals turns (effective total shrinks on early-stop; missing tasks are budgeted)
+        if training.evals:
+            # Use the first known eval.total_tasks as default for missing evals (best-effort).
+            default_eval_tasks = int(getattr(training.evals[0], "total_tasks", None) or 0)
+
             for eval_obj in training.evals:
-                eval_groups = list_groups_by_eval(self.session, eval_obj.id)
-                for group in eval_groups:
-                    group_rollouts = list_rollouts_by_group(self.session, group.id)
-                    for rollout in group_rollouts:
-                        max_turns = rollout.max_turns or 20
-                        total_turns += max_turns
-                        if rollout.status == 'completed':
-                            completed_turns += rollout.num_turns or max_turns
-                        elif rollout.status == 'running':
-                            completed_turns += rollout.current_turn or 0
-        
-        progress_percent = min(100.0, total_progress)
+                expected_tasks = int(getattr(eval_obj, "total_tasks", None) or 0)
+                groups = list_groups_by_eval(self.session, eval_obj.id)
+                # Budget for missing tasks not yet created
+                total_turns += max(0, expected_tasks - len(groups)) * default_max_turns
+
+                for group in groups:
+                    group_completed = 0
+                    group_total = 0
+                    for rollout in list_rollouts_by_group(self.session, group.id):
+                        rollout_completed, rollout_total = self._get_rollout_turn_progress(
+                            rollout, default_max_turns=default_max_turns
+                        )
+                        group_completed += rollout_completed
+                        group_total += rollout_total
+                    group_total = min(default_max_turns, group_total or default_max_turns)
+                    group_completed = min(group_total, group_completed)
+                    total_turns += group_total
+                    completed_turns += group_completed
+
+            # Missing evals (best-effort via config_json.eval_every if present)
+            try:
+                import json
+                cfg = json.loads(training.config_json) if training.config_json else {}
+                eval_every = int(cfg.get("eval_every") or 0)
+                if eval_every > 0 and expected_steps > 0 and default_eval_tasks > 0:
+                    # Approximate expected eval count: every eval_every steps (not including step 0)
+                    expected_eval_count = (expected_steps + eval_every - 1) // eval_every
+                    missing_evals = max(0, expected_eval_count - len(training.evals))
+                    total_turns += missing_evals * default_eval_tasks * default_max_turns
+            except Exception:
+                pass
+
+        progress_percent = (completed_turns / total_turns * 100.0) if total_turns > 0 else 0.0
         
         # Determine status
         status = training.status
@@ -807,9 +952,10 @@ class ProgressTracker:
         # Calculate average turn time across all completed turns
         avg_turn_time = self._calculate_avg_turn_time('training', training_id, fallback=30.0)
         
-        # Estimate times
-        estimated_total_time = total_turns * avg_turn_time if avg_turn_time else None
-        estimated_remaining_time = (total_turns - completed_turns) * avg_turn_time if avg_turn_time else None
+        # Estimate times (wall-time: divide by global concurrency)
+        concurrency = self._get_training_concurrency(training)
+        estimated_total_time = (total_turns * avg_turn_time / concurrency) if avg_turn_time else None
+        estimated_remaining_time = ((total_turns - completed_turns) * avg_turn_time / concurrency) if avg_turn_time else None
         
         # Update database
         update_kwargs = {

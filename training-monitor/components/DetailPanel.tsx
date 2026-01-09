@@ -169,11 +169,17 @@ export default function DetailPanel({
                 const groupRollouts = rollouts.filter(
                   (r: any) => r.group_number === group.group_num
                 );
+                const taskName =
+                  groupRollouts.find((r: any) => r.task_name)?.task_name ??
+                  groupRollouts.find((r: any) => r.task_key)?.task_key ??
+                  null;
                 return (
                   <GroupCard
                     key={group.id}
                     group={group}
                     rollouts={groupRollouts}
+                    maxTurns={item.max_turns ?? 20}
+                    taskName={taskName}
                     onSelectRollout={(id) => {
                       console.log('GroupCard onSelectRollout called with id:', id);
                       onSelectRollout(id);

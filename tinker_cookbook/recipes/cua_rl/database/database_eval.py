@@ -94,7 +94,6 @@ def record_eval_completion(
         "avg_reward": avg_reward,
         "avg_turns": avg_turns,
         "successful_tasks": successful_tasks,
-        "progress_percent": 100.0,
         **kwargs
     }
     
@@ -209,7 +208,6 @@ def record_baseline_completion(
         "avg_reward": avg_reward,
         "avg_turns": avg_turns,
         "successful_tasks": successful_tasks,
-        "progress_percent": 100.0,
         **kwargs
     }
     

@@ -415,7 +415,6 @@ class RolloutRecorder:
                 "reward": reward,
                 "rollout_time": rollout_time,
                 "end_time": datetime.utcnow(),
-                "progress_percent": 100.0,
                 **kwargs
             }
             
@@ -435,7 +434,7 @@ class RolloutRecorder:
             logger.info(
                 f"[RolloutRecorder] Completed rollout: UUID={self.rollout_uuid}, "
                 f"success={task_success}, reward={reward:.4f}, "
-                f"progress=100%, turns={num_turns}/{max_turns}"
+                f"progress={progress_stats.progress_percent:.1f}%, turns={num_turns}/{max_turns}"
             )
             
             return True

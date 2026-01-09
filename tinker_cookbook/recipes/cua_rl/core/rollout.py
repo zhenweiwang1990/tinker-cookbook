@@ -1115,7 +1115,6 @@ async def do_cua_group_rollout(
                         success_count=successful_rollouts,
                         reward_mean=reward_mean,
                         reward_std=reward_std,
-                        progress_percent=100.0,
                         end_time=datetime.utcnow(),
                     )
                     # Refresh group object after update
@@ -1131,7 +1130,6 @@ async def do_cua_group_rollout(
                         success_count=successful_rollouts,
                         reward_mean=reward_mean,
                         reward_std=reward_std,
-                        progress_percent=(completed_rollouts / (group.num_rollouts or len(results))) * 100.0,
                     )
                 
                 # Update parent item (baseline/eval/step) progress based on all groups

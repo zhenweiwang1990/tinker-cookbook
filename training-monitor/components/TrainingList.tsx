@@ -9,6 +9,8 @@ interface Training {
   run_name: string;
   status: string;
   progress_percent: number;
+  estimated_remaining_time?: number | null;
+  avg_turn_time?: number | null;
   current_step: number | null;
   total_steps: number | null;
   start_time: string | null;
@@ -23,6 +25,22 @@ interface TrainingListProps {
 export default function TrainingList({ selectedId, onSelect }: TrainingListProps) {
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const formatEta = (seconds?: number | null) => {
+    if (seconds === null || seconds === undefined) return '';
+    const s = Math.floor(seconds);
+    if (!Number.isFinite(s) || s <= 0) return '';
+    if (s < 60) return `ETA: ${s}s`;
+    if (s < 3600) return `ETA: ${Math.floor(s / 60)}m`;
+    if (s < 86400) {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return `ETA: ${h}h${m > 0 ? m + 'm' : ''}`;
+    }
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    return `ETA: ${d}d${h > 0 ? h + 'h' : ''}`;
+  };
 
   const fetchTrainings = async () => {
     try {
@@ -106,6 +124,11 @@ export default function TrainingList({ selectedId, onSelect }: TrainingListProps
                   height="12px"
                   isRunning={training.status === 'running'}
                 />
+                {training.status === 'running' && training.estimated_remaining_time ? (
+                  <div className={styles.eta}>
+                    {formatEta(training.estimated_remaining_time)}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

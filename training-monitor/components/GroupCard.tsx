@@ -7,6 +7,8 @@ interface Rollout {
   id: number;
   rollout_id: string;
   task_id: number;
+  task_name?: string;
+  task_key?: string; // fallback: string task id (e.g. task_adapter_...)
   status: string;
   task_success: boolean;
   validation_passed: boolean;
@@ -18,15 +20,47 @@ interface Rollout {
   group_number?: number;
   group_status?: string;
   env_index?: number;
+  max_turns?: number | null;
 }
 
 interface GroupCardProps {
   group: any;
   rollouts: Rollout[];
   onSelectRollout: (id: number) => void;
+  maxTurns?: number;
+  taskName?: string | null;
 }
 
-export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCardProps) {
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function getRolloutPercent(rollout: Rollout, maxTurns: number): number {
+  const total = maxTurns > 0 ? maxTurns : 0;
+  if (total === 0) return 0;
+  const status = rollout.status;
+  let done = 0;
+  if (status === 'running') {
+    done = Number(rollout.current_turn ?? 0);
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+    done = Number(rollout.num_turns ?? rollout.current_turn ?? 0);
+  } else {
+    done = Number(rollout.current_turn ?? 0);
+  }
+  if (!Number.isFinite(done)) done = 0;
+  return (clamp(done, 0, total) / total) * 100;
+}
+
+function getRolloutColor(rollout: Rollout): string {
+  if (rollout.status === 'completed') {
+    return rollout.task_success ? '#28a745' : '#dc3545'; // green / red
+  }
+  if (rollout.status === 'failed') return '#dc3545';
+  if (rollout.status === 'running') return '#ff9800';
+  return '#6c757d';
+}
+
+export default function GroupCard({ group, rollouts, onSelectRollout, maxTurns = 20, taskName }: GroupCardProps) {
   // Calculate success rate for this group
   const completedRollouts = rollouts.filter(r => r.status === 'completed');
   const successCount = completedRollouts.filter(r => r.task_success).length;
@@ -53,6 +87,12 @@ export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCar
           </div>
         </div>
 
+        {taskName ? (
+          <div className={styles.taskName} title={taskName}>
+            {taskName}
+          </div>
+        ) : null}
+
         {/* Progress Bar */}
         <div style={{ marginBottom: '8px' }}>
           <ProgressBar 
@@ -60,6 +100,8 @@ export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCar
             showLabel={true} 
             height="12px"
             isRunning={group.status === 'running'}
+            useThresholdColors={false}
+            color="#17a2b8"
           />
         </div>
 
@@ -106,6 +148,19 @@ export default function GroupCard({ group, rollouts, onSelectRollout }: GroupCar
                   )}
                 </div>
               </div>
+
+              {/* Rollout-level mini progress bar (progress + success/failure coloring) */}
+              <div className={styles.rolloutProgress}>
+                <ProgressBar
+                  percent={getRolloutPercent(rollout, maxTurns)}
+                  showLabel={false}
+                  height="7px"
+                  isRunning={rollout.status === 'running'}
+                  useThresholdColors={false}
+                  color={getRolloutColor(rollout)}
+                />
+              </div>
+
               <div className={styles.rolloutStats}>
                 <span className={styles.rolloutStat}>
                   🔄 {rollout.num_turns !== null ? rollout.num_turns : rollout.current_turn !== null ? rollout.current_turn : 0} turns
