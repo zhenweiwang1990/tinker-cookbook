@@ -4,7 +4,8 @@ This directory contains task definitions for CUA RL training.
 
 ## Structure
 
-- `airbnb/` - Airbnb app tasks
+- `airbnb/` - Airbnb app tasks (32 tasks)
+- `demo/` - Demo Android system tasks (32 tasks)
 - `instagram/` - Instagram app tasks
 - `adb.py` - ADB client (supports both local ADB and GBox command mode)
 - `task_adapter.py` - Task adapter for splitting tasks into train/eval sets
@@ -102,6 +103,26 @@ train_descriptions, eval_descriptions = get_tasks_train_eval(
 )
 ```
 
+## Task Datasets
+
+### Airbnb Tasks
+- **Total**: 32 tasks (Task01-Task32)
+- **Domain**: Airbnb app interactions
+- **Validation**: SQL database queries
+- **Features**: Some tasks include pre-hooks for database seeding
+- **Split**: Train/eval split determined by `TaskAdapter` configuration
+
+### Demo Tasks  
+- **Total**: 32 tasks (Task01-Task32)
+- **Domain**: Android system settings and file operations
+- **Validation**: ADB shell commands and system state checks
+- **Split**: Train/eval split determined by `TaskAdapter` configuration
+- **Categories**:
+  - Settings adjustments (brightness, timeout, airplane mode, WiFi, battery saver, DND)
+  - File operations (create folders in Downloads/Documents)
+  - App management (uninstall apps, check storage)
+  - System tasks (clear notifications, check system info)
+
 ## Task Structure
 
 Each task directory should contain:
@@ -117,5 +138,10 @@ tasks/
       task.py          # Defines Task01 with create_task()
       validator.py     # Defines Task01Validator
       pre_hook.py     # Optional pre-execution setup
+  demo/
+    01_open_settings/
+      task.py          # Defines TrainTask01 with create_task()
+      validator.py     # Defines TrainTask01Validator
+    config.py          # Package name configuration
 ```
 

@@ -25,11 +25,16 @@ logger = logging.getLogger(__name__)
 
 @chz.chz
 class BenchmarkConfig:
-    """Configuration for benchmark evaluation - simplified wrapper around training config."""
+    """Configuration for benchmark evaluation - supports multiple providers."""
     
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
-    model_path: str | None = None  # Optional: checkpoint path for fine-tuned model
+    model_path: str | None = None  # For Tinker: checkpoint path
+    
+    # Provider configuration (NEW)
+    provider: str = "tinker"  # "tinker", "vllm", "openrouter", "openai"
+    provider_base_url: str | None = None  # Optional: API base URL (for vLLM, OpenRouter, etc.)
+    provider_api_key: str | None = None  # Optional: API key (for OpenRouter, OpenAI, etc.)
     
     # Evaluation dataset
     eval_tasks: dict | list[dict] | None = None
@@ -44,7 +49,7 @@ class BenchmarkConfig:
     # Box configuration
     box_type: str = "android"
     gbox_api_key: str = ""
-    tinker_api_key: str = ""
+    tinker_api_key: str = ""  # For Tinker provider only
     
     # Concurrency and timeout
     max_concurrent_rollouts: int = 8
@@ -69,7 +74,7 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
     This creates a training config that:
     - Skips actual training (groups_per_batch=0)
     - Runs only baseline evaluation
-    - Uses the specified model/checkpoint
+    - Uses the specified provider and model
     """
     # Build benchmark name
     if config.benchmark_name:
@@ -77,9 +82,10 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
     else:
         model_tag = config.model_name.replace("/", "-")
         date_and_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-        benchmark_name = f"benchmark-{model_tag}-{date_and_time}"
+        benchmark_name = f"benchmark-{config.provider}-{model_tag}-{date_and_time}"
     
     logger.info(f"Running benchmark: {benchmark_name}")
+    logger.info(f"Provider: {config.provider}")
     logger.info(f"Model: {config.model_name}")
     if config.model_path:
         logger.info(f"Checkpoint: {config.model_path}")
@@ -89,12 +95,17 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
     cli_config = CLIConfig(
         # Model settings
         model_name=config.model_name,
-        load_checkpoint_path=config.model_path,  # Load from checkpoint if specified
+        load_checkpoint_path=config.model_path,  # For Tinker: checkpoint path
         lora_rank=32,  # Need valid rank even though we won't train
+        
+        # Provider settings (NEW)
+        provider=config.provider,
+        provider_base_url=config.provider_base_url,
+        provider_api_key=config.provider_api_key,
         
         # Box settings
         gbox_api_key=config.gbox_api_key,
-        tinker_api_key=config.tinker_api_key,
+        tinker_api_key=config.tinker_api_key,  # Only used for Tinker provider
         box_type=config.box_type,
         
         # Data settings  

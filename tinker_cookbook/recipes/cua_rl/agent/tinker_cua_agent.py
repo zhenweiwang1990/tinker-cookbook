@@ -1,8 +1,14 @@
 """
-Tinker CUA Agent using Tinker native API for multimodal inference.
+Tinker CUA Agent with support for multiple inference providers.
 
-This agent uses Tinker's native API (not OpenAI Compatible API) to support
-multimodal inputs (images) for vision-language models.
+This agent supports:
+- Tinker native API (for training with logprobs)
+- vLLM (for local deployment)
+- OpenRouter (for cloud API)
+- OpenAI (for GPT models)
+- Any OpenAI-compatible API
+
+All providers use the same prompts, tool parsing, and coordinate handling logic.
 """
 
 import asyncio
@@ -31,72 +37,112 @@ from tinker_cookbook.recipes.cua_rl.gbox.tools import (
     TOOL_SCHEMAS,
 )
 from tinker_cookbook.recipes.cua_rl.core.rollout_logger import RolloutLogger
+from tinker_cookbook.recipes.cua_rl.agent.base_inference_client import BaseInferenceClient
+from tinker_cookbook.recipes.cua_rl.agent.inference_client_factory import create_inference_client
 
 logger = logging.getLogger(__name__)
 
 
 class TinkerCuaAgent:
     """
-    CUA Agent using Tinker native API for multimodal support.
+    CUA Agent with support for multiple inference providers.
     
     This agent:
-    - Uses Tinker's native API (supports multimodal inputs)
+    - Supports Tinker, vLLM, OpenRouter, OpenAI, and any OpenAI-compatible API
+    - Uses prompt-based tool calling (preserves tinker-cookbook logic)
     - Manages conversation history
-    - Handles tool calls (function calling)
+    - Handles tool calls via renderer parsing
     - Integrates with GBox for UI interactions
+    - Preserves all coordinate handling (gbox and direct modes)
+    - Maintains full database recording capabilities
     """
     
     def __init__(
         self,
         gbox_api_key: str,
-        tinker_api_key: str,
-        tinker_model_path: str,  # e.g., "tinker://.../sampler_weights/000080"
+        
+        # NEW: Unified inference client interface
+        inference_client: Optional[BaseInferenceClient] = None,
+        
+        # Legacy Tinker-specific parameters (backward compatible)
+        tinker_api_key: Optional[str] = None,
+        tinker_model_path: Optional[str] = None,
+        
+        # NEW: Provider-based creation parameters
+        provider: Optional[str] = None,
+        provider_model_name: Optional[str] = None,
+        provider_base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        
+        # Model configuration
         base_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct",
-        # base_model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct",
         renderer_name: Optional[str] = None,
+        
+        # Agent configuration
         max_turns: int = 20,
         box_type: str = "android",
         max_tokens: int = 2048,
         temperature: float = 0.7,
-        max_recent_turns: int = 5,  # Maximum number of recent turns to keep in message history
+        max_recent_turns: int = 5,
+        
+        # Logging and recording
         rollout_logger: Optional[RolloutLogger] = None,
-        rollout_recorder = None,  # RolloutRecorder instance for database recording
-        rollout_id: Optional[str] = None,  # Rollout ID for database recording
-        max_task_time_seconds: int = 60 * 60,  # Maximum total time for task execution (default: 60 minutes)
-        max_turn_time_seconds: int = 5 * 60,  # Maximum time per turn for model inference (default: 5 minutes)
-        coordinate_mode: str = "gbox",  # "gbox" or "direct"
-        coordinate_scale: Optional[bool] = None,  # Auto: True for direct mode, False for gbox mode
-        x_scale_ratio: Optional[float] = None,  # X scaling ratio (default: screen_width / 1000)
-        y_scale_ratio: Optional[float] = None,  # Y scaling ratio (default: screen_height / 1000)
+        rollout_recorder = None,
+        rollout_id: Optional[str] = None,
+        
+        # Timeouts
+        max_task_time_seconds: int = 60 * 60,
+        max_turn_time_seconds: int = 5 * 60,
+        
+        # Coordinate handling
+        coordinate_mode: str = "gbox",
+        coordinate_scale: Optional[bool] = None,
+        x_scale_ratio: Optional[float] = None,
+        y_scale_ratio: Optional[float] = None,
     ):
         """
-        Initialize Tinker CUA Agent.
+        Initialize CUA Agent with flexible inference provider support.
+        
+        Three ways to initialize:
+        1. Provide inference_client directly (most flexible)
+        2. Provide tinker_api_key + tinker_model_path (backward compatible)
+        3. Provide provider + provider_model_name (new unified way)
         
         Args:
             gbox_api_key: GBox API key
-            tinker_api_key: Tinker API key
-            tinker_model_path: Tinker checkpoint path
+            
+            inference_client: Pre-initialized inference client (optional)
+            
+            tinker_api_key: Tinker API key (legacy, for backward compatibility)
+            tinker_model_path: Tinker checkpoint path (legacy)
+            
+            provider: Provider name ("tinker", "vllm", "openrouter", "openai")
+            provider_model_name: Model name for the provider
+            provider_base_url: API base URL (optional, uses provider default)
+            provider_api_key: API key (optional, auto-detects from env)
+            
             base_model_name: Base model name for tokenizer/renderer
             renderer_name: Renderer name (auto-detected if None)
             max_turns: Maximum number of turns
             box_type: Type of GBox environment (android or linux)
             max_tokens: Maximum tokens per response
             temperature: Sampling temperature
-            max_task_time_seconds: Maximum total time for task execution (default: 30 minutes)
-            max_turn_time_seconds: Maximum time per turn for model inference (default: 5 minutes)
-            coordinate_mode: Coordinate generation mode
-                - "gbox": Use GBox external model (gbox-handy-1) to generate coordinates
-                - "direct": VLM directly outputs coordinates in tool calls
-            coordinate_scale: Whether to apply coordinate scaling (None = auto-detect based on mode)
-                - None (auto): True for direct mode, False for gbox mode
-                - False: Model outputs in actual screen pixels (system prompt includes screen dimensions)
-                - True: Model outputs in normalized space (e.g., 0-1000), scaled to actual pixels
-            x_scale_ratio: X scaling ratio (default: screen_width / 1000)
-            y_scale_ratio: Y scaling ratio (default: screen_height / 1000)
+            max_recent_turns: Number of recent turns to keep in context
+            
+            rollout_logger: Logger for detailed execution tracking
+            rollout_recorder: Database recorder instance
+            rollout_id: Rollout ID for database recording
+            
+            max_task_time_seconds: Maximum total time for task execution
+            max_turn_time_seconds: Maximum time per turn for model inference
+            
+            coordinate_mode: Coordinate generation mode ("gbox" or "direct")
+            coordinate_scale: Whether to apply coordinate scaling
+            x_scale_ratio: X scaling ratio
+            y_scale_ratio: Y scaling ratio
         """
+        # Store basic parameters
         self.gbox_api_key = gbox_api_key
-        self.tinker_api_key = tinker_api_key
-        self.tinker_model_path = tinker_model_path
         self.base_model_name = base_model_name
         self.max_turns = max_turns
         self.box_type = box_type
@@ -104,16 +150,14 @@ class TinkerCuaAgent:
         self.temperature = temperature
         self.max_recent_turns = max_recent_turns
         self.rollout_logger = rollout_logger
-        self.rollout_recorder = rollout_recorder  # RolloutRecorder instance
+        self.rollout_recorder = rollout_recorder
         self.rollout_id = rollout_id
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
-        self.coordinate_mode = coordinate_mode  # Store coordinate mode
+        self.coordinate_mode = coordinate_mode
         
         # Auto-detect coordinate_scale if not explicitly set
         if coordinate_scale is None:
-            # Direct mode: default to True (use scaling)
-            # GBox mode: default to False (no scaling needed)
             self.coordinate_scale = (coordinate_mode == "direct")
         else:
             self.coordinate_scale = coordinate_scale
@@ -122,35 +166,72 @@ class TinkerCuaAgent:
         self.y_scale_ratio = y_scale_ratio
         
         # Track termination reason for reporting
-        self.termination_reason = None  # Will be set when task ends
+        self.termination_reason = None
         
         # Set up compatibility layer for old database recording code
         if rollout_recorder is not None:
-            logger.info(f"[TinkerCuaAgent] Initializing with rollout_recorder: {rollout_recorder}, rollout_id={rollout_id}")
+            logger.info(f"[TinkerCuaAgent] Initializing with rollout_recorder, rollout_id={rollout_id}")
             from tinker_cookbook.recipes.cua_rl.database.compat import set_recorder
             set_recorder(rollout_recorder)
-            logger.info(f"[TinkerCuaAgent] set_recorder() called")
         else:
             logger.warning(f"[TinkerCuaAgent] rollout_recorder is None! No database recording will occur.")
         
-        # Initialize Tinker service client
-        import os
-        os.environ["TINKER_API_KEY"] = tinker_api_key
-        self.service_client = tinker.ServiceClient()
-        
-        # Store checkpoint path (will be loaded when needed)
-        self._checkpoint_loaded = False
-        self._current_checkpoint_path = None
-        
-        # Initialize renderer
-        tokenizer = get_tokenizer(base_model_name)
+        # Initialize tokenizer and renderer (needed for all providers)
+        self.tokenizer = get_tokenizer(base_model_name)
         image_processor = get_image_processor(base_model_name)
         renderer_name = renderer_name or "qwen3_vl_instruct"
         self.renderer = renderers.get_renderer(
             renderer_name,
-            tokenizer=tokenizer,
+            tokenizer=self.tokenizer,
             image_processor=image_processor,
         )
+        
+        # Create or use inference client
+        if inference_client is not None:
+            # Method 1: Use provided inference client
+            self.inference_client = inference_client
+            self.provider = inference_client.get_provider_name()
+            logger.info(f"[TinkerCuaAgent] Using provided inference client: {self.provider}")
+            
+        elif tinker_api_key and tinker_model_path:
+            # Method 2: Create Tinker client (backward compatible)
+            logger.info(f"[TinkerCuaAgent] Creating Tinker inference client (legacy mode)")
+            self.inference_client = create_inference_client(
+                provider="tinker",
+                model_name=base_model_name,
+                api_key=tinker_api_key,
+                model_path=tinker_model_path,
+                renderer=self.renderer,
+                tokenizer=self.tokenizer,
+            )
+            self.provider = "tinker"
+            # Store for backward compatibility
+            self.tinker_api_key = tinker_api_key
+            self.tinker_model_path = tinker_model_path
+            
+        elif provider and provider_model_name:
+            # Method 3: Create client from provider settings
+            logger.info(f"[TinkerCuaAgent] Creating {provider} inference client")
+            self.inference_client = create_inference_client(
+                provider=provider,
+                model_name=provider_model_name,
+                base_url=provider_base_url,
+                api_key=provider_api_key,
+                base_model_name=base_model_name,
+                renderer=self.renderer,
+                tokenizer=self.tokenizer,
+            )
+            self.provider = provider
+            
+        else:
+            raise ValueError(
+                "Must provide one of:\n"
+                "1. inference_client\n"
+                "2. tinker_api_key + tinker_model_path\n"
+                "3. provider + provider_model_name"
+            )
+        
+        logger.info(f"[TinkerCuaAgent] Inference provider: {self.provider}")
         
         # Initialize GBox components
         self.gbox_client = CuaGBoxClient(api_key=gbox_api_key, box_type=box_type)
@@ -521,34 +602,6 @@ class TinkerCuaAgent:
             self.tool_name_errors += 1
             raise ValueError(f"Unknown tool: {tool_name}")
     
-    def _ensure_checkpoint_loaded(self):
-        """Ensure the checkpoint is loaded in the sampling client."""
-        # Check if we need to reload checkpoint
-        if self._checkpoint_loaded and self._current_checkpoint_path == self.tinker_model_path:
-            return
-        
-        # Create new sampling client with checkpoint
-        # Tinker SDK supports loading checkpoints via the path in create_sampling_client
-        try:
-            # Parse checkpoint path: tinker://experiment-id:train:0/sampler_weights/000080
-            # Tinker SDK should handle this automatically when we pass the path
-            # For now, create client with base model and we'll use the checkpoint path
-            # when sampling (Tinker service should handle it)
-            self.sampling_client = self.service_client.create_sampling_client(
-                base_model=self.base_model_name
-            )
-            
-            # Store checkpoint path - Tinker SDK may need it during sampling
-            self._current_checkpoint_path = self.tinker_model_path
-            self._checkpoint_loaded = True
-        except Exception as e:
-            logger.warning(f"Could not initialize sampling client: {e}")
-            logger.warning("Using base model instead")
-            self.sampling_client = self.service_client.create_sampling_client(
-                base_model=self.base_model_name
-            )
-            self._checkpoint_loaded = True
-    
     def _get_message_role(self, message) -> str:
         """Get role from a message, handling both dict and Message object formats."""
         if isinstance(message, dict):
@@ -630,54 +683,63 @@ class TinkerCuaAgent:
         
         return system_prompt + messages[turn_start_idx:]
     
-    async def _sample_with_tinker(
+    async def _sample_with_model(
         self,
         messages: List[renderers.Message],
     ) -> Tuple[renderers.Message, bool, List[int], List[float]]:
         """
-        Sample from Tinker model.
+        Sample from model using inference client.
+        
+        This method works with any provider (Tinker, vLLM, OpenRouter, etc.)
+        by following these steps:
+        1. For Tinker: Get tokens and logprobs directly (needed for training)
+        2. For others: Generate text, then tokenize
+        3. Parse using renderer to extract tool calls
         
         Returns:
             (response_message, parse_success, tokens, logprobs)
-            response_message contains 'content' and optionally 'tool_calls' parsed by renderer
-            tokens and logprobs are the raw sampled tokens and their log probabilities
+            - response_message: Parsed message with content and optional tool_calls
+            - parse_success: Whether parsing was successful
+            - tokens: List of token IDs
+            - logprobs: List of log probabilities (empty for non-Tinker providers)
         """
-        # Ensure checkpoint is loaded
-        self._ensure_checkpoint_loaded()
-        
         # Truncate messages to keep only system prompt and recent N turns
         truncated_messages = self._truncate_messages_to_recent_turns(messages, max_turns=self.max_recent_turns)
         
-        # Build ModelInput
-        model_input = self.renderer.build_generation_prompt(truncated_messages)
-        
-        # Sampling parameters
-        sampling_params = tinker.SamplingParams(
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            top_p=1.0,
-            stop=self.renderer.get_stop_sequences(),
+        # Check if this is Tinker provider that supports logprobs
+        use_tinker_logprobs = (
+            self.provider == "tinker" and 
+            hasattr(self.inference_client, 'get_tokens_and_logprobs')
         )
         
-        # Sample
-        # Note: If checkpoint loading is needed, it should be handled by Tinker SDK
-        # For now, we'll use the sampling client directly
-        # The checkpoint path in tinker_model_path should be handled by Tinker service
-        logger.info(f"[_sample_with_tinker] About to call sampling_client.sample_async()...")
-        sample_resp = await self.sampling_client.sample_async(
-            prompt=model_input,
-            num_samples=1,
-            sampling_params=sampling_params,
-        )
-        logger.info(f"[_sample_with_tinker] sample_async() returned")
+        if use_tinker_logprobs:
+            # For Tinker: Get tokens and logprobs directly
+            logger.debug(f"[_sample_with_model] Calling Tinker get_tokens_and_logprobs()...")
+            tokens, logprobs = await self.inference_client.get_tokens_and_logprobs(
+                messages=truncated_messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+            logger.debug(f"[_sample_with_model] Got {len(tokens)} tokens and {len(logprobs)} logprobs")
+        else:
+            # For other providers: Generate text then tokenize
+            logger.debug(f"[_sample_with_model] Calling {self.provider} generate_text()...")
+            text = await self.inference_client.generate_text(
+                messages=truncated_messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+            logger.debug(f"[_sample_with_model] Generated text length: {len(text)} chars")
+            
+            # Tokenize the generated text
+            tokens = self.tokenizer.encode(text)
+            logprobs = []  # No logprobs for non-Tinker providers
         
-        # Parse response using renderer (includes tool call parsing)
-        seq = sample_resp.sequences[0]
-        response_message, parse_success = self.renderer.parse_response(seq.tokens)
+        # Parse response using renderer (extracts <tool_call> tags, etc.)
+        logger.debug(f"[_sample_with_model] Parsing response with renderer...")
+        response_message, parse_success = self.renderer.parse_response(tokens)
         
-        # Extract tokens and logprobs
-        tokens = seq.tokens
-        logprobs = seq.logprobs if seq.logprobs is not None else []
+        logger.debug(f"[_sample_with_model] Parse success: {parse_success}, tokens: {len(tokens)}, logprobs: {len(logprobs)}")
         
         return response_message, parse_success, tokens, logprobs
     
@@ -1338,14 +1400,14 @@ class TinkerCuaAgent:
                     except Exception as e:
                         logger.warning(f"[Turn {turn}] Failed to record Before screenshot/model_input: {e}")
                 
-                logger.info(f"[Turn {turn}] About to call _sample_with_tinker()...")
+                logger.info(f"[Turn {turn}] About to call _sample_with_model()...")
                 # Add timeout for model inference (configurable per turn)
                 try:
                     response_message, parse_success, action_tokens, action_logprobs = await asyncio.wait_for(
-                        self._sample_with_tinker(self.messages),
+                        self._sample_with_model(self.messages),
                         timeout=self.max_turn_time_seconds
                     )
-                    logger.info(f"[Turn {turn}] _sample_with_tinker() returned")
+                    logger.info(f"[Turn {turn}] _sample_with_model() returned")
                 except asyncio.TimeoutError:
                     self.termination_reason = f"model_timeout_turn_{turn}"
                     logger.error(f"[Turn {turn}] Model inference timed out after {self.max_turn_time_seconds/60:.0f} minutes. Ending rollout.")

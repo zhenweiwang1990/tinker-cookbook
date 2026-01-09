@@ -33,9 +33,14 @@ set -e  # Exit on error
 # Default Configuration
 # ============================================================================
 
+# Provider settings (NEW)
+PROVIDER="tinker"                             # tinker, vllm, openrouter, openai
+PROVIDER_BASE_URL=""                          # Optional: API base URL (for vLLM, etc.)
+PROVIDER_API_KEY=""                           # Optional: API key (for OpenRouter, OpenAI, etc.)
+
 # Model settings
 MODEL_NAME="Qwen/Qwen3-VL-30B-A3B-Instruct"
-MODEL_PATH=""                              # Optional: checkpoint path for fine-tuned models
+MODEL_PATH=""                              # For Tinker: checkpoint path
 
 # Evaluation dataset configuration
 EVAL_SOURCE_TYPE="task_adapter"
@@ -70,6 +75,18 @@ LOG_PATH="./benchmark_logs"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --provider)
+            PROVIDER="$2"
+            shift 2
+            ;;
+        --provider-base-url)
+            PROVIDER_BASE_URL="$2"
+            shift 2
+            ;;
+        --provider-api-key)
+            PROVIDER_API_KEY="$2"
+            shift 2
+            ;;
         --model)
             MODEL_NAME="$2"
             shift 2
@@ -143,14 +160,19 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Benchmark evaluation script for CUA agents."
             echo ""
+            echo "Provider Options (NEW):"
+            echo "  --provider PROVIDER             Provider: tinker/vllm/openrouter/openai (default: tinker)"
+            echo "  --provider-base-url URL         API base URL (for vLLM, etc.)"
+            echo "  --provider-api-key KEY          API key (for OpenRouter, OpenAI, etc.)"
+            echo ""
             echo "Model Options:"
-            echo "  --model MODEL_NAME              Model to evaluate (default: Qwen/Qwen2.5-1.5B-Instruct)"
-            echo "  --model-path PATH               Checkpoint path for fine-tuned models"
+            echo "  --model MODEL_NAME              Model to evaluate (default: Qwen/Qwen3-VL-30B-A3B-Instruct)"
+            echo "  --model-path PATH               Checkpoint path (for Tinker provider)"
             echo ""
             echo "Dataset Options:"
             echo "  --eval-source SOURCE            Eval data source (default: task_adapter)"
             echo "  --eval-split SPLIT              Eval split: train/eval (default: eval)"
-            echo "  --train-ratio RATIO             Train/eval split ratio (default: 0.99)"
+            echo "  --train-ratio RATIO             Train/eval split ratio (default: 0)"
             echo "  --seed SEED                     Random seed (default: 42)"
             echo ""
             echo "Benchmark Options:"
@@ -165,20 +187,24 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-task-time SECONDS         Max time per task (default: 1800)"
             echo "  --max-turn-time SECONDS         Max time per turn (default: 300)"
             echo "  --log-path PATH                 Log directory path (default: ./benchmark_logs)"
-            echo "  --coordinate-mode MODE          Coordinate mode: gbox/direct (default: gbox)"
+            echo "  --coordinate-mode MODE          Coordinate mode: gbox/direct (default: direct)"
+            echo "  --coordinate-scale VALUE        Coordinate scaling: true/false (default: auto)"
             echo ""
             echo "Examples:"
-            echo "  # Basic benchmark with Tinker"
-            echo "  $0"
+            echo "  # Tinker provider (default)"
+            echo "  $0 --model Qwen/Qwen3-VL-30B-A3B-Instruct --model-path tinker://...sampler_weights/000080"
             echo ""
-            echo "  # Benchmark specific model"
-            echo "  $0 --model Qwen/Qwen2.5-3B-Instruct"
+            echo "  # vLLM provider (local)"
+            echo "  $0 --provider vllm --model Qwen/Qwen3-VL-30B-A3B-Instruct \\"
+            echo "     --provider-base-url http://localhost:8000/v1"
             echo ""
-            echo "  # Benchmark fine-tuned checkpoint"
-            echo "  $0 --model-path /path/to/checkpoint"
+            echo "  # OpenRouter provider"
+            echo "  $0 --provider openrouter --model qwen/qwen3-vl-30b-a3b-instruct \\"
+            echo "     --provider-api-key \$OPENROUTER_API_KEY"
             echo ""
-            echo "  # Custom dataset and settings"
-            echo "  $0 --eval-source demo_eval --seed 123 --name my_benchmark"
+            echo "  # OpenAI provider"
+            echo "  $0 --provider openai --model gpt-4-vision-preview \\"
+            echo "     --provider-api-key \$OPENAI_API_KEY"
             exit 0
             ;;
         *)
@@ -223,6 +249,13 @@ echo ""
 
 echo "Configuration:"
 echo "----------------------------------------"
+echo "Provider:             $PROVIDER"
+if [ -n "$PROVIDER_BASE_URL" ]; then
+    echo "  Base URL:           $PROVIDER_BASE_URL"
+fi
+if [ -n "$PROVIDER_API_KEY" ]; then
+    echo "  API Key:            [REDACTED]"
+fi
 echo "Model:                $MODEL_NAME"
 if [ -n "$MODEL_PATH" ]; then
     echo "Checkpoint:           $MODEL_PATH"
@@ -261,7 +294,19 @@ EVAL_TASKS_JSON="{\"source_type\": \"$EVAL_SOURCE_TYPE\", \"split_type\": \"$EVA
 
 # Build the command
 CMD="uv run python -m tinker_cookbook.recipes.cua_rl.benchmark \
+    provider=\"$PROVIDER\" \
     model_name=\"$MODEL_NAME\""
+
+# Add optional provider settings
+if [ -n "$PROVIDER_BASE_URL" ]; then
+    CMD="$CMD \
+    provider_base_url=\"$PROVIDER_BASE_URL\""
+fi
+
+if [ -n "$PROVIDER_API_KEY" ]; then
+    CMD="$CMD \
+    provider_api_key=\"$PROVIDER_API_KEY\""
+fi
 
 # Add optional model_path
 if [ -n "$MODEL_PATH" ]; then

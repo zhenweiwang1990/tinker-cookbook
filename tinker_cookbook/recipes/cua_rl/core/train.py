@@ -137,9 +137,14 @@ class CLIConfig:
     renderer_name: str | None = None
     load_checkpoint_path: str | None = None  # Optional: path to a specific checkpoint to load. If None, will auto-resume from log_path if checkpoint exists. If set, will load weights from this checkpoint (fresh optimizer, starts from batch 0).
     
+    # Provider configuration (NEW)
+    provider: str = "tinker"  # "tinker", "vllm", "openrouter", "openai"
+    provider_base_url: str | None = None  # Optional: API base URL (for vLLM, OpenRouter, etc.)
+    provider_api_key: str | None = None  # Optional: API key (for OpenRouter, OpenAI, etc.)
+    
     # GBox configuration
     gbox_api_key: str = ""  # Will use GBOX_API_KEY env var if empty
-    tinker_api_key: str = ""  # Will use TINKER_API_KEY env var if empty (same as gbox_api_key for Tinker)
+    tinker_api_key: str = ""  # Will use TINKER_API_KEY env var if empty (used for Tinker provider)
     box_type: str = "android"  # android or linux
     
     # Data / environment configuration

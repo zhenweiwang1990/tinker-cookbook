@@ -37,9 +37,17 @@ class CUAEnv(ProblemEnv):
         self,
         task_description: str,
         gbox_api_key: str,
+        
+        # Provider configuration (NEW)
+        provider: str = "tinker",
+        provider_base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
+        
+        # Legacy parameters (backward compatible)
         tinker_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         openai_api_base: Optional[str] = None,
+        
         rollout_model_name: str = "gpt-4o",
         renderer: Optional[renderers.Renderer] = None,
         convo_prefix: Optional[List[renderers.Message]] = None,
@@ -61,7 +69,15 @@ class CUAEnv(ProblemEnv):
         Args:
             task_description: Description of the task to complete
             gbox_api_key: GBox API key
-            tinker_api_key: Tinker API key for OpenAI-compatible API (for rollout)
+            
+            provider: Inference provider ("tinker", "vllm", "openrouter", "openai")
+            provider_base_url: API base URL (for vLLM, OpenRouter, etc.)
+            provider_api_key: API key (for OpenRouter, OpenAI, etc.)
+            
+            tinker_api_key: Tinker API key (legacy, for backward compatibility)
+            openai_api_key: OpenAI API key (legacy, not used)
+            openai_api_base: OpenAI API base URL (legacy, not used)
+            
             rollout_model_name: Not used, kept for compatibility
             renderer: Renderer instance (for training, not used in rollout)
             convo_prefix: Conversation prefix (for training, not used in rollout)
@@ -77,7 +93,15 @@ class CUAEnv(ProblemEnv):
         
         self.task_description = task_description
         self.gbox_api_key = gbox_api_key
+        
+        # Provider settings
+        self.provider = provider
+        self.provider_base_url = provider_base_url
+        self.provider_api_key = provider_api_key
+        
+        # Legacy support
         self.tinker_api_key = tinker_api_key
+        
         self.max_turns = max_turns
         self.box_type = box_type
         self.max_recent_turns = max_recent_turns
@@ -132,41 +156,41 @@ class CUAEnv(ProblemEnv):
         rollout_id: Optional[str] = None,  # Rollout ID (UUID) for database recording
     ) -> Dict[str, Any]:
         """
-        Run a rollout using TinkerCuaAgent with Tinker's native API.
+        Run a rollout using TinkerCuaAgent with flexible inference provider.
         
-        This allows using the current training model for rollout (on-policy RL).
-        The model_path is a tinker://... checkpoint path that dynamically updates
-        as training progresses.
+        This method supports multiple providers (Tinker, vLLM, OpenRouter, etc.).
+        For Tinker provider, tinker_model_path is the checkpoint path.
+        For other providers, tinker_model_path is used as the model name.
         
-        Uses Tinker's native API which supports multimodal inputs (images),
-        unlike the OpenAI-compatible API which only supports text.
+        The provider is determined from self.provider (set during __init__).
         
         Args:
-            tinker_model_path: Tinker checkpoint path (e.g., tinker://.../sampler_weights/000080)
-            tinker_api_key: Tinker API key (same as TINKER_API_KEY)
+            tinker_model_path: Model path or identifier
+                - For Tinker: checkpoint path (e.g., tinker://.../sampler_weights/000080)
+                - For others: model name (e.g., Qwen/Qwen3-VL-30B-A3B-Instruct)
+            tinker_api_key: API key (Tinker or provider-specific)
             base_model_name: Base model name for tokenizer/renderer
             renderer_name: Renderer name (auto-detected if None)
             
         Returns:
             Dictionary with rollout results
         """
-        # Create TinkerCuaAgent instance with Tinker's native API
-        # This allows using the current training model checkpoint for rollout
-        # The model_path dynamically updates as training progresses
-        # Native API supports multimodal inputs (images) unlike OpenAI-compatible API
+        # Create TinkerCuaAgent based on provider
+        # The agent supports multiple inference backends while preserving all functionality
+        # (prompts, tool parsing, coordinate handling, database recording)
         agent_init_start = time.time()
         
-        # Log environment initialization (2 lines: config + agent creation)
+        # Log environment initialization
         if rollout_logger:
-            # Truncate task description if too long
             task_desc_short = self.task_description[:80] + "..." if len(self.task_description) > 80 else self.task_description
             rollout_logger.log(f"[CUAEnv] Task: {self.task_description}")
             rollout_logger.log(
-                f"[CUAEnv] Config: model={base_model_name} | "
+                f"[CUAEnv] Config: provider={self.provider} | model={base_model_name} | "
                 f"renderer={renderer_name or 'auto'} | box={self.box_type} | max_turns={self.max_turns}"
             )
         else:
             logger.info(f"[CUAEnv] Initializing environment for rollout")
+            logger.info(f"[CUAEnv] Provider: {self.provider}")
             logger.info(f"[CUAEnv] Task: {self.task_description}")
             logger.info(f"[CUAEnv] Model path: {tinker_model_path}")
             logger.info(f"[CUAEnv] Base model: {base_model_name}")
@@ -174,25 +198,51 @@ class CUAEnv(ProblemEnv):
             logger.info(f"[CUAEnv] Box type: {self.box_type}")
             logger.info(f"[CUAEnv] Max turns: {self.max_turns}")
         
-        self._agent = TinkerCuaAgent(
-            gbox_api_key=self.gbox_api_key,
-            tinker_api_key=tinker_api_key,
-            tinker_model_path=tinker_model_path,  # Use checkpoint path (dynamically updates)
-            base_model_name=base_model_name,
-            renderer_name=renderer_name,
-            max_turns=self.max_turns,
-            box_type=self.box_type,
-            max_recent_turns=self.max_recent_turns,  # Pass max_recent_turns to agent
-            rollout_logger=rollout_logger,
-            rollout_recorder=rollout_recorder,  # Pass rollout_recorder for database recording
-            rollout_id=rollout_id,  # rollout_id is now a UUID
-            max_task_time_seconds=self.max_task_time_seconds,
-            max_turn_time_seconds=self.max_turn_time_seconds,
-            coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
-            coordinate_scale=self.coordinate_scale,
-            x_scale_ratio=self.x_scale_ratio,
-            y_scale_ratio=self.y_scale_ratio,
-        )
+        # Create agent based on provider
+        if self.provider == "tinker":
+            # Tinker provider: use legacy parameters
+            self._agent = TinkerCuaAgent(
+                gbox_api_key=self.gbox_api_key,
+                tinker_api_key=tinker_api_key,
+                tinker_model_path=tinker_model_path,
+                base_model_name=base_model_name,
+                renderer_name=renderer_name,
+                max_turns=self.max_turns,
+                box_type=self.box_type,
+                max_recent_turns=self.max_recent_turns,
+                rollout_logger=rollout_logger,
+                rollout_recorder=rollout_recorder,
+                rollout_id=rollout_id,
+                max_task_time_seconds=self.max_task_time_seconds,
+                max_turn_time_seconds=self.max_turn_time_seconds,
+                coordinate_mode=self.coordinate_mode,
+                coordinate_scale=self.coordinate_scale,
+                x_scale_ratio=self.x_scale_ratio,
+                y_scale_ratio=self.y_scale_ratio,
+            )
+        else:
+            # Other providers: use new provider-based parameters
+            self._agent = TinkerCuaAgent(
+                gbox_api_key=self.gbox_api_key,
+                provider=self.provider,
+                provider_model_name=tinker_model_path,  # For non-Tinker, this is the model name
+                provider_base_url=self.provider_base_url,
+                provider_api_key=self.provider_api_key or tinker_api_key,
+                base_model_name=base_model_name,
+                renderer_name=renderer_name,
+                max_turns=self.max_turns,
+                box_type=self.box_type,
+                max_recent_turns=self.max_recent_turns,
+                rollout_logger=rollout_logger,
+                rollout_recorder=rollout_recorder,
+                rollout_id=rollout_id,
+                max_task_time_seconds=self.max_task_time_seconds,
+                max_turn_time_seconds=self.max_turn_time_seconds,
+                coordinate_mode=self.coordinate_mode,
+                coordinate_scale=self.coordinate_scale,
+                x_scale_ratio=self.x_scale_ratio,
+                y_scale_ratio=self.y_scale_ratio,
+            )
         # Pass task object to agent for validation
         if self.task:
             self._agent.task = self.task
