@@ -79,7 +79,7 @@ Example 2 - Key press action:
 
 Example 2b - Drag action:
 <tool_call>
-{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}}}
+{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}, "end_target": {"element": "the bottom of the list"}}}
 </tool_call>
 
 Example 2c - Drag action (with optional fields):

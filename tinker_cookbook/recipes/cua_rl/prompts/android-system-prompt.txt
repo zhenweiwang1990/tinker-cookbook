@@ -79,7 +79,7 @@ Example 1b - Tap action (with optional fields):
 
 Example 2 - Swipe action:
 <tool_call>
-{"name": "action", "args": {"action_type": "swipe", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}}}
+{"name": "action", "args": {"action_type": "swipe", "start_target": {"element": "the top of the list"}, "end_target": {"element": "the bottom of the list"}}}
 </tool_call>
 
 Example 2b - Swipe action (with optional fields):
@@ -89,7 +89,7 @@ Example 2b - Swipe action (with optional fields):
 
 Example 2c - Drag action:
 <tool_call>
-{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}}, "end_target": {"element": "the bottom of the list"}, "duration": "200ms"}}
+{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "the top of the list"}, "end_target": {"element": "the bottom of the list"}, "duration": "200ms"}}
 </tool_call>
 
 Example 3 - Input action (simple):
