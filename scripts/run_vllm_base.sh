@@ -1,15 +1,40 @@
 #!/bin/bash
 set -e
 
-# Load .env from project root if present (so MODEL_NAME and others work without manual export)
+# Load .env from project root if present (so MODEL_NAME and others work without manual export).
+# Important: do NOT override environment variables already provided by the caller.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+load_env_defaults() {
+    local env_file="$1"
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Trim leading whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        # Skip comments / empty lines
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        # Allow optional "export "
+        line="${line#export }"
+        # Parse KEY=VALUE (very common .env format)
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+            # Only set if not already provided by the environment
+            if [[ -z "${!key+x}" ]]; then
+                # Strip surrounding single/double quotes if present
+                if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+                    val="${BASH_REMATCH[1]}"
+                elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+                    val="${BASH_REMATCH[1]}"
+                fi
+                export "$key=$val"
+            fi
+        fi
+    done < "$env_file"
+}
 if [ -f "$PROJECT_ROOT/.env" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$PROJECT_ROOT/.env"
-    set +a
-    echo "✓ Loaded .env from $PROJECT_ROOT"
+    load_env_defaults "$PROJECT_ROOT/.env"
+    echo "✓ Loaded .env defaults from $PROJECT_ROOT"
 fi
 
 echo "=========================================="
@@ -25,9 +50,20 @@ PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
 GPU_DEVICES="${GPU_DEVICES:-all}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+GPU_MEMORY_UTILIZATION_WAS_SET=true
+if [[ -z "${GPU_MEMORY_UTILIZATION+x}" || -z "${GPU_MEMORY_UTILIZATION}" ]]; then
+    GPU_MEMORY_UTILIZATION_WAS_SET=false
+    GPU_MEMORY_UTILIZATION="0.85"
+fi
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-true}"
 CONTAINER_NAME="${CONTAINER_NAME:-vllm-cua-server}"
+DTYPE="${DTYPE:-auto}"
+SERVED_MODEL_NAME_WAS_SET=true
+if [[ -z "${SERVED_MODEL_NAME+x}" || -z "${SERVED_MODEL_NAME}" ]]; then
+    SERVED_MODEL_NAME_WAS_SET=false
+    SERVED_MODEL_NAME=""
+fi
+VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
 # Function to detect GPU type and select appropriate vLLM image
 detect_gpu_type() {
@@ -88,6 +124,11 @@ select_vllm_image() {
             ;;
         gh200)
             echo "rajesh550/gh200-vllm:0.11.1rc2"
+            ;;
+        gb10)
+            # GB10 requires a newer CUDA/toolchain stack (sm_121a support).
+            # Use NVIDIA NGC vLLM image.
+            echo "nvcr.io/nvidia/vllm:25.12.post1-py3"
             ;;
         *)
             # Default to vllm/vllm-openai:latest for unknown GPUs
@@ -169,8 +210,90 @@ else
     echo "Using manually specified VLLM_IMAGE: ${VLLM_IMAGE}"
 fi
 
+# Heuristic: GB10 + bf16 conv3d can fail on some stacks; prefer fp16 unless user overrides.
+if [ "$DTYPE" = "auto" ]; then
+    detected_gpu_type=$(detect_gpu_type 2>/dev/null || echo "unknown")
+    if [ "$detected_gpu_type" = "gb10" ]; then
+        DTYPE="float16"
+        echo "Detected GB10 GPU → setting DTYPE=float16 (override with DTYPE=...)"
+    fi
+fi
+
+# Extra runtime env flags for specific GPU stacks.
+EXTRA_ENV_VARS=""
+if [ "${detected_gpu_type:-unknown}" = "gb10" ]; then
+    # Work around cuDNN frontend engine selection failures on some GB10 stacks.
+    EXTRA_ENV_VARS="$EXTRA_ENV_VARS -e TORCH_CUDNN_V8_API_DISABLED=1"
+fi
+
+# Some GB10 software stacks cannot run the multimodal encoder profiling kernels
+# (e.g. conv3d) for maximum feature sizes. Skipping profiling can allow the
+# server to start; real requests may still be constrained by kernel support.
+MM_PROFILING_FLAG=""
+if [ "${detected_gpu_type:-unknown}" = "gb10" ]; then
+    MM_PROFILING_FLAG="--skip-mm-profiling"
+fi
+
 # Display usage information
+SHOW_HELP=false
 if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    SHOW_HELP=true
+fi
+
+# Light argument parsing for convenience.
+# - Supports: --served-model-name (requested), --gpu-memory-utilization
+# - Supports: "--" to pass remaining args to vLLM
+while [[ "$SHOW_HELP" = false && $# -gt 0 ]]; do
+    case "$1" in
+        --served-model-name)
+            SERVED_MODEL_NAME="$2"
+            SERVED_MODEL_NAME_WAS_SET=true
+            shift 2
+            ;;
+        --served-model-name=*)
+            SERVED_MODEL_NAME="${1#*=}"
+            SERVED_MODEL_NAME_WAS_SET=true
+            shift
+            ;;
+        --gpu-memory-utilization)
+            GPU_MEMORY_UTILIZATION="$2"
+            GPU_MEMORY_UTILIZATION_WAS_SET=true
+            shift 2
+            ;;
+        --gpu-memory-utilization=*)
+            GPU_MEMORY_UTILIZATION="${1#*=}"
+            GPU_MEMORY_UTILIZATION_WAS_SET=true
+            shift
+            ;;
+        --)
+            shift
+            # Everything after "--" is passed to vLLM as-is
+            if [[ $# -gt 0 ]]; then
+                if [[ -n "$VLLM_EXTRA_ARGS" ]]; then
+                    VLLM_EXTRA_ARGS="$VLLM_EXTRA_ARGS $*"
+                else
+                    VLLM_EXTRA_ARGS="$*"
+                fi
+            fi
+            break
+            ;;
+        -h|--help)
+            SHOW_HELP=true
+            shift
+            ;;
+        *)
+            # Unknown args: treat as additional vLLM args (best-effort).
+            if [[ -n "$VLLM_EXTRA_ARGS" ]]; then
+                VLLM_EXTRA_ARGS="$VLLM_EXTRA_ARGS $1"
+            else
+                VLLM_EXTRA_ARGS="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ "$SHOW_HELP" = true ]]; then
     echo "Usage: ./scripts/run_vllm_base.sh"
     echo ""
     echo "Environment variables:"
@@ -187,6 +310,13 @@ if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     echo "  MODEL_HUB           - Model hub to use: 'huggingface' or 'modelscope' (default: modelscope)"
     echo "  HF_ENDPOINT         - Hugging Face endpoint (default: https://hf-mirror.com for China)"
     echo "  MODELSCOPE_CACHE    - ModelScope cache directory (default: ~/.cache/modelscope)"
+    echo "  SERVED_MODEL_NAME   - Served model name shown in /v1/models (default: derived from model)"
+    echo "  VLLM_EXTRA_ARGS     - Extra args appended to vLLM command (optional)"
+    echo ""
+    echo "Script arguments:"
+    echo "  --served-model-name <name>         - Set served model name (same as SERVED_MODEL_NAME)"
+    echo "  --gpu-memory-utilization <ratio>   - Set GPU memory utilization (same as GPU_MEMORY_UTILIZATION)"
+    echo "  -- <args...>                       - Pass remaining args directly to vLLM"
     echo ""
     echo "Examples (MODEL_NAME only, BASE_MODEL is no longer used):"
     echo "  # Run with default settings (auto-detect all GPUs)"
@@ -216,6 +346,18 @@ if command -v nvidia-smi &> /dev/null && [ "$TOTAL_GPUS" -gt 0 ]; then
     echo "GPU Information:"
     nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader
     echo ""
+
+    # If nvidia-smi cannot report memory (e.g. shows [N/A] on some GB10 stacks),
+    # vLLM will still enforce a strict check at startup. Use a safer default on GB10
+    # unless the user explicitly provided GPU_MEMORY_UTILIZATION.
+    if [[ "${detected_gpu_type:-unknown}" = "gb10" && "$GPU_MEMORY_UTILIZATION_WAS_SET" = false ]]; then
+        echo "GPU Memory Check:"
+        echo "  - Note: GB10 + some drivers may show memory as [N/A] in nvidia-smi."
+        echo "  - vLLM enforces a startup check using actual free memory."
+        echo "  → Using a safer default GPU_MEMORY_UTILIZATION=0.75 for GB10 (override with GPU_MEMORY_UTILIZATION=... or --gpu-memory-utilization ...)"
+        GPU_MEMORY_UTILIZATION="0.75"
+        echo ""
+    fi
     
     # Auto-adjust GPU memory utilization based on available memory
     # Get the first GPU's memory info (for single GPU) or calculate average
@@ -233,7 +375,8 @@ if command -v nvidia-smi &> /dev/null && [ "$TOTAL_GPUS" -gt 0 ]; then
         TOTAL_MEM=$(echo "$GPU_MEM_INFO" | awk '{print $1}')
         FREE_MEM=$(echo "$GPU_MEM_INFO" | awk '{print $2}')
         
-        if [ -n "$TOTAL_MEM" ] && [ -n "$FREE_MEM" ] && [ "$TOTAL_MEM" -gt 0 ]; then
+        # Guard against non-numeric values (some drivers report "[N/A]")
+        if [[ "$TOTAL_MEM" =~ ^[0-9]+$ ]] && [[ "$FREE_MEM" =~ ^[0-9]+$ ]] && [ "$TOTAL_MEM" -gt 0 ]; then
             # Calculate available memory ratio
             AVAILABLE_RATIO=$(awk "BEGIN {printf \"%.3f\", $FREE_MEM / $TOTAL_MEM}")
             REQUESTED_MEM=$(awk "BEGIN {printf \"%.2f\", $GPU_MEMORY_UTILIZATION * $TOTAL_MEM}")
@@ -335,10 +478,20 @@ if [ "$NUM_GPUS_TO_USE" -gt 1 ]; then
         -e NCCL_SHM_DISABLE=0"
 fi
 
-# Determine if we need to set entrypoint for GH200 image
+# Determine if we need to set entrypoint for images that don't default to vLLM API server
 VLLM_ENTRYPOINT_FLAG=""
-if [[ "$VLLM_IMAGE" == *"gh200"* ]] || [[ "$VLLM_IMAGE" == *"rajesh550"* ]] || [[ "$VLLM_IMAGE" == *"gb10"* ]]; then
-    # GH200/GB10 image may need explicit entrypoint
+IMAGE_NEEDS_PY_ENTRYPOINT=false
+if [[ "$VLLM_IMAGE" == *"gh200"* ]] || [[ "$VLLM_IMAGE" == *"rajesh550"* ]] || [[ "$VLLM_IMAGE" == nvcr.io/nvidia/vllm:* ]]; then
+    IMAGE_NEEDS_PY_ENTRYPOINT=true
+fi
+
+# In ModelScope mode we need to run a pre-command (pip install), so force a bash entrypoint.
+# Otherwise, on images like vllm/vllm-openai (entrypoint api_server.py), "bash -c ..." would be
+# treated as api_server args and fail with "unrecognized arguments: -c ...".
+if [ "$MODEL_HUB" = "modelscope" ]; then
+    VLLM_ENTRYPOINT_FLAG="--entrypoint bash"
+elif [ "$IMAGE_NEEDS_PY_ENTRYPOINT" = true ]; then
+    # Some custom images don't set a vLLM entrypoint; use python3 and pass "-m ...".
     VLLM_ENTRYPOINT_FLAG="--entrypoint python3"
 fi
 
@@ -357,6 +510,7 @@ if [ "$MODEL_HUB" = "modelscope" ]; then
         -e CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
         -e VLLM_MM_VIDEO_MAX_NUM=0 \
         -e VLLM_MM_IMAGE_MAX_NUM=16 \
+        $EXTRA_ENV_VARS \
         $NCCL_ENV_VARS \
         $VLLM_IMAGE"
 else
@@ -373,6 +527,7 @@ else
         -e CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
         -e VLLM_MM_VIDEO_MAX_NUM=0 \
         -e VLLM_MM_IMAGE_MAX_NUM=16 \
+        $EXTRA_ENV_VARS \
         $NCCL_ENV_VARS \
         $VLLM_IMAGE"
 fi
@@ -383,15 +538,55 @@ fi
 # For vllm/vllm-openai image, the entrypoint is already set, so we just pass arguments
 # For GH200 image, we may need to set entrypoint explicitly
 if [ "$MODEL_HUB" = "modelscope" ]; then
-    # Extract model org and name from MODEL_NAME (e.g., "unsloth/Qwen3-VL-30B-A3B-Instruct")
-    MODEL_ORG=$(echo "$MODEL_NAME" | cut -d'/' -f1)
-    MODEL_SHORT_NAME=$(echo "$MODEL_NAME" | cut -d'/' -f2)
-    # Use local ModelScope cache path
-    MODEL_PATH="/root/.cache/modelscope/hub/models/$MODEL_ORG/$MODEL_SHORT_NAME"
+    # ModelScope can be provided as:
+    # - "org/name" (e.g. "Tongyi-MAI/MAI-UI-8B") -> map to ModelScope cache layout
+    #   (ModelScope snapshot_download typically materializes to /root/.cache/modelscope/<org>/<name>)
+    # - an absolute path inside container (e.g. "/root/.cache/modelscope/...") -> use as-is
+    MODELSCOPE_REPO_ID=""
+    if [[ "$MODEL_NAME" == /* ]]; then
+        MODEL_PATH="$MODEL_NAME"
+    elif [[ "$MODEL_NAME" == */* ]]; then
+        MODELSCOPE_REPO_ID="$MODEL_NAME"
+        MODEL_ORG="${MODEL_NAME%%/*}"
+        MODEL_SHORT_NAME="${MODEL_NAME#*/}"
+        MODEL_PATH="/root/.cache/modelscope/$MODEL_ORG/$MODEL_SHORT_NAME"
+    else
+        # Fallback: treat it as a repo id and map to cache root
+        MODELSCOPE_REPO_ID="$MODEL_NAME"
+        MODEL_PATH="/root/.cache/modelscope/$MODEL_NAME"
+    fi
+
+    # Default served model name (what appears in /v1/models) should be the repo id
+    # rather than the local filesystem path.
+    if [ -z "$SERVED_MODEL_NAME" ]; then
+        if [ -n "$MODELSCOPE_REPO_ID" ]; then
+            SERVED_MODEL_NAME="$MODELSCOPE_REPO_ID"
+        else
+            # Try to derive "org/name" from common cache layout: /root/.cache/modelscope/<org>/<name>
+            if [[ "$MODEL_PATH" == /root/.cache/modelscope/*/* ]]; then
+                tmp="${MODEL_PATH#/root/.cache/modelscope/}"  # org/name/...
+                org="${tmp%%/*}"
+                rest="${tmp#*/}"
+                name="${rest%%/*}"
+                SERVED_MODEL_NAME="$org/$name"
+            else
+                SERVED_MODEL_NAME="$MODEL_NAME"
+            fi
+        fi
+    fi
+
     echo "Using ModelScope local path: $MODEL_PATH"
-    VLLM_BASE_CMD="--model $MODEL_PATH --host $HOST --port $PORT --tensor-parallel-size $TENSOR_PARALLEL_SIZE --max-model-len $MAX_MODEL_LEN --gpu-memory-utilization=$GPU_MEMORY_UTILIZATION"
+    VLLM_BASE_CMD="--model $MODEL_PATH --served-model-name $SERVED_MODEL_NAME --host $HOST --port $PORT --tensor-parallel-size $TENSOR_PARALLEL_SIZE --max-model-len $MAX_MODEL_LEN --gpu-memory-utilization=$GPU_MEMORY_UTILIZATION --dtype $DTYPE $MM_PROFILING_FLAG"
 else
-    VLLM_BASE_CMD="--model $MODEL_NAME --host $HOST --port $PORT --tensor-parallel-size $TENSOR_PARALLEL_SIZE --max-model-len $MAX_MODEL_LEN --gpu-memory-utilization=$GPU_MEMORY_UTILIZATION"
+    if [ -z "$SERVED_MODEL_NAME" ]; then
+        SERVED_MODEL_NAME="$MODEL_NAME"
+    fi
+    VLLM_BASE_CMD="--model $MODEL_NAME --served-model-name $SERVED_MODEL_NAME --host $HOST --port $PORT --tensor-parallel-size $TENSOR_PARALLEL_SIZE --max-model-len $MAX_MODEL_LEN --gpu-memory-utilization=$GPU_MEMORY_UTILIZATION --dtype $DTYPE $MM_PROFILING_FLAG"
+fi
+
+# Append any additional args requested by the user.
+if [[ -n "${VLLM_EXTRA_ARGS}" ]]; then
+    VLLM_BASE_CMD="$VLLM_BASE_CMD $VLLM_EXTRA_ARGS"
 fi
 
 # Add trust-remote-code flag if enabled
@@ -415,20 +610,17 @@ else
 fi
 
 # Build vLLM command based on image type and model hub
-if [[ "$VLLM_IMAGE" == *"gh200"* ]] || [[ "$VLLM_IMAGE" == *"rajesh550"* ]] || [[ "$VLLM_IMAGE" == *"gb10"* ]]; then
-    # For GH200/GB10 image, entrypoint is set to python3, so we need to call the module
-    if [ "$MODEL_HUB" = "modelscope" ]; then
-        VLLM_CMD="bash -c 'pip install modelscope -q && export MODELSCOPE_CACHE=/root/.cache/modelscope && python3 -m vllm.entrypoints.openai.api_server $VLLM_BASE_CMD'"
-    else
-        VLLM_CMD="python3 -m vllm.entrypoints.openai.api_server $VLLM_BASE_CMD"
-    fi
+if [ "$MODEL_HUB" = "modelscope" ]; then
+    # Entry point is bash; run install + launch explicitly.
+    # If the model isn't present in the mounted cache yet, download it via ModelScope.
+    # Also hard-disable video inputs at the CLI layer to avoid video-path profiling.
+    VLLM_CMD="-lc \"pip install modelscope -q && export MODELSCOPE_CACHE=/root/.cache/modelscope && if [ -n '$MODELSCOPE_REPO_ID' ] && [ ! -d '$MODEL_PATH' ]; then python3 -c \\\"from modelscope.hub.snapshot_download import snapshot_download; snapshot_download('$MODELSCOPE_REPO_ID', cache_dir='/root/.cache/modelscope')\\\"; fi && python3 -m vllm.entrypoints.openai.api_server $VLLM_BASE_CMD --limit-mm-per-prompt '{\\\"image\\\":16,\\\"video\\\":0}'\""
+elif [ "$IMAGE_NEEDS_PY_ENTRYPOINT" = true ]; then
+    # Entry point is python3; pass module invocation and args (do NOT prefix with "python3").
+    VLLM_CMD="-m vllm.entrypoints.openai.api_server $VLLM_BASE_CMD"
 else
-    # For vllm/vllm-openai image, entrypoint is already set, just pass arguments
-    if [ "$MODEL_HUB" = "modelscope" ]; then
-        VLLM_CMD="bash -c 'pip install modelscope -q && export MODELSCOPE_CACHE=/root/.cache/modelscope && $VLLM_BASE_CMD'"
-    else
-        VLLM_CMD="$VLLM_BASE_CMD"
-    fi
+    # vllm/vllm-openai image: entrypoint already runs api_server.py; just pass args.
+    VLLM_CMD="$VLLM_BASE_CMD"
 fi
 
 echo "Starting vLLM inference server with auto-restart..."
@@ -456,7 +648,7 @@ echo "OpenAI-compatible endpoints:"
 echo "  - Chat completions: http://$HOST:$PORT/v1/chat/completions"
 echo "  - Completions: http://$HOST:$PORT/v1/completions"
 echo ""
-echo "Model: $MODEL_NAME"
+echo "Model (served): $SERVED_MODEL_NAME"
 echo "Multi-GPU: $NUM_GPUS_TO_USE GPU(s) (Tensor Parallel: $TENSOR_PARALLEL_SIZE)"
 echo ""
 echo "Useful commands:"
@@ -468,7 +660,7 @@ echo ""
 echo "Example curl command (with image):"
 echo '  curl http://localhost:'$PORT'/v1/chat/completions \'
 echo '    -H "Content-Type: application/json" \'
-echo '    -d '"'"'{"model": "'$MODEL_NAME'", "messages": [{"role": "user", "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}]}], "max_tokens": 1000}'"'"
+echo '    -d '"'"'{"model": "'$SERVED_MODEL_NAME'", "messages": [{"role": "user", "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}]}], "max_tokens": 1000}'"'"
 echo ""
 
 # Follow logs
