@@ -13,11 +13,13 @@ from typing import Any
 import chz
 from tinker_cookbook import cli_utils, model_info
 from tinker_cookbook.recipes.cua_rl.agent.cua_env import CUADatasetBuilder
+from tinker_cookbook.recipes.cua_rl.genv_local.genv_env import GenvDatasetBuilder
 from tinker_cookbook.recipes.cua_rl.core.rollout import (
     do_cua_group_rollout,
     set_rollout_output_dir,
     set_rollout_context,
 )
+from tinker_cookbook.recipes.cua_rl.genv_local.rollout import do_genv_group_rollout
 # IMPORTANT: Override rollouts.do_group_rollout BEFORE importing train module
 # because train imports metric_util which binds do_group_rollout at import time
 from tinker_cookbook.rl import rollouts
@@ -37,6 +39,13 @@ _eval_group_counter: dict | None = None
 
 # Global semaphore for rollout concurrency control
 _rollout_semaphore: asyncio.Semaphore | None = None
+
+# Global env mode switch (used by evaluation wrapper which is bound at import time).
+_env_mode: str = "cua_gbox"  # "cua_gbox" | "genv_local"
+
+def set_env_mode(env_mode: str) -> None:
+    global _env_mode
+    _env_mode = env_mode
 
 def set_eval_model_path(model_path: str | None):
     """Set the current model_path for evaluation rollouts."""
@@ -101,6 +110,20 @@ async def _do_cua_group_rollout_for_eval_impl(
     except Exception as e:
         logger.warning(f"[Eval Rollout] Failed to get eval_id from context: {e}")
     
+    # Dispatch based on env_mode (cua_gbox vs genv_local).
+    if _env_mode == "genv_local":
+        return await do_genv_group_rollout(
+            env_group_builder=env_group_builder,
+            policy=policy,
+            model_path=model_path,
+            step=None,
+            batch=None,
+            group=current_group,
+            output_dir=None,
+            is_eval=True,
+            eval_id=eval_id,
+        )
+
     return await do_cua_group_rollout(
         env_group_builder=env_group_builder,
         policy=policy,
@@ -130,6 +153,9 @@ metric_util.do_group_rollout = _cua_group_rollout_for_eval
 class CLIConfig:
     """Command-line configuration for CUA RL training."""
     
+    # Execution mode
+    env_mode: str = "cua_gbox"  # "cua_gbox" (existing) or "genv_local" (LocalEnv)
+
     # Model configuration
     model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Model for training (also used for rollout in on-policy RL)
     # model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct"  # Model for training (also used for rollout in on-policy RL)
@@ -202,21 +228,40 @@ class CLIConfig:
 async def cli_main(cli_config: CLIConfig) -> None:
     """Main training function."""
     import os
+
+    # Set global env mode used by evaluation wrapper.
+    set_env_mode(cli_config.env_mode)
+
+    if cli_config.env_mode == "genv_local":
+        # Ensure the configured task sources are compatible.
+        def _has_genv_source(cfg: dict | list[dict]) -> bool:
+            if isinstance(cfg, dict):
+                return cfg.get("source_type") == "genv_umetrip"
+            return any(isinstance(x, dict) and x.get("source_type") == "genv_umetrip" for x in cfg)
+
+        if not _has_genv_source(cli_config.tasks):
+            raise ValueError(
+                "env_mode='genv_local' requires tasks.source_type='genv_umetrip' "
+                "and tasks_dir pointing to genv-umetrip/tasks."
+            )
     
     # Create global rollout concurrency control semaphore
     global _rollout_semaphore
     _rollout_semaphore = asyncio.Semaphore(cli_config.max_concurrent_rollouts)
     logger.info(f"[Concurrency] Set max concurrent rollouts to {cli_config.max_concurrent_rollouts}")
     
-    # Get API keys from environment if not provided
-    gbox_api_key = cli_config.gbox_api_key or os.getenv("GBOX_API_KEY")
-    if not gbox_api_key:
-        raise ValueError("GBOX_API_KEY must be provided via config or environment variable")
-    
-    # Tinker API key (for OpenAI-compatible API)
-    # Usually same as TINKER_API_KEY, but can be different
-    # If not provided, default to gbox_api_key (they are often the same for Tinker)
-    tinker_api_key = cli_config.tinker_api_key or os.getenv("TINKER_API_KEY") or gbox_api_key
+    # API keys
+    gbox_api_key = cli_config.gbox_api_key or os.getenv("GBOX_API_KEY") or ""
+    if cli_config.env_mode != "genv_local":
+        if not gbox_api_key:
+            raise ValueError("GBOX_API_KEY must be provided via config or environment variable")
+
+    tinker_api_key = cli_config.tinker_api_key or os.getenv("TINKER_API_KEY") or ""
+    if not tinker_api_key:
+        # Backward-compatible default: many setups use the same key for both.
+        tinker_api_key = gbox_api_key
+    if not tinker_api_key:
+        raise ValueError("TINKER_API_KEY must be provided via config or environment variable")
     
     # Get renderer name
     renderer_name = cli_config.renderer_name or model_info.get_recommended_renderer_name(
@@ -346,37 +391,76 @@ async def cli_main(cli_config: CLIConfig) -> None:
     # Set default eval_tasks if needed
     eval_tasks = cli_config.eval_tasks
     if eval_tasks is None and cli_config.use_default_eval_tasks:
-        eval_tasks = {"source_type": "demo_eval", "limit": 10, "seed": cli_config.seed}
-        logger.info(f"Using default eval_tasks: randomly sampling 10 tasks from demo_eval (seed={cli_config.seed})")
+        if cli_config.env_mode == "genv_local":
+            # Default eval split from the same genv tasks_dir.
+            tasks_dir = None
+            if isinstance(cli_config.tasks, dict):
+                tasks_dir = cli_config.tasks.get("tasks_dir")
+            elif isinstance(cli_config.tasks, list):
+                for item in cli_config.tasks:
+                    if isinstance(item, dict) and item.get("source_type") == "genv_umetrip":
+                        tasks_dir = item.get("tasks_dir")
+                        break
+            if not tasks_dir:
+                raise ValueError("env_mode='genv_local' default eval_tasks requires tasks_dir in tasks config")
+            eval_tasks = {
+                "source_type": "genv_umetrip",
+                "tasks_dir": tasks_dir,
+                "split_type": "eval",
+                "limit": 10,
+                "seed": cli_config.seed,
+            }
+            logger.info(
+                f"Using default eval_tasks: 10 tasks from genv_umetrip split=eval (seed={cli_config.seed})"
+            )
+        else:
+            eval_tasks = {"source_type": "demo_eval", "limit": 10, "seed": cli_config.seed}
+            logger.info(
+                f"Using default eval_tasks: randomly sampling 10 tasks from demo_eval (seed={cli_config.seed})"
+            )
     elif eval_tasks is None:
         logger.info("No eval_tasks configured, evaluation will be disabled")
     
     # Build dataset builder
     # Note: db_session is passed but will be used later when dataset_builder.__call__() is invoked
     # We don't close the session here because tasks are saved during __call__() which happens later
-    dataset_builder = CUADatasetBuilder(
-        tasks=cli_config.tasks,
-        eval_tasks=eval_tasks,
-        batch_size=cli_config.groups_per_batch,
-        group_size=cli_config.group_size,
-        gbox_api_key=gbox_api_key,
-        tinker_api_key=tinker_api_key,  # Tinker API key for OpenAI-compatible API
-        rollout_model_name=None,  # Not used, rollout uses dynamic checkpoint path from training
-        model_name_for_tokenizer=cli_config.model_name,
-        renderer_name=renderer_name,
-        max_turns=cli_config.max_turns,
-        box_type=cli_config.box_type,
-        seed=cli_config.seed,
-        db_session=db_session,  # Pass database session for task saving (will be used in __call__)
-        training_id=training_id,  # Pass training ID
-        max_task_time_seconds=cli_config.max_task_time_seconds,
-        max_turn_time_seconds=cli_config.max_turn_time_seconds,
-        coordinate_mode=cli_config.coordinate_mode,  # Pass coordinate mode
-        coordinate_scale=cli_config.coordinate_scale,  # Pass coordinate scale
-        provider=cli_config.provider,
-        provider_base_url=cli_config.provider_base_url,
-        provider_api_key=cli_config.provider_api_key,
-    )
+    if cli_config.env_mode == "genv_local":
+        dataset_builder = GenvDatasetBuilder(
+            tasks=cli_config.tasks,
+            eval_tasks=eval_tasks,
+            batch_size=cli_config.groups_per_batch,
+            group_size=cli_config.group_size,
+            model_name_for_tokenizer=cli_config.model_name,
+            renderer_name=renderer_name,
+            max_turns=cli_config.max_turns,
+            max_recent_turns=5,
+            seed=cli_config.seed,
+            db_session=db_session,
+        )
+    else:
+        dataset_builder = CUADatasetBuilder(
+            tasks=cli_config.tasks,
+            eval_tasks=eval_tasks,
+            batch_size=cli_config.groups_per_batch,
+            group_size=cli_config.group_size,
+            gbox_api_key=gbox_api_key,
+            tinker_api_key=tinker_api_key,  # Tinker API key for OpenAI-compatible API
+            rollout_model_name=None,  # Not used, rollout uses dynamic checkpoint path from training
+            model_name_for_tokenizer=cli_config.model_name,
+            renderer_name=renderer_name,
+            max_turns=cli_config.max_turns,
+            box_type=cli_config.box_type,
+            seed=cli_config.seed,
+            db_session=db_session,  # Pass database session for task saving (will be used in __call__)
+            training_id=training_id,  # Pass training ID
+            max_task_time_seconds=cli_config.max_task_time_seconds,
+            max_turn_time_seconds=cli_config.max_turn_time_seconds,
+            coordinate_mode=cli_config.coordinate_mode,  # Pass coordinate mode
+            coordinate_scale=cli_config.coordinate_scale,  # Pass coordinate scale
+            provider=cli_config.provider,
+            provider_base_url=cli_config.provider_base_url,
+            provider_api_key=cli_config.provider_api_key,
+        )
     # Don't close db_session here - it will be used when dataset_builder.__call__() is invoked
     # The session will be managed by the global database context
     
@@ -384,7 +468,9 @@ async def cli_main(cli_config: CLIConfig) -> None:
     # Note: rollouts.do_group_rollout was already overridden at module import time
     # to ensure metric_util uses our custom function
     # Wrap do_cua_group_rollout to add database recording
-    original_do_cua_group_rollout = do_cua_group_rollout
+    original_do_group_rollout = (
+        do_genv_group_rollout if cli_config.env_mode == "genv_local" else do_cua_group_rollout
+    )
     
     async def do_cua_group_rollout_with_db(
         env_group_builder,
@@ -507,7 +593,7 @@ async def cli_main(cli_config: CLIConfig) -> None:
                     if eval_obj:
                         eval_id = eval_obj.id
             
-            result = await original_do_cua_group_rollout(
+            result = await original_do_group_rollout(
                 env_group_builder=env_group_builder,
                 policy=policy,
                 model_path=model_path,

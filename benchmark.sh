@@ -42,6 +42,9 @@ PROVIDER_API_KEY=""                           # Optional: API key (for OpenRoute
 MODEL_NAME="Qwen/Qwen3-VL-30B-A3B-Instruct"
 MODEL_PATH=""                              # For Tinker: checkpoint path
 
+# Execution mode
+ENV_MODE="cua_gbox"                        # cua_gbox or genv_local
+
 # Evaluation dataset configuration
 EVAL_SOURCE_TYPE="task_adapter"
 EVAL_SPLIT_TYPE="eval"
@@ -49,6 +52,7 @@ TRAIN_RATIO=0
 SEED=42
 CATEGORY=""                               # Optional: filter by category (demo, airbnb, instagram)
 TASK_NAMES=""                             # Optional: filter by specific task names (comma-separated)
+TASKS_DIR=""                              # For genv_umetrip: path to genv-umetrip/tasks
 
 # Benchmark settings
 BENCHMARK_NAME=""                          # Optional: custom name for this benchmark run
@@ -77,6 +81,10 @@ LOG_PATH="./benchmark_logs"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --env-mode)
+            ENV_MODE="$2"
+            shift 2
+            ;;
         --provider)
             PROVIDER="$2"
             shift 2
@@ -99,6 +107,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --eval-source)
             EVAL_SOURCE_TYPE="$2"
+            shift 2
+            ;;
+        --tasks-dir)
+            TASKS_DIR="$2"
             shift 2
             ;;
         --eval-split)
@@ -181,11 +193,15 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Dataset Options:"
             echo "  --eval-source SOURCE            Eval data source (default: task_adapter)"
+            echo "  --tasks-dir DIR                 Tasks directory (required for eval-source=genv_umetrip)"
             echo "  --eval-split SPLIT              Eval split: train/eval (default: eval)"
             echo "  --train-ratio RATIO             Train/eval split ratio (default: 0)"
             echo "  --seed SEED                     Random seed (default: 42)"
             echo "  --category CATEGORY             Filter by category: demo/airbnb/instagram"
             echo "  --task-names, --tasks NAMES     Filter by task names (comma-separated, e.g., '12_enable_battery_saver,06_min_brightness')"
+            echo ""
+            echo "Execution Mode:"
+            echo "  --env-mode MODE                 cua_gbox or genv_local (default: cua_gbox)"
             echo ""
             echo "Benchmark Options:"
             echo "  --name, --benchmark-name NAME   Custom name for this benchmark run"
@@ -246,14 +262,43 @@ echo "============================================"
 echo ""
 
 # Check required environment variables
-if [ -z "$GBOX_API_KEY" ]; then
-    echo "ERROR: GBOX_API_KEY environment variable is not set"
-    echo "Please set it with: export GBOX_API_KEY=your_api_key"
-    exit 1
+if [ "$ENV_MODE" = "cua_gbox" ]; then
+    if [ -z "$GBOX_API_KEY" ]; then
+        echo "ERROR: GBOX_API_KEY environment variable is not set"
+        echo "Please set it with: export GBOX_API_KEY=your_api_key"
+        exit 1
+    fi
 fi
 
 if [ -z "$TINKER_API_KEY" ]; then
     echo "Note: TINKER_API_KEY not set, will use GBOX_API_KEY as fallback"
+fi
+
+# genv_local Android emulator configuration (explicit, no PATH fallbacks)
+if [ "$ENV_MODE" = "genv_local" ]; then
+    if [ -z "$ANDROID_SDK_ROOT" ] && [ -d "$HOME/Library/Android/sdk" ]; then
+        export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+    fi
+    if [ -z "$ANDROID_HOME" ] && [ -n "$ANDROID_SDK_ROOT" ]; then
+        export ANDROID_HOME="$ANDROID_SDK_ROOT"
+    fi
+    if [ -z "$GENV_EMULATOR_PATH" ] && [ -n "$ANDROID_SDK_ROOT" ] && [ -x "$ANDROID_SDK_ROOT/emulator/emulator" ]; then
+        export GENV_EMULATOR_PATH="$ANDROID_SDK_ROOT/emulator/emulator"
+    fi
+    if [ -z "$GENV_AVDMANAGER_PATH" ] && [ -n "$ANDROID_SDK_ROOT" ] && [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" ]; then
+        export GENV_AVDMANAGER_PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+    fi
+    if [ -n "$ANDROID_SDK_ROOT" ]; then
+        export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+    fi
+    if [ -z "$GENV_EMULATOR_PATH" ]; then
+        echo "ERROR: genv_local requires Android Emulator to be configured."
+        echo "Set either:"
+        echo "  export GENV_EMULATOR_PATH=\"/abs/path/to/Android/sdk/emulator/emulator\""
+        echo "or:"
+        echo "  export ANDROID_SDK_ROOT=\"/abs/path/to/Android/sdk\""
+        exit 1
+    fi
 fi
 
 # Check database connection
@@ -309,6 +354,7 @@ echo "  Max Task Time:      ${MAX_TASK_TIME}s"
 echo "  Max Turn Time:      ${MAX_TURN_TIME}s"
 echo "  Log Path:           $LOG_PATH"
 echo "  Coordinate Mode:    $COORDINATE_MODE"
+echo "  Env Mode:           $ENV_MODE"
 echo "----------------------------------------"
 echo ""
 
@@ -318,6 +364,11 @@ echo ""
 
 # Build evaluation task configuration JSON
 EVAL_TASKS_JSON="{\"source_type\": \"$EVAL_SOURCE_TYPE\", \"split_type\": \"$EVAL_SPLIT_TYPE\", \"train_ratio\": $TRAIN_RATIO, \"seed\": $SEED"
+
+# Add tasks_dir (required for genv_umetrip)
+if [ -n "$TASKS_DIR" ]; then
+    EVAL_TASKS_JSON="$EVAL_TASKS_JSON, \"tasks_dir\": \"$TASKS_DIR\""
+fi
 
 # Add optional category filter
 if [ -n "$CATEGORY" ]; then
@@ -333,6 +384,7 @@ EVAL_TASKS_JSON="$EVAL_TASKS_JSON}"
 
 # Build the command
 CMD="uv run python -m tinker_cookbook.recipes.cua_rl.benchmark \
+    env_mode=\"$ENV_MODE\" \
     provider=\"$PROVIDER\" \
     model_name=\"$MODEL_NAME\""
 

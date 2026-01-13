@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class TaskSourceConfig:
     """Configuration for loading tasks from a source."""
     
-    # Source type: "demo_training", "demo_eval", "demo_all", "ids", "file", "custom", "task_adapter"
+    # Source type: "demo_training", "demo_eval", "demo_all", "ids", "file", "custom", "task_adapter", "genv_umetrip"
     source_type: str
     
     # For "ids": list of task IDs
@@ -58,7 +58,7 @@ class TaskSourceConfig:
     # For "custom": list of task descriptions (strings)
     custom_tasks: Optional[List[str]] = None
     
-    # For "task_adapter": configuration
+    # For "task_adapter" / "genv_umetrip": configuration
     tasks_dir: Optional[str] = None  # Path to tasks directory (default: auto-detect)
     train_ratio: float = 0.8  # Ratio for train/eval split (only used if split_type is specified)
     split_type: Optional[str] = None  # "train" or "eval" - which split to use. If None, uses all tasks.
@@ -238,10 +238,25 @@ def load_tasks_from_config(
             if task_instance:
                 task._original_task = task_instance
             tasks.append(task)
+    elif config.source_type == "genv_umetrip":
+        from tinker_cookbook.recipes.cua_rl.genv_local.task_source import load_genv_tasks
+
+        if not config.tasks_dir:
+            raise ValueError("tasks_dir must be provided for source_type='genv_umetrip'")
+
+        tasks = load_genv_tasks(
+            tasks_dir=config.tasks_dir,
+            seed=config.seed or 42,
+            train_ratio=config.train_ratio,
+            split_type=config.split_type,
+            limit=config.limit,
+            save_to_db=save_to_db,
+            db_session=db_session,
+        )
     else:
         raise ValueError(
             f"Unknown source_type: {config.source_type}. "
-            "Supported: 'demo_training', 'demo_eval', 'demo_all', 'ids', 'file', 'custom', 'task_adapter'"
+            "Supported: 'demo_training', 'demo_eval', 'demo_all', 'ids', 'file', 'custom', 'task_adapter', 'genv_umetrip'"
         )
     
     # Apply filters for demo sources (only for demo_* source types, not task_adapter)
@@ -300,6 +315,9 @@ def load_tasks_from_config(
     
     # Save to database if requested
     if save_to_db and db_session is not None and tasks:
+        # genv_umetrip tasks handle DB saving internally (task + validator config).
+        if config.source_type == "genv_umetrip":
+            return tasks
         try:
             from tinker_cookbook.recipes.cua_rl.database.database_task_loader import (
                 save_cua_tasks_to_database,

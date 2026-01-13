@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 class BenchmarkConfig:
     """Configuration for benchmark evaluation - supports multiple providers."""
     
+    # Execution mode (matches cua_rl.core.train.CLIConfig.env_mode)
+    env_mode: str = "cua_gbox"  # "cua_gbox" | "genv_local"
+
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     model_path: str | None = None  # For Tinker: checkpoint path
@@ -92,7 +95,37 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
     
     # Convert benchmark config to training config
     # The trick: set groups_per_batch=0 to skip training, only run baseline
+    tasks_for_training: dict
+    eval_tasks = config.eval_tasks
+
+    if config.env_mode == "genv_local":
+        # We still must provide a valid tasks config because train.cli_main validates it.
+        # For baseline_only benchmarks, training tasks are not used, but config must be consistent.
+        if eval_tasks is None:
+            raise ValueError("env_mode='genv_local' requires eval_tasks with source_type='genv_umetrip'")
+        # Use the same tasks_dir for a minimal train split (not actually used in baseline_only).
+        if isinstance(eval_tasks, dict):
+            tasks_dir = eval_tasks.get("tasks_dir")
+        else:
+            tasks_dir = None
+            for item in eval_tasks:
+                if isinstance(item, dict) and item.get("source_type") == "genv_umetrip":
+                    tasks_dir = item.get("tasks_dir")
+                    break
+        if not tasks_dir:
+            raise ValueError("env_mode='genv_local' requires tasks_dir in eval_tasks")
+        tasks_for_training = {
+            "source_type": "genv_umetrip",
+            "tasks_dir": tasks_dir,
+            "split_type": "train",
+            "seed": config.seed,
+            "limit": 1,
+        }
+    else:
+        tasks_for_training = {"source_type": "demo_training", "limit": 1}
+
     cli_config = CLIConfig(
+        env_mode=config.env_mode,
         # Model settings
         model_name=config.model_name,
         load_checkpoint_path=config.model_path,  # For Tinker: checkpoint path
@@ -110,9 +143,9 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
         
         # Data settings  
         # Provide minimal training task config (required by dataset builder, but won't be used)
-        tasks={"source_type": "demo_training", "limit": 1},  # Minimal config
-        eval_tasks=config.eval_tasks,
-        use_default_eval_tasks=(config.eval_tasks is None),
+        tasks=tasks_for_training,
+        eval_tasks=eval_tasks,
+        use_default_eval_tasks=(eval_tasks is None),
         seed=config.seed,
         max_turns=config.max_turns,
         

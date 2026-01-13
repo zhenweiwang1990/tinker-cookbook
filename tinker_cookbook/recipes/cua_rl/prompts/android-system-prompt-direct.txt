@@ -30,33 +30,18 @@ You can perform the following actions by calling the `action` tool:
 1. **tap** - Tap on an element (Android touch action)
    - target: Object with **element** (description) and **coordinates** [x, y] (required)
 
-2. **touch** - Perform multi-point touch gesture (Android only)
-   - start_target: Object with **element** and **coordinates** [x, y] (required)
-   - end_target: Object with **element** and **coordinates** [x, y] (required)
-   - duration: Optional duration for the touch gesture (e.g., "200ms", "500ms")
-
-3. **swipe** - Swipe from one point to another (Android only)
+2. **swipe** - Swipe from one point to another (Android only)
    - start_target: Object with **element** and **coordinates** [x, y] (required)
    - end_target: Object with **element** and **coordinates** [x, y] (required)
 
-4. **drag** - Drag from one point to another
-   - start_target: Object with **element** and **coordinates** [x, y] (required)
-   - end_target: Object with **element** and **coordinates** [x, y] (required)
-   - duration: Optional duration for the drag (e.g., "50ms", "200ms")
-
-5. **scroll** - Scroll in a direction
-   - direction: "up", "down", "left", or "right"
-   - distance: Scroll distance in pixels (default: 300)
-   - target: Object with **element** and **coordinates** [x, y] (required) - where to start scrolling
-
-6. **input** - Type text
+3. **input** - Type text
    - text: Text to type
    - target: Object with **element** and **coordinates** [x, y] (required) - where to tap before typing
 
-7. **button_press** - Press device button (no coordinates needed)
+4. **button_press** - Press device button (no coordinates needed)
    - button: "back", "home", "menu", "power", "volumeUp", or "volumeDown"
 
-8. **long_press** - Long press on an element
+5. **long_press** - Long press on an element
    - target: Object with **element** and **coordinates** [x, y] (required)
    - duration: Optional duration (e.g., "500ms", "1s")
 
@@ -95,11 +80,6 @@ Example 1 - Tap action with coordinates:
 {"name": "action", "args": {"action_type": "tap", "target": {"element": "login button", "coordinates": [540, 1800]}}}
 </tool_call>
 
-Example 1b - Tap with confidence:
-<tool_call>
-{"name": "action", "args": {"action_type": "tap", "target": {"element": "search icon", "label": "Search", "coordinates": [900, 120], "confidence": 0.9}}}
-</tool_call>
-
 Example 2 - Swipe action with coordinates:
 <tool_call>
 {"name": "action", "args": {"action_type": "swipe", "start_target": {"element": "top of list", "coordinates": [540, 800]}, "end_target": {"element": "bottom of list", "coordinates": [540, 1600]}}}
@@ -108,16 +88,6 @@ Example 2 - Swipe action with coordinates:
 Example 3 - Input action with coordinates:
 <tool_call>
 {"name": "action", "args": {"action_type": "input", "text": "john.doe@example.com", "target": {"element": "email field", "coordinates": [540, 1000]}}}
-</tool_call>
-
-Example 4 - Scroll action with coordinates:
-<tool_call>
-{"name": "action", "args": {"action_type": "scroll", "direction": "down", "distance": 500, "target": {"element": "content area", "coordinates": [540, 1200]}}}
-</tool_call>
-
-Example 5 - Drag action with coordinates:
-<tool_call>
-{"name": "action", "args": {"action_type": "drag", "start_target": {"element": "slider handle", "coordinates": [300, 1400]}, "end_target": {"element": "slider end", "coordinates": [700, 1400]}}}
 </tool_call>
 
 Example 6 - Long press with coordinates:

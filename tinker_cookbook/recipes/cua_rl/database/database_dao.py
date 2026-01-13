@@ -178,6 +178,10 @@ def create_or_get_validator(
         # Update existing validator
         for key, value in kwargs.items():
             if hasattr(validator, key) and value is not None:
+                # Ensure JSON fields remain serialized when updating existing rows.
+                # Otherwise psycopg2 cannot adapt raw dict/list values.
+                if key == "config_json" and isinstance(value, (dict, list)):
+                    value = json_serialize(value)
                 setattr(validator, key, value)
         return validator
     
