@@ -155,6 +155,11 @@ class TinkerCuaAgent:
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
         self.coordinate_mode = coordinate_mode
+
+        # Backward-compatible fields used in logging/debug output.
+        # For non-Tinker providers, these may represent provider-native identifiers/keys.
+        self.tinker_api_key = tinker_api_key or provider_api_key or ""
+        self.tinker_model_path = tinker_model_path or provider_model_name or ""
         
         # Auto-detect coordinate_scale if not explicitly set
         if coordinate_scale is None:
@@ -222,6 +227,8 @@ class TinkerCuaAgent:
                 tokenizer=self.tokenizer,
             )
             self.provider = provider
+            # Keep legacy fields in sync for downstream logging/compat.
+            self.tinker_model_path = provider_model_name
             
         else:
             raise ValueError(
@@ -465,20 +472,12 @@ class TinkerCuaAgent:
         Returns:
             Parsed JSON object/array, or None if extraction fails
         """
-        # Find the first occurrence of start_char
-        start_pos = text.find(start_char)
-        if start_pos < 0:
-            return None
-        
-        # Use JSONDecoder.raw_decode() to parse JSON from the start position
-        # This method handles all JSON edge cases correctly (strings, escapes, nesting, etc.)
-        decoder = json.JSONDecoder()
-        try:
-            obj, end_pos = decoder.raw_decode(text, idx=start_pos)
-            return obj
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.debug(f"JSON decode error at position {start_pos}: {e}")
-            return None
+        from tinker_cookbook.utils.json_repair import extract_first_json
+
+        obj = extract_first_json(text, start_chars=(start_char,))
+        if obj is None:
+            logger.debug("JSON extract failed after repair attempts")
+        return obj
     
     def _parse_tool_calls(self, response_text: str) -> List[Dict[str, Any]]:
         """
@@ -496,6 +495,10 @@ class TinkerCuaAgent:
         matches1 = re.finditer(pattern1, response_text, re.DOTALL)
         for match in matches1:
             content = match.group(1).strip()
+            # Common model glitch: emit an extra "{" before a sibling field, e.g.
+            #   {"start_target": {...},{"end_target": {...}}}
+            # which is invalid JSON. Best-effort fix: turn "},{\"key\"" into ",\"key\"".
+            content = re.sub(r"\}\s*,\s*\{\s*(\"[a-zA-Z0-9_]+\"\s*:)", r"}, \1", content)
             # Try to extract JSON object
             tool_json = self._extract_json_from_text(content, start_char='{')
             if tool_json:
@@ -548,6 +551,13 @@ class TinkerCuaAgent:
                         except Exception:
                             # Leave as-is; TargetElement validation will fail loudly.
                             pass
+                    # Be forgiving: some models omit the 'element' field but provide coordinates.
+                    if "element" not in target_arg and "coordinates" in target_arg:
+                        try:
+                            target_arg = dict(target_arg)
+                            target_arg["element"] = "direct coordinates"
+                        except Exception:
+                            pass
                     target = TargetElement(**target_arg)
                 elif isinstance(target_arg, (list, tuple)) and len(target_arg) >= 2:
                     # Be forgiving: some models output coordinates directly as [x, y].
@@ -579,6 +589,12 @@ class TinkerCuaAgent:
                             start_arg["coordinates"] = [int(start_arg.pop("x")), int(start_arg.pop("y"))]
                         except Exception:
                             pass
+                    if "element" not in start_arg and "coordinates" in start_arg:
+                        try:
+                            start_arg = dict(start_arg)
+                            start_arg["element"] = "direct coordinates"
+                        except Exception:
+                            pass
                     start_target = TargetElement(**start_arg)
                 elif isinstance(start_arg, (list, tuple)) and len(start_arg) >= 2:
                     try:
@@ -604,6 +620,12 @@ class TinkerCuaAgent:
                         try:
                             end_arg = dict(end_arg)
                             end_arg["coordinates"] = [int(end_arg.pop("x")), int(end_arg.pop("y"))]
+                        except Exception:
+                            pass
+                    if "element" not in end_arg and "coordinates" in end_arg:
+                        try:
+                            end_arg = dict(end_arg)
+                            end_arg["element"] = "direct coordinates"
                         except Exception:
                             pass
                     end_target = TargetElement(**end_arg)
@@ -797,8 +819,25 @@ class TinkerCuaAgent:
             )
             logger.debug(f"[_sample_with_model] Generated text length: {len(text)} chars")
             
-            # Tokenize the generated text
-            tokens = self.tokenizer.encode(text)
+            # Tokenize the generated text.
+            #
+            # Important: OpenAI-compatible APIs return the assistant content *without* including the
+            # model's EOT token in the text. Our renderers' parse_response() logic often expects an
+            # explicit stop token (e.g., Qwen: <|im_end|>) to mark a well-formed message.
+            #
+            # To avoid spurious "parse_success=False" for HTTP providers, we append the stop sequence
+            # to the token stream before parsing.
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+            try:
+                stops = self.renderer.get_stop_sequences()
+                if stops:
+                    if isinstance(stops[0], int):
+                        tokens = tokens + [stops[0]]
+                    elif isinstance(stops[0], str):
+                        tokens = tokens + self.tokenizer.encode(stops[0], add_special_tokens=False)
+            except Exception:
+                # Best-effort; parsing may still succeed without explicit stop tokens for some renderers.
+                pass
             logprobs = []  # No logprobs for non-Tinker providers
         
         # Parse response using renderer (extracts <tool_call> tags, etc.)
@@ -1530,16 +1569,7 @@ class TinkerCuaAgent:
                 
                 model_call_time = time.time() - model_call_start
                 stage_timings['model_inference'] = model_call_time
-                if self.rollout_logger:
-                    self.rollout_logger.log_model_inference(turn, response_text, parse_success, model_call_time)
-                    if self.rollout_logger.current_turn:
-                        self.rollout_logger.current_turn["user_input"] = user_text
-                else:
-                    logger.info(f"[Turn {turn}] ✓ Model inference completed in {model_call_time:.3f}s")
-                    logger.info(f"[Turn {turn}] Parse success: {parse_success}")
-                    logger.info(f"[Turn {turn}] Model response length: {len(response_text)} characters")
-                    logger.info(f"[Turn {turn}] Model response (full):")
-                    logger.info("  " + "\n  ".join(response_text.split("\n")))
+                renderer_parse_success = bool(parse_success)
                 
                 # Parse tool calls - prefer renderer's parsed tool_calls, fallback to custom parsing
                 parse_start = time.time()
@@ -1566,14 +1596,29 @@ class TinkerCuaAgent:
                 
                 parse_time = time.time() - parse_start
                 stage_timings['action_parse'] = parse_time
+                overall_parse_success = bool(renderer_parse_success or len(tool_calls) > 0)
                 
-                # Log tool call parsing using rollout_logger if available
                 if self.rollout_logger:
+                    # Log model inference with an "overall" parse bit so the UI doesn't show false negatives
+                    # when renderer parsing fails but tool calls are still extractable from raw text.
+                    if self.rollout_logger.current_turn is not None:
+                        self.rollout_logger.current_turn["renderer_parse_success"] = renderer_parse_success
+                        self.rollout_logger.current_turn["tool_call_parse_success"] = bool(len(tool_calls) > 0)
+                        self.rollout_logger.current_turn["user_input"] = user_text
+                    self.rollout_logger.log_model_inference(turn, response_text, overall_parse_success, model_call_time)
                     self.rollout_logger.log_tool_calls(turn, tool_calls, parse_time, parser_type)
                 else:
                     logger.info(f"[Turn {turn}] Using tool_calls parsed by {parser_type}: {len(tool_calls)} found")
                     logger.info(f"[Turn {turn}] Tool call parsing completed in {parse_time:.3f}s")
                     logger.info(f"[Turn {turn}] Number of tool calls found: {len(tool_calls)}")
+                    logger.info(f"[Turn {turn}] ✓ Model inference completed in {model_call_time:.3f}s")
+                    logger.info(
+                        f"[Turn {turn}] Parse success: overall={overall_parse_success} "
+                        f"(renderer={renderer_parse_success}, tool_calls={len(tool_calls)})"
+                    )
+                    logger.info(f"[Turn {turn}] Model response length: {len(response_text)} characters")
+                    logger.info(f"[Turn {turn}] Model response (full):")
+                    logger.info("  " + "\n  ".join(response_text.split("\n")))
                 
                 if tool_calls:
                     # Execute tool calls

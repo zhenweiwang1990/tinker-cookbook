@@ -39,8 +39,9 @@ TRAIN_SOURCE_TYPE="task_adapter"
 TRAIN_SPLIT_TYPE="train"     # train or eval (for task_adapter)
 EVAL_SOURCE_TYPE="task_adapter"
 EVAL_SPLIT_TYPE="eval"        # train or eval (for task_adapter)
-TRAIN_RATIO=0.99              # Train/eval split ratio (only used with task_adapter)
+TRAIN_RATIO=0.8              # Train/eval split ratio (only used with task_adapter)
 SEED=42
+CATEGORY="demo"                   # Optional: filter tasks by category (demo, airbnb, instagram)
 
 # Training hyperparameters
 GROUP_SIZE=4
@@ -50,12 +51,12 @@ MAX_TOKENS=2048
 TEMPERATURE=1.0
 KL_PENALTY_COEF=0.0
 NUM_SUBSTEPS=1
-MAX_TURNS=3
+MAX_TURNS=20
 
 # Logging and evaluation
 LOG_PATH="./logs"
 EVAL_EVERY=10
-SAVE_EVERY=10
+SAVE_EVERY=2
 NUM_GROUPS_TO_LOG=1
 MAX_CONCURRENT_ROLLOUTS=8
 
@@ -71,8 +72,8 @@ MAX_TURN_TIME=300             # 5 minutes
 BOX_TYPE="android"            # android or pc
 
 # Coordinate generation mode
-COORDINATE_MODE="gbox"        # gbox or direct
-COORDINATE_SCALE=""           # auto (empty), true, or false (default: auto-detect based on mode)
+COORDINATE_MODE="direct"        # gbox or direct
+COORDINATE_SCALE="true"           # auto (empty), true, or false (default: auto-detect based on mode)
 
 # ============================================================================
 # Parse Command Line Arguments
@@ -110,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --seed)
             SEED="$2"
+            shift 2
+            ;;
+        --category)
+            CATEGORY="$2"
             shift 2
             ;;
         --group-size)
@@ -202,8 +207,8 @@ while [[ $# -gt 0 ]]; do
             echo "Training script for CUA RL with configurable parameters."
             echo ""
             echo "Model Options:"
-            echo "  --model MODEL_NAME              Model to train (default: Qwen/Qwen2.5-1.5B-Instruct)"
-            echo "  --lora-rank RANK                LoRA rank (default: 128)"
+            echo "  --model MODEL_NAME              Model to train (default: Qwen/Qwen3-VL-30B-A3B-Instruct)"
+            echo "  --lora-rank RANK                LoRA rank (default: 32)"
             echo ""
             echo "Data Options:"
             echo "  --train-source SOURCE           Training data source (default: task_adapter)"
@@ -212,6 +217,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --eval-split SPLIT              Eval split: train/eval (default: eval)"
             echo "  --train-ratio RATIO             Train/eval split ratio (default: 0.99)"
             echo "  --seed SEED                     Random seed (default: 42)"
+            echo "  --category CATEGORY             Filter by category: demo/airbnb/instagram"
             echo ""
             echo "Training Hyperparameters:"
             echo "  --group-size SIZE               Group size (default: 4)"
@@ -221,7 +227,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --temperature TEMP              Temperature (default: 1.0)"
             echo "  --kl-penalty COEF               KL penalty coefficient (default: 0.0)"
             echo "  --substeps NUM                  Number of substeps (default: 1)"
-            echo "  --max-turns TURNS               Max turns per task (default: 20)"
+            echo "  --max-turns TURNS               Max turns per task (default: 3)"
             echo ""
             echo "Logging and Evaluation:"
             echo "  --log-path PATH                 Log directory path (default: ./logs)"
@@ -242,6 +248,9 @@ while [[ $# -gt 0 ]]; do
             echo "Examples:"
             echo "  # Basic training"
             echo "  $0"
+            echo ""
+            echo "  # Filter tasks by category"
+            echo "  $0 --category demo"
             echo ""
             echo "  # Custom model and hyperparameters"
             echo "  $0 --model Qwen/Qwen2.5-3B-Instruct --lr 2e-5 --group-size 8"
@@ -307,6 +316,9 @@ echo "  Source:             $EVAL_SOURCE_TYPE"
 echo "  Split:              $EVAL_SPLIT_TYPE"
 echo "  Train Ratio:        $TRAIN_RATIO"
 echo "  Seed:               $SEED"
+if [ -n "$CATEGORY" ]; then
+    echo "  Category:           $CATEGORY"
+fi
 echo ""
 echo "Hyperparameters:"
 echo "  Group Size:         $GROUP_SIZE"
@@ -341,6 +353,12 @@ echo ""
 # Build task configuration JSON strings
 TASKS_JSON="{\"source_type\": \"$TRAIN_SOURCE_TYPE\", \"split_type\": \"$TRAIN_SPLIT_TYPE\", \"train_ratio\": $TRAIN_RATIO, \"seed\": $SEED}"
 EVAL_TASKS_JSON="{\"source_type\": \"$EVAL_SOURCE_TYPE\", \"split_type\": \"$EVAL_SPLIT_TYPE\", \"train_ratio\": $TRAIN_RATIO, \"seed\": $SEED}"
+
+# Add optional category filter (applies to both train and eval task sets)
+if [ -n "$CATEGORY" ]; then
+    TASKS_JSON="${TASKS_JSON%?}, \"category\": \"$CATEGORY\"}"
+    EVAL_TASKS_JSON="${EVAL_TASKS_JSON%?}, \"category\": \"$CATEGORY\"}"
+fi
 
 # Build the command
 CMD="uv run python -m tinker_cookbook.recipes.cua_rl.train \

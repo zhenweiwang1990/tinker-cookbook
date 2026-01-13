@@ -154,7 +154,9 @@
 
 .rolloutsList {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* Use minmax(0, 1fr) so grid items can shrink instead of overflowing.
+     This prevents the right column from being clipped by the parent card's overflow. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -166,6 +168,8 @@
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
+  /* Allow card contents to shrink within grid cell (default min-width:auto can overflow). */
+  min-width: 0;
 }
 
 .rolloutCard:hover {
@@ -179,6 +183,7 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+  gap: 8px;
 }
 
 .rolloutProgress {
@@ -192,6 +197,11 @@
   display: flex;
   align-items: center;
   gap: 5px;
+  /* Prevent long env labels from forcing the whole card wider than its grid cell. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .runningDot {
@@ -204,6 +214,9 @@
 .rolloutBadges {
   display: flex;
   gap: 4px;
+  /* Badges can grow; allow wrapping instead of forcing overflow. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .badge {

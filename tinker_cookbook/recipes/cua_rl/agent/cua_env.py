@@ -355,6 +355,10 @@ class CUADataset(RLDataset):
         batch_size: int,
         group_size: int,
         gbox_api_key: str,
+        # Provider configuration (used during rollouts)
+        provider: str = "tinker",
+        provider_base_url: Optional[str] = None,
+        provider_api_key: Optional[str] = None,
         tinker_api_key: Optional[str] = None,
         rollout_model_name: Optional[str] = None,  # Not used, kept for compatibility
         renderer: Optional[renderers.Renderer] = None,
@@ -374,6 +378,9 @@ class CUADataset(RLDataset):
         self.batch_size = batch_size
         self.group_size = group_size
         self.gbox_api_key = gbox_api_key
+        self.provider = provider
+        self.provider_base_url = provider_base_url
+        self.provider_api_key = provider_api_key
         self.tinker_api_key = tinker_api_key
         self.rollout_model_name = rollout_model_name
         self.renderer = renderer
@@ -437,6 +444,9 @@ class CUADataset(RLDataset):
             return CUAEnv(
                 task_description=_captured_desc,
                 gbox_api_key=self.gbox_api_key,
+                provider=self.provider,
+                provider_base_url=self.provider_base_url,
+                provider_api_key=self.provider_api_key,
                 tinker_api_key=self.tinker_api_key,
                 rollout_model_name=self.rollout_model_name,
                 renderer=self.renderer,
@@ -494,6 +504,10 @@ class CUADatasetBuilder(RLDatasetBuilder):
     coordinate_scale: Optional[bool] = None  # Auto: True for direct, False for gbox
     x_scale_ratio: Optional[float] = None  # X scaling ratio (default: screen_width / 1000)
     y_scale_ratio: Optional[float] = None  # Y scaling ratio (default: screen_height / 1000)
+    # Provider configuration (used during rollouts)
+    provider: str = "tinker"
+    provider_base_url: Optional[str] = None
+    provider_api_key: Optional[str] = None
     
     async def __call__(self) -> tuple[CUADataset, CUADataset | None]:
         from tinker_cookbook.tokenizer_utils import get_tokenizer
@@ -540,13 +554,14 @@ class CUADatasetBuilder(RLDatasetBuilder):
                 db_session.rollback()
         
         # Get renderer
-        tokenizer = get_tokenizer(self.model_name_for_tokenizer)
+        hf_tokenizer_model_name = model_info.get_tokenizer_model_name(self.model_name_for_tokenizer)
+        tokenizer = get_tokenizer(hf_tokenizer_model_name)
         renderer_name = self.renderer_name or model_info.get_recommended_renderer_name(
             self.model_name_for_tokenizer
         )
         # Get image processor if model is vision-language
         attributes = model_info.get_model_attributes(self.model_name_for_tokenizer)
-        image_processor = get_image_processor(self.model_name_for_tokenizer) if attributes.is_vl else None
+        image_processor = get_image_processor(hf_tokenizer_model_name) if attributes.is_vl else None
         renderer = renderers.get_renderer(renderer_name, tokenizer=tokenizer, image_processor=image_processor)
         
         dataset = CUADataset(
@@ -554,6 +569,9 @@ class CUADatasetBuilder(RLDatasetBuilder):
             batch_size=self.batch_size,
             group_size=self.group_size,
             gbox_api_key=self.gbox_api_key,
+            provider=self.provider,
+            provider_base_url=self.provider_base_url,
+            provider_api_key=self.provider_api_key,
             tinker_api_key=self.tinker_api_key,
             rollout_model_name=self.rollout_model_name,
             renderer=renderer,
@@ -573,14 +591,24 @@ class CUADatasetBuilder(RLDatasetBuilder):
         # Load evaluation tasks if provided
         eval_dataset = None
         if self.eval_tasks is not None:
+            eval_tasks = None
             if isinstance(self.eval_tasks, dict):
                 eval_config = TaskSourceConfig(**self.eval_tasks)
-                eval_tasks = load_tasks_from_config(eval_config, save_to_db=save_to_db, db_session=db_session)
+                eval_tasks = load_tasks_from_config(
+                    eval_config, save_to_db=save_to_db, db_session=db_session
+                )
             elif isinstance(self.eval_tasks, list):
                 if len(self.eval_tasks) == 0:
                     raise ValueError("eval_tasks list cannot be empty")
                 eval_configs = [TaskSourceConfig(**item) for item in self.eval_tasks]
-                eval_tasks = load_tasks_from_multiple_sources(eval_configs, save_to_db=save_to_db, db_session=db_session)
+                eval_tasks = load_tasks_from_multiple_sources(
+                    eval_configs, save_to_db=save_to_db, db_session=db_session
+                )
+            else:
+                raise ValueError(
+                    f"Invalid eval_tasks format: {type(self.eval_tasks)}. "
+                    "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
+                )
             
             # Commit eval task saves if we saved any tasks
             if save_to_db and db_session is not None and eval_tasks:
@@ -590,31 +618,36 @@ class CUADatasetBuilder(RLDatasetBuilder):
                 except Exception as e:
                     logger.error(f"[Dataset Builder] Failed to commit eval tasks to database: {e}", exc_info=True)
                     db_session.rollback()
-            else:
-                raise ValueError(
-                    f"Invalid eval_tasks format: {type(self.eval_tasks)}. "
-                    "Expected: dict (TaskSourceConfig) or List[dict] (multiple TaskSourceConfigs)"
-                )
             
-            # For evaluation, use group_size=1 (each task runs independently)
-            # and batch_size=1 (each task is a separate batch for simpler evaluation)
-            eval_dataset = CUADataset(
-                tasks=eval_tasks,
-                batch_size=1,  # Each task is a separate batch for evaluation
-                group_size=1,  # Each task runs independently, no group comparison needed
-                gbox_api_key=self.gbox_api_key,
-                tinker_api_key=self.tinker_api_key,
-                rollout_model_name=self.rollout_model_name,
-                renderer=renderer,
-                convo_prefix=self.convo_prefix,
-                max_turns=self.max_turns,
-                box_type=self.box_type,
-                max_recent_turns=self.max_recent_turns,
-                seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
-                max_task_time_seconds=self.max_task_time_seconds,
-                max_turn_time_seconds=self.max_turn_time_seconds,
-                coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
-            )
+            if not eval_tasks:
+                logger.warning(
+                    "[Dataset Builder] eval_tasks configured but loaded 0 tasks; "
+                    "disabling evaluation dataset."
+                )
+                eval_dataset = None
+            else:
+                # For evaluation, use group_size=1 (each task runs independently)
+                # and batch_size=1 (each task is a separate batch for simpler evaluation)
+                eval_dataset = CUADataset(
+                    tasks=eval_tasks,
+                    batch_size=1,  # Each task is a separate batch for evaluation
+                    group_size=1,  # Each task runs independently, no group comparison needed
+                    gbox_api_key=self.gbox_api_key,
+                    provider=self.provider,
+                    provider_base_url=self.provider_base_url,
+                    provider_api_key=self.provider_api_key,
+                    tinker_api_key=self.tinker_api_key,
+                    rollout_model_name=self.rollout_model_name,
+                    renderer=renderer,
+                    convo_prefix=self.convo_prefix,
+                    max_turns=self.max_turns,
+                    box_type=self.box_type,
+                    max_recent_turns=self.max_recent_turns,
+                    seed=self.seed + 9999,  # Use different seed for eval to ensure different shuffling
+                    max_task_time_seconds=self.max_task_time_seconds,
+                    max_turn_time_seconds=self.max_turn_time_seconds,
+                    coordinate_mode=self.coordinate_mode,  # Pass coordinate mode
+                )
         
         # Force flush before returning
         import sys

@@ -10,7 +10,7 @@ from .validator import Task16Validator
 @dataclass
 class Task16(Task):
     name: str = "16_check_gbox_keyboard_storage"
-    description: str = """Check how much storage space the GBOX Keyboard app is using. You must report the exact storage size (e.g., '73.73KB') in your finish message. The correct answer is 73.73KB."""
+    description: str = """Check how much storage space the GBOX Keyboard app is using."""
 
     def run(self, adb_client: AdbClient) -> bool:
         # TODO: implement UI steps for this task.

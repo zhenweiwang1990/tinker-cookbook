@@ -30,6 +30,7 @@ class AdbClient:
         gbox_box: Optional[Any] = None,
         gbox_client: Optional[Any] = None,
         enable_command_history: bool = False,
+        result_message: Optional[str] = None,
     ) -> None:
         """Initialize AdbClient.
         
@@ -38,9 +39,12 @@ class AdbClient:
             gbox_box: Optional GBox box object (for GBox command mode)
             gbox_client: Optional GBox client (alternative to gbox_box)
             enable_command_history: If True, record all executed commands for later retrieval
+            result_message: Optional agent completion message (e.g., from finish tool)
         """
         self.gbox_box = gbox_box
         self.gbox_client = gbox_client
+        # Optional context for validators that need the agent's reported completion message.
+        self.result_message = result_message
         
         self.use_gbox = True
         # Get box from client if needed

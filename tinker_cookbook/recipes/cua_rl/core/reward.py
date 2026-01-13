@@ -807,12 +807,14 @@ class ADBValidationResult:
 async def validate_task_validator_with_details(
     original_task: Any,
     gbox_client,
+    result_message: Optional[str] = None,
 ) -> Optional[ADBValidationResult]:
     """Validate task using the original Task object's validator, returning detailed information.
     
     Args:
         original_task: The original Task object with get_validator() method
         gbox_client: GBox client for executing commands
+        result_message: Optional agent completion message (from finish tool)
     
     Returns:
         ADBValidationResult with validation details, or None if validator is not available.
@@ -820,6 +822,7 @@ async def validate_task_validator_with_details(
     import time
     import io
     import sys
+    import inspect
 
     # We prefer returning a structured failure (success=False) over returning None,
     # because None causes the UI/DB to lose the underlying error context.
@@ -852,7 +855,11 @@ async def validate_task_validator_with_details(
             return None
         
         # Create AdbClient with gbox_client and enable command history
-        adb_client = AdbClient(gbox_client=gbox_client, enable_command_history=True)
+        adb_client = AdbClient(
+            gbox_client=gbox_client,
+            enable_command_history=True,
+            result_message=result_message,
+        )
 
         # Capture validator output (print statements) for debugging
         old_stdout = sys.stdout
@@ -862,7 +869,22 @@ async def validate_task_validator_with_details(
         success = False
         error: Exception | None = None
         try:
-            success = bool(validator.validate(adb_client))
+            # Backwards compatible validator calling:
+            # - validate(adb_client)
+            # - validate(adb_client, result_message)
+            # - validate(adb_client, result_message=...)
+            validate_fn = validator.validate
+            try:
+                sig = inspect.signature(validate_fn)
+            except (TypeError, ValueError):
+                sig = None
+
+            if sig is not None and "result_message" in sig.parameters:
+                success = bool(validate_fn(adb_client, result_message=result_message))
+            elif sig is not None and len(sig.parameters) >= 2:
+                success = bool(validate_fn(adb_client, result_message))
+            else:
+                success = bool(validate_fn(adb_client))
         except Exception as e:
             error = e
             success = False
@@ -938,6 +960,7 @@ async def validate_task_completion_with_details(
         validator_result = await validate_task_validator_with_details(
             original_task=task._original_task,
             gbox_client=gbox_client,
+            result_message=result_message,
         )
         if validator_result:
             return validator_result

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from ... import config
 from ....adb import AdbClient
 
 
 class Task16Validator:
     def validate(self, adb_client: AdbClient) -> bool:
-        # For API validation, check the finish message
-        # This should be validated by the training system checking agent's finish message
-        # Expected: finish message contains "73.73KB"
-        return True  # Placeholder - actual validation done by system
+        # Validate by checking the agent's completion message (finish tool message).
+        msg = getattr(adb_client, "result_message", None) or ""
+        return "106" in msg.lower()
 

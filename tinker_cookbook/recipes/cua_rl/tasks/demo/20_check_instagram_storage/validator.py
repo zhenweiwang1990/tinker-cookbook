@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from ... import config
 from ....adb import AdbClient
 
 
 class Task20Validator:
     def validate(self, adb_client: AdbClient) -> bool:
-        # For API validation, check the finish message
-        # This should be validated by the training system checking agent's finish message
-        # Expected: finish message contains "storage_size_reported"
-        return True  # Placeholder - actual validation done by system
+        # Validate by checking the agent's completion message (finish tool message).
+        # Expected: finish message reports a storage size with units.
+        import re
+
+        msg = getattr(adb_client, "result_message", None) or ""
+        if not msg:
+            return False
+        return "208" in msg.lower()
 

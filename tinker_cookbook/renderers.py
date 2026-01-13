@@ -19,6 +19,7 @@ from PIL import Image
 
 from tinker_cookbook.image_processing_utils import ImageProcessor
 from tinker_cookbook.tokenizer_utils import Tokenizer
+from tinker_cookbook.utils.json_repair import loads_dict
 
 logger = logging.getLogger(__name__)
 
@@ -651,21 +652,46 @@ class Qwen3Renderer(Renderer):
         return [self._end_message_token]
 
     def _parse_tool_call(self, tool_call_str: str) -> list[ToolCall] | None:
-        try:
-            tool_call = json.loads(tool_call_str)
-        except json.JSONDecodeError:
-            return None
-
-        if not isinstance(tool_call, dict):
+        tool_call = loads_dict(tool_call_str)
+        if tool_call is None:
             return None
         name = tool_call.get("name")
         # Support both "args" and "arguments" for compatibility
         args = tool_call.get("args") or tool_call.get("arguments")
         tool_id = tool_call.get("id")
-        if not isinstance(name, str) or not isinstance(args, dict):
-            return None
         if tool_id is not None and not isinstance(tool_id, str):
             tool_id = None
+
+        # Be forgiving: some models emit simplified action schemas.
+        # Example:
+        #   {"action":"swipe","start":[10,10],"end":[900,900]}
+        if not isinstance(name, str):
+            action_type = tool_call.get("action") or tool_call.get("action_type")
+            if isinstance(action_type, str):
+                name = "action"
+                args = {"action_type": action_type}
+                start = tool_call.get("start")
+                end = tool_call.get("end")
+                target = tool_call.get("target")
+                if isinstance(start, (list, tuple)) and len(start) >= 2:
+                    args["start_target"] = {"element": "direct coordinates", "coordinates": [start[0], start[1]]}
+                if isinstance(end, (list, tuple)) and len(end) >= 2:
+                    args["end_target"] = {"element": "direct coordinates", "coordinates": [end[0], end[1]]}
+                if isinstance(target, (list, tuple)) and len(target) >= 2:
+                    args["target"] = {"element": "direct coordinates", "coordinates": [target[0], target[1]]}
+            else:
+                return None
+
+        # Another forgiving case: {"name":"action", "action_type":"tap", ...} (no args wrapper)
+        if isinstance(name, str) and args is None:
+            args = {
+                k: v
+                for k, v in tool_call.items()
+                if k not in {"id", "name", "type"}
+            }
+
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return None
         # Convert to nested structure with arguments as JSON string
         return [
             ToolCall(
@@ -1388,6 +1414,12 @@ def get_renderer(
         return Qwen3VLRenderer(tokenizer, image_processor)
     elif name == "qwen3_vl_instruct":
         assert image_processor is not None, "qwen3_vl_instruct renderer requires an image_processor"
+        return Qwen3VLInstructRenderer(tokenizer, image_processor)
+    elif name == "qwen25_vl_instruct":
+        # Qwen2.5-VL Instruct uses the same OpenAI-compatible message format as our
+        # "instruct" Qwen3-VL renderer (no <think> tags). We keep a separate name so
+        # model_info can recommend it for Qwen2.5-family checkpoints.
+        assert image_processor is not None, "qwen25_vl_instruct renderer requires an image_processor"
         return Qwen3VLInstructRenderer(tokenizer, image_processor)
     elif name == "qwen3_disable_thinking":
         return Qwen3DisableThinkingRenderer(tokenizer)

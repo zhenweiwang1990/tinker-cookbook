@@ -250,9 +250,9 @@ async def _run_single_env_rollout(
     # Use Tinker's native API (supports multimodal inputs)
     # Get base_model_name from policy if available, otherwise use default
     base_model_name = (
-        policy.model_name 
-        if hasattr(policy, 'model_name') and policy.model_name is not None
-        else "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Default model name
+        getattr(policy, "model_name", None)
+        or getattr(getattr(policy, "sampling_client", None), "model_name", None)
+        or "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Default model name
     )
     
     # Force flush before starting rollout
@@ -690,12 +690,9 @@ async def _run_single_env_rollout(
         elif action_logprobs and len(action_logprobs) == len(action_tokens):
             final_logprobs = action_logprobs
         else:
-            # Mismatch: raise error since we require valid trajectory data
-            raise ValueError(
-                f"[Rollout] Turn {turn_num}: tokens length ({len(action_tokens)}) != logprobs length "
-                f"({len(action_logprobs) if action_logprobs else 0}). "
-                f"Token-level training requires matching tokens and logprobs."
-            )
+            # For OpenAI-compatible providers (vLLM/OpenRouter/OpenAI), we often do not have
+            # token-level logprobs. In that case, keep tokens but omit logprobs.
+            final_logprobs = None
         
         action = TokensWithLogprobs(
             tokens=action_tokens,
@@ -788,13 +785,14 @@ async def do_cua_group_rollout(
     
     sampling_client = policy.sampling_client
     
-    # If model_path was provided, validate and use it
+    # If model_path was provided, use it (validation depends on provider; see below)
     if model_path is not None:
-        if not (isinstance(model_path, str) and model_path.startswith('tinker://')):
-            raise ValueError(f"Invalid model_path format: {model_path}. Expected tinker://... format.")
+        if not isinstance(model_path, str):
+            raise ValueError(f"Invalid model_path type: {type(model_path)}")
     else:
         # Try to extract model_path from sampling client
-        # The model_path is a tinker://... path that can be used with OpenAI-compatible API
+        # For the Tinker provider, model_path is a tinker://... checkpoint path.
+        # For non-Tinker providers, model_path can be a provider-native model identifier (e.g. "Qwen/...")
         logger.warning("model_path not provided, attempting to extract from SamplingClient...")
         
         # Try multiple ways to access the model_path
@@ -808,7 +806,7 @@ async def do_cua_group_rollout(
         elif hasattr(sampling_client, 'holder') and hasattr(sampling_client.holder, '_model_path'):
             model_path = sampling_client.holder._model_path
         
-        if model_path is None or not (isinstance(model_path, str) and model_path.startswith('tinker://')):
+        if model_path is None or not isinstance(model_path, str):
             # If we can't get model_path, log detailed debug info and raise an error
             debug_info = {
                 "sampling_client_attrs": dir(sampling_client),
@@ -849,6 +847,15 @@ async def do_cua_group_rollout(
     for env_idx, env in enumerate(envs):
         if not isinstance(env, CUAEnv):
             raise ValueError(f"Expected CUAEnv, got {type(env)}")
+
+    # Provider-specific model_path validation:
+    # - Tinker provider: requires a tinker://... checkpoint path
+    # - Other providers: model_path is a provider-native model identifier
+    if any(getattr(env, "provider", "tinker") == "tinker" for env in envs):
+        if not (isinstance(model_path, str) and model_path.startswith("tinker://")):
+            raise ValueError(
+                f"Invalid model_path format for provider=tinker: {model_path}. Expected tinker://... format."
+            )
     
     # Use provided step/batch or fall back to global variables
     trajectory_step = step if step is not None else _rollout_step

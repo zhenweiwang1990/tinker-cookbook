@@ -200,9 +200,28 @@ class HTTPInferenceClient(BaseInferenceClient):
                             # Convert image to OpenAI format
                             image_data = part.get("image", "")
                             
-                            # Ensure data URI format
+                            # Ensure data URI format (support base64 strings, URLs, bytes, or PIL images)
+                            if not isinstance(image_data, str):
+                                import base64
+                                import io
+                                from PIL import Image
+                                
+                                if isinstance(image_data, Image.Image):
+                                    buf = io.BytesIO()
+                                    image_data.save(buf, format="PNG")
+                                    image_data = base64.b64encode(buf.getvalue()).decode("ascii")
+                                elif isinstance(image_data, (bytes, bytearray)):
+                                    image_data = base64.b64encode(bytes(image_data)).decode("ascii")
+                                else:
+                                    raise TypeError(
+                                        f"Unsupported image type in message content: {type(image_data)}"
+                                    )
+                            
                             if not image_data.startswith("data:"):
-                                image_data = f"data:image/png;base64,{image_data}"
+                                if image_data.startswith("http://") or image_data.startswith("https://"):
+                                    image_data = image_data
+                                else:
+                                    image_data = f"data:image/png;base64,{image_data}"
                             
                             openai_content.append({
                                 "type": "image_url",

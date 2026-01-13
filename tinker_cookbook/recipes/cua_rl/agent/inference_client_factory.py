@@ -109,6 +109,12 @@ def create_inference_client(
         if provider in PROVIDER_DEFAULTS:
             base_url = PROVIDER_DEFAULTS[provider]["base_url"]
             logger.info(f"Using default base_url for {provider}: {base_url}")
+    elif provider == "vllm" and base_url:
+        # vLLM serves the OpenAI-compatible API under /v1 by default.
+        # Users often pass http://host:port; make that Just Work.
+        base_url = base_url.rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = base_url + "/v1"
     
     # Auto-detect API key from environment
     if not api_key:

@@ -373,6 +373,9 @@ async def cli_main(cli_config: CLIConfig) -> None:
         max_turn_time_seconds=cli_config.max_turn_time_seconds,
         coordinate_mode=cli_config.coordinate_mode,  # Pass coordinate mode
         coordinate_scale=cli_config.coordinate_scale,  # Pass coordinate scale
+        provider=cli_config.provider,
+        provider_base_url=cli_config.provider_base_url,
+        provider_api_key=cli_config.provider_api_key,
     )
     # Don't close db_session here - it will be used when dataset_builder.__call__() is invoked
     # The session will be managed by the global database context
@@ -930,6 +933,53 @@ async def cli_main(cli_config: CLIConfig) -> None:
         return result
     
     rl_train.save_checkpoint_and_get_sampling_client = save_checkpoint_with_db_recording
+
+    # ---------------------------------------------------------------------------------
+    # Evaluation-only (multi-provider) mode
+    # ---------------------------------------------------------------------------------
+    # For non-Tinker providers (vLLM/OpenRouter/OpenAI), we currently support evaluation
+    # only (no training), since logprobs are not available.
+    if cli_config.baseline_only and cli_config.provider != "tinker":
+        from types import SimpleNamespace
+        from tinker_cookbook.rl.metric_util import RLTestSetEvaluator
+
+        logger.info(
+            f"[Eval Only] provider={cli_config.provider}. Running baseline evaluation without Tinker training client."
+        )
+
+        # Build datasets (eval_dataset contains the evaluation tasks)
+        _train_dataset, eval_dataset = await dataset_builder()
+        if eval_dataset is None:
+            raise ValueError(
+                "baseline_only=True but no eval_tasks were configured (eval_dataset is None)."
+            )
+
+        evaluators = [
+            RLTestSetEvaluator(
+                dataset=eval_dataset,
+                max_tokens=cli_config.max_tokens,
+                name="test",
+                num_groups_to_log=cli_config.num_groups_to_log,
+            )
+        ]
+
+        # Minimal cfg object for logtree
+        fake_cfg = SimpleNamespace(log_path=log_path, num_groups_to_log=cli_config.num_groups_to_log)
+
+        # Dummy sampling_client: only used as a container accessed by the CUA rollout code.
+        sampling_client = SimpleNamespace(
+            model_path=cli_config.model_name,  # passed as model identifier to non-Tinker providers
+            model_name=cli_config.model_name,  # used for tokenizer/renderer defaults
+        )
+
+        metrics = await rl_train.run_baseline_evaluations_parallel(
+            evaluators=evaluators,
+            sampling_client=sampling_client,
+            cfg=fake_cfg,
+            model_path=cli_config.model_name,
+        )
+        logger.info(f"[Eval Only] ✓ Baseline evaluation completed ({len(metrics)} metrics).")
+        return
     
     # Force flush before starting training
     import sys

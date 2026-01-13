@@ -282,7 +282,7 @@ DEMO_TRAINING_TASKS = [
     CUATask(
         id="train_23_check_gbox_keyboard_storage",
         name="Check GBOX Keyboard Storage Size",
-        description="Check how much storage space the GBOX Keyboard app is using. You must report the exact storage size (e.g., '73.73KB') in your finish message. The correct answer is 73.73KB.",
+        description="Check how much storage space the GBOX Keyboard app is using.",
         difficulty=TaskDifficulty.MEDIUM,
         category=TaskCategory.SYSTEM,
         max_steps=16,
