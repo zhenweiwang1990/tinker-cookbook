@@ -249,6 +249,7 @@ def load_tasks_from_config(
             seed=config.seed or 42,
             train_ratio=config.train_ratio,
             split_type=config.split_type,
+            task_names=config.task_names,
             limit=config.limit,
             save_to_db=save_to_db,
             db_session=db_session,

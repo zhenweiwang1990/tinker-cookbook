@@ -42,6 +42,8 @@ export default function RolloutDetail({
 }: RolloutDetailProps) {
   const [data, setData] = useState<RolloutDetailData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
   // Use turns.length as the index for Validation tab, -1 for Env Build tab
   const [selectedTurnIndex, setSelectedTurnIndex] = useState<number>(propSelectedTurnIndex !== null && propSelectedTurnIndex !== undefined ? propSelectedTurnIndex : -1);
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
@@ -103,6 +105,42 @@ export default function RolloutDetail({
       console.error('Failed to fetch rollout details:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const applyValidationOverride = async (success: boolean) => {
+    setOverrideError(null);
+
+    const confirmed = window.confirm(
+      `Manually set validation result to ${success ? 'PASSED' : 'FAILED'}?`
+    );
+    if (!confirmed) return;
+
+    const reason = window.prompt('Reason (optional):', '') ?? '';
+
+    setOverrideSaving(true);
+    try {
+      const res = await fetch(`/api/rollouts/${rolloutId}/validation-override`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success,
+          reason: reason.trim() ? reason.trim() : null,
+        }),
+      });
+
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.error || `HTTP ${res.status}`);
+      }
+
+      // Refresh the view to reflect updated DB state.
+      await fetchDetails();
+    } catch (e: any) {
+      console.error('Failed to override validation:', e);
+      setOverrideError(e?.message || 'Failed to override validation');
+    } finally {
+      setOverrideSaving(false);
     }
   };
 
@@ -639,6 +677,33 @@ export default function RolloutDetail({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTurnId, data?.turns]);
+
+  // When viewing Env Build tab, preload the reset screenshot observation (if present).
+  useEffect(() => {
+    if (!data?.rollout?.trajectory_data_json || !data?.turns?.length) return;
+    if (selectedTurnIndex !== -1) return;
+
+    try {
+      const trajectoryData = typeof data.rollout.trajectory_data_json === 'string'
+        ? JSON.parse(data.rollout.trajectory_data_json)
+        : data.rollout.trajectory_data_json;
+      const executionDetails = trajectoryData?.execution_details || trajectoryData;
+      const envBuild = executionDetails?.env_build;
+      const resetRef = envBuild?.reset_screenshot;
+      const resetTurnNum = resetRef?.turn;
+
+      if (typeof resetTurnNum !== 'number') return;
+      const turnObj = data.turns.find((t: any) => t && t.turn === resetTurnNum);
+      const turnId = turnObj?.id;
+      if (!turnId) return;
+
+      if (!turnDetailsCacheRef.current.has(turnId) && !loadingTurnDetailsRef.current.has(turnId)) {
+        loadTurnDetails(turnId);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }, [data?.rollout?.trajectory_data_json, data?.turns, selectedTurnIndex]);
   
   // NOW we can have conditional returns (all hooks are above)
   if (loading) {
@@ -984,9 +1049,61 @@ export default function RolloutDetail({
                   }
                   
                   const { stages, total_time, status, box_id, box_type, apk_path, apk_size_mb, prehook_executed, prehook_output } = envBuildData;
+                  const resetScreenshotRef = envBuildData?.reset_screenshot || null;
+
+                  const getScreenshotUrl = (uri: string | null) => {
+                    if (!uri) return null;
+                    if (uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
+                      return uri;
+                    }
+                    const cleanPath = uri.startsWith('/') ? uri.slice(1) : uri;
+                    const normalizedPath = cleanPath.startsWith('screenshots/') ? cleanPath.slice('screenshots/'.length) : cleanPath;
+                    return `/api/screenshots/${normalizedPath}`;
+                  };
+
+                  let resetScreenshotUrl: string | null = null;
+                  if (
+                    resetScreenshotRef &&
+                    typeof resetScreenshotRef.turn === 'number' &&
+                    typeof resetScreenshotRef.obs_type === 'string'
+                  ) {
+                    const resetTurn = turns.find((t: any) => t && t.turn === resetScreenshotRef.turn);
+                    const resetTurnId = resetTurn?.id;
+                    const resetTurnDetails = resetTurnId ? turnDetailsCache.get(resetTurnId) : null;
+                    const obs = resetTurnDetails?.observations?.find((o: any) => o && o.obs_type === resetScreenshotRef.obs_type);
+                    resetScreenshotUrl = getScreenshotUrl(obs?.screenshot_uri ?? null);
+                  }
                   
                   return (
                     <div style={{ padding: '20px' }}>
+                      {/* Reset Screenshot (stored as an observation, referenced from env_build) */}
+                      {resetScreenshotUrl && (
+                        <div style={{ marginBottom: '24px' }}>
+                          <h3 style={{ margin: '0 0 12px 0', fontSize: '18px', fontWeight: 600 }}>
+                            Reset Screenshot
+                          </h3>
+                          <div
+                            className={styles.screenshotContainer}
+                            onClick={() => handleScreenshotClick(resetScreenshotUrl)}
+                            style={{ cursor: 'pointer', position: 'relative', display: 'inline-block' }}
+                          >
+                            <img
+                              src={resetScreenshotUrl}
+                              alt="Reset screenshot"
+                              className={styles.screenshotImg}
+                              style={{
+                                maxWidth: '100%',
+                                maxHeight: '600px',
+                                width: 'auto',
+                                height: 'auto',
+                                objectFit: 'contain',
+                                display: 'block',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
                       {/* Summary */}
                       <div style={{ 
                         marginBottom: '24px', 
@@ -1119,7 +1236,24 @@ export default function RolloutDetail({
                                     }}>
                                       {Object.entries(stageDetails).map(([key, value]) => (
                                         <div key={key} style={{ marginBottom: '4px' }}>
-                                          <strong>{key}:</strong> {String(value)}
+                                          <strong>{key}:</strong>{' '}
+                                          {value !== null && typeof value === 'object' ? (
+                                            <pre style={{
+                                              margin: '6px 0 0 0',
+                                              backgroundColor: '#f8f9fa',
+                                              border: '1px solid #eee',
+                                              borderRadius: '4px',
+                                              padding: '8px',
+                                              overflow: 'auto',
+                                              maxHeight: '260px',
+                                              whiteSpace: 'pre-wrap',
+                                              wordBreak: 'break-word'
+                                            }}>
+                                              {JSON.stringify(value, null, 2)}
+                                            </pre>
+                                          ) : (
+                                            <span>{String(value)}</span>
+                                          )}
                                         </div>
                                       ))}
                                     </div>
@@ -1525,6 +1659,63 @@ export default function RolloutDetail({
                   }}>
                     {validation.success ? '✓ Passed' : '✗ Failed'}
                   </div>
+                </div>
+
+                {/* Manual Override */}
+                <div className={styles.overrideRow}>
+                  <div className={styles.overrideTitle}>Manual override</div>
+                  <div className={styles.overrideHint}>
+                    (This updates the final validation status shown in the monitor.)
+                  </div>
+                  <div className={styles.overrideButtons}>
+                    <button
+                      className={`${styles.overrideButton} ${styles.overridePass}`}
+                      onClick={() => applyValidationOverride(true)}
+                      disabled={overrideSaving}
+                      title="Manually mark validation as passed"
+                    >
+                      Mark Passed
+                    </button>
+                    <button
+                      className={`${styles.overrideButton} ${styles.overrideFail}`}
+                      onClick={() => applyValidationOverride(false)}
+                      disabled={overrideSaving}
+                      title="Manually mark validation as failed"
+                    >
+                      Mark Failed
+                    </button>
+                  </div>
+                  {overrideSaving && (
+                    <div className={styles.overrideMeta}>Saving…</div>
+                  )}
+                  {overrideError && (
+                    <div className={styles.overrideMeta} style={{ color: '#dc3545' }}>
+                      Error: {overrideError}
+                    </div>
+                  )}
+                  {(() => {
+                    try {
+                      const details = typeof validation.details_json === 'string'
+                        ? JSON.parse(validation.details_json)
+                        : validation.details_json;
+                      const ho = details?.human_override;
+                      if (!ho) return null;
+                      return (
+                        <div className={styles.overrideMeta}>
+                          Last override:{' '}
+                          <code>{String(ho.overridden_success)}</code> at{' '}
+                          <code>{String(ho.overridden_at || '')}</code>
+                          {ho.reason ? (
+                            <>
+                              {' '}— reason: <code>{String(ho.reason)}</code>
+                            </>
+                          ) : null}
+                        </div>
+                      );
+                    } catch (e) {
+                      return null;
+                    }
+                  })()}
                 </div>
                 
                 {/* Validation Details */}

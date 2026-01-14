@@ -184,6 +184,9 @@ class TinkerCuaAgent:
         # Initialize tokenizer and renderer (needed for all providers)
         self.tokenizer = get_tokenizer(base_model_name)
         image_processor = get_image_processor(base_model_name)
+        provider_lower = (provider or "").lower().strip()
+        if renderer_name is None and provider_lower == "doubao_private":
+            renderer_name = "doubao_private"
         renderer_name = renderer_name or "qwen3_vl_instruct"
         self.renderer = renderers.get_renderer(
             renderer_name,
@@ -1036,6 +1039,7 @@ class TinkerCuaAgent:
                 max_turns=self.max_turns,
                 cua_guide=apk_config.cua_guide,  # Use guide from config
                 box_type=self.box_type,
+                provider=self.provider,
                 coordinate_mode=self.coordinate_mode,
                 coordinate_scale=self.coordinate_scale,
             )
@@ -1490,7 +1494,19 @@ class TinkerCuaAgent:
                                             elif isinstance(item, str):
                                                 msg_dict["content"].append({"type": "text", "text": item})
                                             else:
-                                                # PIL.Image.Image or other objects – avoid stringifying into "<PIL.Image.Image ...>"
+                                                # renderers.ImagePart / renderers.TextPart / PIL.Image.Image / other objects
+                                                # – avoid stringifying images into "<...Image ...>" blobs.
+                                                try:
+                                                    item_type = getattr(item, "type", None)
+                                                    if item_type in ("image", "image_url") or (isinstance(item_type, str) and "image" in item_type):
+                                                        msg_dict["content"].append({"type": "image", "url": "__SCREENSHOT_BEFORE__"})
+                                                        continue
+                                                    if item_type == "text" and hasattr(item, "text"):
+                                                        msg_dict["content"].append({"type": "text", "text": getattr(item, "text")})
+                                                        continue
+                                                except Exception:
+                                                    pass
+                                                
                                                 type_name = type(item).__name__
                                                 if type_name.lower().endswith("image") or "PIL" in str(type(item)):
                                                     msg_dict["content"].append({"type": "image", "url": "__SCREENSHOT_BEFORE__"})
@@ -1509,6 +1525,10 @@ class TinkerCuaAgent:
                                     "messages": readable_messages_list,
                                     # Used by training-monitor to resolve the placeholder image URL
                                     "image_placeholders": {"__SCREENSHOT_BEFORE__": "screenshot_before"},
+                                    "meta": {
+                                        "turn": int(turn),
+                                        "max_turns": int(self.max_turns),
+                                    },
                                 }
                             except Exception as e:
                                 logger.warning(f"[Turn {turn}] Failed to create readable messages format: {e}")
@@ -1630,7 +1650,7 @@ class TinkerCuaAgent:
                         
                         # Validate tool call format
                         if not tool_name:
-                            error_msg = f"Tool call {tool_call_idx + 1} is missing 'name' field. Tool call format: {{'name': 'tool_name', 'args': {{...}}}}"
+                            error_msg = f"Tool call {tool_call_idx + 1} is missing required field: 'name'."
                             self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
@@ -1644,7 +1664,10 @@ class TinkerCuaAgent:
                             continue
                         
                         if not isinstance(tool_args, dict):
-                            error_msg = f"Tool call {tool_call_idx + 1} has invalid 'args' field (expected dict, got {type(tool_args)}). Tool call format: {{'name': 'tool_name', 'args': {{...}}}}"
+                            error_msg = (
+                                f"Tool call {tool_call_idx + 1} has invalid field type: 'args' "
+                                f"(expected dict, got {type(tool_args)})."
+                            )
                             self.parse_errors += 1
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
@@ -1660,7 +1683,7 @@ class TinkerCuaAgent:
                         # Validate tool arguments (basic check for required fields)
                         if tool_name == "action" and "action_type" not in tool_args:
                             self.tool_arg_errors += 1
-                            error_msg = f"Tool call {tool_call_idx + 1} (action) is missing required 'action_type' field in args. Tool call format: {{'name': 'action', 'args': {{'action_type': 'tap'|'swipe'|..., ...}}}}"
+                            error_msg = f"Tool call {tool_call_idx + 1} is missing required field: args.action_type."
                             if self.rollout_logger:
                                 self.rollout_logger.log(f"[Turn {turn}] ⚠ Tool call parse error: {error_msg}")
                             else:
@@ -1820,6 +1843,16 @@ class TinkerCuaAgent:
                     
                     # Add tool results as user message
                     if tool_results:
+                        parse_error_msgs = []
+                        for tr in tool_results:
+                            if isinstance(tr, dict) and tr.get("status") == "parse_error" and tr.get("error"):
+                                parse_error_msgs.append(str(tr.get("error")))
+                        if parse_error_msgs:
+                            # Only provide the error diagnostics; do not prescribe a specific output format
+                            # because provider/model tool-call encodings differ.
+                            parse_error_text = "Parse errors detected:\n- " + "\n- ".join(parse_error_msgs)
+                            self.messages.append(renderers.Message(role="user", content=parse_error_text))
+
                         tool_result_text = f"Tool execution results: {json.dumps(tool_results, indent=2)}"
                         tool_result_msg = renderers.Message(
                             role="user",
@@ -1847,6 +1880,11 @@ class TinkerCuaAgent:
                                 task_id_str = getattr(self.task, 'id', None)
                             
                             # Record turn (this will create the turn if it doesn't exist)
+                            turn_metrics = {"stage_timings": stage_timings}
+                            parse_meta = getattr(self.renderer, "last_parse_metadata", None)
+                            if isinstance(parse_meta, dict) and parse_meta.get("provider") == "doubao_private":
+                                # Optional enhancement: persist structured parse metadata for training-monitor/debug.
+                                turn_metrics["model_parse"] = parse_meta
                             final_turn_id = record_turn(
                                 None,  # session parameter is ignored by compat layer
                                 self.rollout_id,
@@ -1857,7 +1895,7 @@ class TinkerCuaAgent:
                                 turn_time=turn_time,
                                 model_response=response_text,  # Store full LLM output
                                 expected_task_id_str=task_id_str,  # Pass task ID for verification
-                                metrics={"stage_timings": stage_timings},  # Store precise timing for each stage
+                                metrics=turn_metrics,  # Store timing + optional parse metadata
                             )
                             
                             if not final_turn_id:
@@ -1932,7 +1970,44 @@ class TinkerCuaAgent:
                         break
                 else:
                     # No tool calls found: return error message and continue rollout
-                    error_msg = "No tool calls found in model response. Please use the available tools (action, wait, finish) to complete the task."
+                    parse_meta = getattr(self.renderer, "last_parse_metadata", None)
+                    parse_hint = ""
+                    if isinstance(parse_meta, dict):
+                        # Different renderers may use different keys; keep this best-effort + compact.
+                        detail = (
+                            parse_meta.get("error")
+                            or parse_meta.get("parse_error")
+                            or parse_meta.get("reason")
+                            or parse_meta.get("message")
+                        )
+                        if detail:
+                            parse_hint = f"\n\nParse detail: {detail}"
+                    
+                    # Lightweight diagnostics without prescribing a specific provider format.
+                    brace_open = response_text.count("{")
+                    brace_close = response_text.count("}")
+                    bracket_open = response_text.count("[")
+                    bracket_close = response_text.count("]")
+                    has_name_field = ('"name"' in response_text) or ("'name'" in response_text)
+                    has_args_field = ('"args"' in response_text) or ("'args'" in response_text)
+                    has_tool_tag = ("<tool_call" in response_text) or ("</tool_call>" in response_text) or ("<function_calls" in response_text)
+                    
+                    diag_lines = [
+                        "Parse error: no tool calls could be extracted from the model response.",
+                        f"- renderer_parse_success: {renderer_parse_success}",
+                        f"- parser: {parser_type}",
+                        f"- extracted_tool_calls: {len(tool_calls)}",
+                    ]
+                    if brace_open != brace_close:
+                        diag_lines.append(f"- brace_balance_mismatch: '{{'={brace_open}, '}}'={brace_close}")
+                    if bracket_open != bracket_close:
+                        diag_lines.append(f"- bracket_balance_mismatch: '['={bracket_open}, ']'={bracket_close}")
+                    if has_name_field or has_args_field:
+                        diag_lines.append(f"- saw_fields_in_text: name={has_name_field}, args={has_args_field}")
+                    if has_tool_tag:
+                        diag_lines.append("- saw_toolcall_markup: true")
+                    
+                    error_msg = "\n".join(diag_lines) + f"{parse_hint}"
                     
                     assistant_msg = renderers.Message(
                         role="assistant",
@@ -1967,6 +2042,10 @@ class TinkerCuaAgent:
                                 task_id_str = getattr(self.task, 'id', None)
                             
                             # Record turn end (this will create the turn if it doesn't exist)
+                            turn_metrics = {"stage_timings": stage_timings}
+                            parse_meta = getattr(self.renderer, "last_parse_metadata", None)
+                            if isinstance(parse_meta, dict) and parse_meta.get("provider") == "doubao_private":
+                                turn_metrics["model_parse"] = parse_meta
                             final_turn_id = record_turn(
                                 None,  # session parameter is ignored by compat layer
                                 self.rollout_id,
@@ -1977,7 +2056,7 @@ class TinkerCuaAgent:
                                 turn_time=turn_time,
                                 model_response=response_text,  # Store full LLM output
                                 expected_task_id_str=task_id_str,  # Pass task ID for verification
-                                metrics={"stage_timings": stage_timings},  # Store precise timing for each stage
+                                metrics=turn_metrics,  # Store timing + optional parse metadata
                             )
                             
                             if final_turn_id is not None:
@@ -2023,6 +2102,10 @@ class TinkerCuaAgent:
                         )
                         
                         # Record turn end (this will create the turn if it doesn't exist)
+                        turn_metrics = {"stage_timings": stage_timings} if 'stage_timings' in locals() else None
+                        parse_meta = getattr(self.renderer, "last_parse_metadata", None)
+                        if isinstance(turn_metrics, dict) and isinstance(parse_meta, dict) and parse_meta.get("provider") == "doubao_private":
+                            turn_metrics["model_parse"] = parse_meta
                         final_turn_id = record_turn(
                             None,  # session parameter is ignored by compat layer
                             self.rollout_id,
@@ -2033,7 +2116,7 @@ class TinkerCuaAgent:
                             turn_time=turn_time,
                             model_response=response_text,  # Store full LLM output
                             expected_task_id_str=task_id_str,  # Pass task ID for verification
-                            metrics={"stage_timings": stage_timings} if 'stage_timings' in locals() else None,  # Store precise timing if available
+                            metrics=turn_metrics,  # Store timing + optional parse metadata if available
                         )
                         
                         if final_turn_id is not None:

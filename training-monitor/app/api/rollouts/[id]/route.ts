@@ -80,7 +80,7 @@ export async function GET(
       SELECT id, rollout_id, turn, start_time, end_time, turn_time, reward, 
              episode_done, metrics_json, model_response, created_at
       FROM turn 
-      WHERE rollout_id = $1
+      WHERE rollout_id = $1 AND turn > 0
       ORDER BY turn ASC
     `, [rolloutId]);
 

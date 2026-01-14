@@ -33,6 +33,13 @@ class BenchmarkConfig:
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     model_path: str | None = None  # For Tinker: checkpoint path
+    # Base model used for tokenizer + renderer selection.
+    #
+    # For non-Tinker providers, `model_name` may be a provider-native identifier (e.g. Ark endpoint
+    # IDs like `ep-...`) that isn't in our model registry. This lets you still pick a compatible
+    # tokenizer/chat-template family for prompt rendering.
+    model_name_for_tokenizer: str | None = None
+    renderer_name: str | None = None
     
     # Provider configuration (NEW)
     provider: str = "tinker"  # "tinker", "vllm", "openrouter", "openai"
@@ -92,6 +99,16 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
     logger.info(f"Model: {config.model_name}")
     if config.model_path:
         logger.info(f"Checkpoint: {config.model_path}")
+
+    # Choose base model for tokenizer/renderer defaults.
+    # Heuristic: if the provider model id is not in org/model form, default to a strong VLM
+    # template family that works for Android CUA prompts.
+    model_name_for_tokenizer = config.model_name_for_tokenizer
+    if not model_name_for_tokenizer:
+        if "/" not in config.model_name and "\\" not in config.model_name:
+            model_name_for_tokenizer = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+        else:
+            model_name_for_tokenizer = config.model_name
     
     # Convert benchmark config to training config
     # The trick: set groups_per_batch=0 to skip training, only run baseline
@@ -128,6 +145,8 @@ async def run_benchmark(config: BenchmarkConfig) -> dict:
         env_mode=config.env_mode,
         # Model settings
         model_name=config.model_name,
+        model_name_for_tokenizer=model_name_for_tokenizer,
+        renderer_name=config.renderer_name,
         load_checkpoint_path=config.model_path,  # For Tinker: checkpoint path
         lora_rank=32,  # Need valid rank even though we won't train
         

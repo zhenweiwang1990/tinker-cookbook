@@ -27,6 +27,14 @@ def _px_to_norm(x_px: float, y_px: float, width: int, height: int) -> Normalized
     return NormalizedPoint(x_norm=_clamp01(float(x_px) / float(width)), y_norm=_clamp01(float(y_px) / float(height)))
 
 
+def _clamp_px(v: float, lo: float, hi: float) -> float:
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+
 def _maybe_scale_1000_to_px(x: float, y: float, *, screen_width: int, screen_height: int) -> tuple[tuple[float, float], bool]:
     """
     In CUA direct mode, coordinates are often emitted in a normalized 0-1000 space.
@@ -203,7 +211,14 @@ def tool_call_to_genv_action(
             key_name = keys[0]
         if not key_name:
             return {"error": "key_missing", "error_message": "key action requires 'button' or non-empty 'keys' list"}
-        return {"type": "key", "key": str(key_name)}
+        # Android key space restriction (CUA): only allow home/back/menu.
+        key_norm = str(key_name).strip().lower()
+        if key_norm not in {"home", "back", "menu"}:
+            return {
+                "error": "key_invalid",
+                "error_message": f"Unsupported android key: {key_norm!r} (allowed: home/back/menu)",
+            }
+        return {"type": "key", "key": key_norm}
 
     if action_type in {"swipe", "drag", "scroll"}:
         # Prefer explicit start/end targets.
@@ -213,26 +228,53 @@ def tool_call_to_genv_action(
         end_xy = end_xy_from_tool
 
         if action_type == "scroll" and end_xy is None:
-            # Convert scroll(direction,distance) into a swipe gesture.
+            # Convert scroll(direction) into a swipe gesture.
+            #
+            # Doubao's scroll does not provide an "instance"/end-point. We therefore:
+            # - Choose start from point/target if provided; otherwise screen center.
+            # - Use a fixed 35% of screen width/height as the movement distance (axis depends on direction).
+            # - Clamp start/end to a safe inset so we don't swipe outside the screen or get stuck at the edge.
             direction = str(tool_args.get("direction") or "down").lower()
-            distance = float(tool_args.get("distance") or 0.5)
-            distance = max(0.1, min(0.9, distance))
             cx = screen_width * 0.5
             cy = screen_height * 0.5
-            if direction in {"down"}:
-                start_xy = (cx, cy - screen_height * distance * 0.4)
-                end_xy = (cx, cy + screen_height * distance * 0.4)
-            elif direction in {"up"}:
-                start_xy = (cx, cy + screen_height * distance * 0.4)
-                end_xy = (cx, cy - screen_height * distance * 0.4)
-            elif direction in {"left"}:
-                start_xy = (cx + screen_width * distance * 0.4, cy)
-                end_xy = (cx - screen_width * distance * 0.4, cy)
-            elif direction in {"right"}:
-                start_xy = (cx - screen_width * distance * 0.4, cy)
-                end_xy = (cx + screen_width * distance * 0.4, cy)
+
+            if start_xy is None:
+                start_xy = (cx, cy)
+
+            # Keep points away from absolute edges to avoid no-op swipes.
+            margin_x = max(1.0, float(screen_width) * 0.05)
+            margin_y = max(1.0, float(screen_height) * 0.05)
+
+            sx0 = _clamp_px(float(start_xy[0]), margin_x, float(screen_width) - margin_x)
+            sy0 = _clamp_px(float(start_xy[1]), margin_y, float(screen_height) - margin_y)
+
+            frac = 0.2
+            dx = 0.0
+            dy = 0.0
+            if direction == "down":
+                dy = float(screen_height) * frac
+            elif direction == "up":
+                dy = -float(screen_height) * frac
+            elif direction == "right":
+                dx = float(screen_width) * frac
+            elif direction == "left":
+                dx = -float(screen_width) * frac
             else:
                 return {"error": "direction_invalid", "error_message": f"Unsupported scroll direction: {direction!r}"}
+
+            ex0 = _clamp_px(sx0 + dx, margin_x, float(screen_width) - margin_x)
+            ey0 = _clamp_px(sy0 + dy, margin_y, float(screen_height) - margin_y)
+
+            # If clamping makes the swipe too short, re-center and try once more.
+            min_move_px = max(30.0, 0.10 * float(min(screen_width, screen_height)))
+            if abs(ex0 - sx0) + abs(ey0 - sy0) < min_move_px:
+                sx0 = _clamp_px(cx, margin_x, float(screen_width) - margin_x)
+                sy0 = _clamp_px(cy, margin_y, float(screen_height) - margin_y)
+                ex0 = _clamp_px(sx0 + dx, margin_x, float(screen_width) - margin_x)
+                ey0 = _clamp_px(sy0 + dy, margin_y, float(screen_height) - margin_y)
+
+            start_xy = (sx0, sy0)
+            end_xy = (ex0, ey0)
 
         if start_xy is None or end_xy is None:
             return {

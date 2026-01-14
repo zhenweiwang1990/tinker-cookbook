@@ -159,6 +159,12 @@ class CLIConfig:
     # Model configuration
     model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct"  # Model for training (also used for rollout in on-policy RL)
     # model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct"  # Model for training (also used for rollout in on-policy RL)
+    # Base model used for tokenizer + renderer selection.
+    #
+    # This is important for non-Tinker providers where `model_name` can be a provider-native
+    # identifier (e.g. Volc/Ark endpoint IDs like `ep-...`) that doesn't map to our model registry.
+    # If None, we fall back to `model_name` for backward compatibility.
+    model_name_for_tokenizer: str | None = None
     lora_rank: int = 32
     renderer_name: str | None = None
     load_checkpoint_path: str | None = None  # Optional: path to a specific checkpoint to load. If None, will auto-resume from log_path if checkpoint exists. If set, will load weights from this checkpoint (fresh optimizer, starts from batch 0).
@@ -232,6 +238,9 @@ async def cli_main(cli_config: CLIConfig) -> None:
     # Set global env mode used by evaluation wrapper.
     set_env_mode(cli_config.env_mode)
 
+    # Choose the base model used for tokenizer + renderer selection.
+    model_name_for_tokenizer = cli_config.model_name_for_tokenizer or cli_config.model_name
+
     if cli_config.env_mode == "genv_local":
         # Ensure the configured task sources are compatible.
         def _has_genv_source(cfg: dict | list[dict]) -> bool:
@@ -264,9 +273,15 @@ async def cli_main(cli_config: CLIConfig) -> None:
         raise ValueError("TINKER_API_KEY must be provided via config or environment variable")
     
     # Get renderer name
-    renderer_name = cli_config.renderer_name or model_info.get_recommended_renderer_name(
-        cli_config.model_name
-    )
+    provider_lower = (cli_config.provider or "").lower().strip()
+    if cli_config.renderer_name is not None:
+        renderer_name = cli_config.renderer_name
+    elif provider_lower == "doubao_private":
+        # `model_name` for doubao_private is often an Ark endpoint id (e.g. ep-...),
+        # which we cannot map to a tokenizer/template automatically.
+        renderer_name = "doubao_private"
+    else:
+        renderer_name = model_info.get_recommended_renderer_name(model_name_for_tokenizer)
     
     # Build run name
     model_tag = cli_config.model_name.replace("/", "-")
@@ -430,7 +445,7 @@ async def cli_main(cli_config: CLIConfig) -> None:
             eval_tasks=eval_tasks,
             batch_size=cli_config.groups_per_batch,
             group_size=cli_config.group_size,
-            model_name_for_tokenizer=cli_config.model_name,
+            model_name_for_tokenizer=model_name_for_tokenizer,
             renderer_name=renderer_name,
             max_turns=cli_config.max_turns,
             max_recent_turns=5,
@@ -446,7 +461,7 @@ async def cli_main(cli_config: CLIConfig) -> None:
             gbox_api_key=gbox_api_key,
             tinker_api_key=tinker_api_key,  # Tinker API key for OpenAI-compatible API
             rollout_model_name=None,  # Not used, rollout uses dynamic checkpoint path from training
-            model_name_for_tokenizer=cli_config.model_name,
+            model_name_for_tokenizer=model_name_for_tokenizer,
             renderer_name=renderer_name,
             max_turns=cli_config.max_turns,
             box_type=cli_config.box_type,
@@ -1055,7 +1070,10 @@ async def cli_main(cli_config: CLIConfig) -> None:
         # Dummy sampling_client: only used as a container accessed by the CUA rollout code.
         sampling_client = SimpleNamespace(
             model_path=cli_config.model_name,  # passed as model identifier to non-Tinker providers
-            model_name=cli_config.model_name,  # used for tokenizer/renderer defaults
+            model_name=model_name_for_tokenizer,  # used for tokenizer/renderer defaults
+            provider=cli_config.provider,
+            provider_base_url=cli_config.provider_base_url,
+            provider_api_key=cli_config.provider_api_key,
         )
 
         metrics = await rl_train.run_baseline_evaluations_parallel(

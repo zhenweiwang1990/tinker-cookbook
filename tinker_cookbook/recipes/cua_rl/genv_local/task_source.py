@@ -118,6 +118,7 @@ def load_genv_tasks(
     seed: int,
     train_ratio: float = 0.8,
     split_type: Optional[str] = None,
+    task_names: Optional[str] = None,
     limit: Optional[int] = None,
     save_to_db: bool = False,
     db_session: Optional[Session] = None,
@@ -131,6 +132,40 @@ def load_genv_tasks(
 
     all_identifiers = list_genv_task_identifiers(tasks_dir)
     chosen_identifiers = _iter_split(all_identifiers, seed=seed, train_ratio=train_ratio, split_type=split_type)
+
+    # Optional filter: restrict to a subset of tasks (comma-separated).
+    #
+    # For genv tasks, this filter accepts either:
+    # - task directory identifiers (e.g. "019_check_recent_c919_negtive")
+    # - numeric prefixes (e.g. "019" or "19")
+    # - meta.id strings (e.g. "task-019") -> matched by numeric prefix
+    if task_names:
+        import re
+
+        tokens = [t.strip() for t in str(task_names).split(",") if t.strip()]
+        token_set = set(tokens)
+
+        def _matches(identifier: str) -> bool:
+            if identifier in token_set:
+                return True
+            m_ident = re.match(r"^(\d+)", identifier)
+            ident_num = m_ident.group(1) if m_ident else ""
+            for tok in token_set:
+                if tok and identifier.startswith(tok):
+                    return True
+                m_tok = re.search(r"(\d+)", tok)
+                if m_tok and ident_num:
+                    tok_num = m_tok.group(1).zfill(len(ident_num))
+                    if ident_num == tok_num:
+                        return True
+            return False
+
+        chosen_identifiers = [ident for ident in chosen_identifiers if _matches(ident)]
+        logger.info(
+            "[genv_local] task_names filter applied: %r -> %d tasks",
+            task_names,
+            len(chosen_identifiers),
+        )
     if limit is not None and limit < len(chosen_identifiers):
         rng = random.Random(seed)
         chosen_identifiers = rng.sample(chosen_identifiers, int(limit))

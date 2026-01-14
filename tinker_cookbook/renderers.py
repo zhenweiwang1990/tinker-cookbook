@@ -1292,6 +1292,233 @@ class KimiK2Renderer(Renderer):
         return assistant_message, True
 
 
+class DoubaoPrivateRenderer(Renderer):
+    """
+    Renderer/parser for Volcengine Ark (Doubao Private) prompt-based tool calling.
+
+    Doubao Private uses a TS-derived tag format with a magic suffix:
+      - <think{suffix}> ... </think{suffix}>
+      - <seed:tool_call{suffix}> <function{suffix}=NAME> ... </function{suffix}> </seed:tool_call{suffix}>
+      - params: <parameter{suffix}=k>v</parameter{suffix}>
+
+    We parse those tags and then normalize them into CUA's tool schema:
+      - tool name: "action" | "wait" | "finish"
+      - args: {"action_type": ..., ...}
+
+    The rest of the CUA pipeline (execution, DB recording, monitor) stays unchanged.
+    """
+
+    MAGIC_SUFFIX = "_never_used_51bce0c785ca2f68081bfa7d91973934"
+
+    def __init__(self, tokenizer: Tokenizer):
+        super().__init__(tokenizer)
+        self.last_parse_metadata: dict[str, object] = {}
+
+    def get_stop_sequences(self) -> list[str]:
+        # Doubao returns raw message content; no special stop token is required for parsing.
+        return []
+
+    def render_message(self, idx: int, message: Message, is_last: bool = False) -> RenderedMessage:
+        # Doubao provider uses OpenAI-compatible chat messages directly; this is only for
+        # training utilities (RoleColon-like fallback).
+        assert isinstance(message["content"], str), "DoubaoPrivateRenderer only supports string content"
+        ob_str = message["role"].capitalize() + ":"
+        ac_str = " " + message["content"] + "\n\n"
+        prefix = tinker.types.EncodedTextChunk(tokens=self.tokenizer.encode(ob_str, add_special_tokens=False))
+        content: list[tinker.ModelInputChunk] = [
+            tinker.types.EncodedTextChunk(tokens=self.tokenizer.encode(ac_str, add_special_tokens=False))
+        ]
+        return RenderedMessage(prefix=prefix, content=content)
+
+    @staticmethod
+    def _parse_xy_string(s: str) -> tuple[float, float] | None:
+        parts = [p for p in s.replace(",", " ").split() if p]
+        if len(parts) < 2:
+            return None
+        try:
+            return float(parts[0]), float(parts[1])
+        except Exception:
+            return None
+
+    def _extract_thought(self, content: str) -> str | None:
+        start_tag = f"<think{self.MAGIC_SUFFIX}>"
+        end_tag = f"</think{self.MAGIC_SUFFIX}>"
+        si = content.find(start_tag)
+        ei = content.find(end_tag)
+        if si == -1 or ei == -1 or ei <= si:
+            return None
+        return content[si + len(start_tag) : ei].strip()
+
+    def _extract_raw_tool_calls(self, content: str) -> list[dict[str, object]]:
+        import re
+
+        seed_start = f"<seed:tool_call{self.MAGIC_SUFFIX}>"
+        seed_end = f"</seed:tool_call{self.MAGIC_SUFFIX}>"
+        func_start_prefix = f"<function{self.MAGIC_SUFFIX}="
+        func_end = f"</function{self.MAGIC_SUFFIX}>"
+        param_start_prefix = f"<parameter{self.MAGIC_SUFFIX}="
+        param_end = f"</parameter{self.MAGIC_SUFFIX}>"
+
+        def _esc(x: str) -> str:
+            return re.escape(x)
+
+        raw_calls: list[dict[str, object]] = []
+        seed_re = re.compile(rf"{_esc(seed_start)}([\s\S]*?){_esc(seed_end)}")
+        func_re = re.compile(rf"{_esc(func_start_prefix)}([^>]+)>([\s\S]*?){_esc(func_end)}")
+        param_re = re.compile(rf"{_esc(param_start_prefix)}([^>]+)>([\s\S]*?){_esc(param_end)}")
+
+        for seed_match in seed_re.finditer(content):
+            seed_body = seed_match.group(1)
+            for func_match in func_re.finditer(seed_body):
+                func_name = func_match.group(1).strip()
+                func_body = func_match.group(2)
+                args: dict[str, str] = {}
+                for param_match in param_re.finditer(func_body):
+                    k = param_match.group(1).strip()
+                    v = param_match.group(2).strip()
+                    # Heuristic: unwrap redundant <k>...</k> inside param body.
+                    tag_start = f"<{k}>"
+                    tag_end = f"</{k}>"
+                    if v.startswith(tag_start) and v.endswith(tag_end):
+                        v = v[len(tag_start) : -len(tag_end)].strip()
+                    args[k] = v
+                raw_calls.append({"name": func_name, "arguments": args})
+        return raw_calls
+
+    def _normalize_tool_call(self, raw_call: dict[str, object]) -> dict[str, object] | None:
+        name = str(raw_call.get("name") or "").strip()
+        args = raw_call.get("arguments")
+        if not isinstance(args, dict):
+            args = {}
+
+        # click variants -> tap
+        if name in {"click", "left_double", "left_triple", "right_single"}:
+            pt = args.get("point")
+            if isinstance(pt, str):
+                xy = self._parse_xy_string(pt)
+                if xy is None:
+                    return None
+                return {
+                    "name": "action",
+                    "args": {
+                        "action_type": "tap",
+                        "target": {"element": name, "coordinates": [xy[0], xy[1]]},
+                    },
+                }
+            return None
+
+        # drag -> swipe
+        if name == "drag":
+            sp = args.get("start_point")
+            ep = args.get("end_point")
+            if isinstance(sp, str) and isinstance(ep, str):
+                sxy = self._parse_xy_string(sp)
+                exy = self._parse_xy_string(ep)
+                if sxy is None or exy is None:
+                    return None
+                return {
+                    "name": "action",
+                    "args": {
+                        "action_type": "swipe",
+                        "start_target": {"element": "drag_start", "coordinates": [sxy[0], sxy[1]]},
+                        "end_target": {"element": "drag_end", "coordinates": [exy[0], exy[1]]},
+                    },
+                }
+            return None
+
+        # scroll(direction, point?) -> scroll (action_adapter will convert to swipe)
+        if name == "scroll":
+            direction = args.get("direction")
+            pt = args.get("point")
+            if not isinstance(direction, str) or not direction:
+                return None
+            norm_args: dict[str, object] = {"action_type": "scroll", "direction": direction.lower()}
+            if isinstance(pt, str):
+                xy = self._parse_xy_string(pt)
+                if xy is not None:
+                    norm_args["target"] = {"element": "scroll_point", "coordinates": [xy[0], xy[1]]}
+            return {"name": "action", "args": norm_args}
+
+        # type(content) -> type/text
+        if name == "type":
+            content = args.get("content")
+            if isinstance(content, str):
+                return {"name": "action", "args": {"action_type": "type", "text": content}}
+            return None
+
+        # press/hotkey -> android button_press (key restriction enforced in action_adapter)
+        if name in {"press", "hotkey"}:
+            key = args.get("key")
+            if isinstance(key, str) and key:
+                k = key.strip().lower()
+                return {"name": "action", "args": {"action_type": "button_press", "button": k}}
+            return None
+
+        # wait(time seconds) -> wait(duration)
+        if name == "wait":
+            t = args.get("time")
+            if isinstance(t, str) and t.strip():
+                try:
+                    dur = float(t.strip())
+                except Exception:
+                    dur = 1.0
+            else:
+                dur = 1.0
+            return {"name": "wait", "args": {"duration": dur}}
+
+        # finished(content) -> finish(result_message) (success decided by validator)
+        if name in {"finished", "call_user"}:
+            content = args.get("content")
+            msg = content if isinstance(content, str) else ""
+            return {"name": "finish", "args": {"result_message": msg}}
+
+        # Unsupported function -> keep explicit finish with diagnostic.
+        return {"name": "finish", "args": {"result_message": f"Unsupported Doubao function: {name}"}}
+
+    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
+        content = self.tokenizer.decode(response)
+        thought = self._extract_thought(content)
+        raw_tool_calls = self._extract_raw_tool_calls(content)
+
+        normalized: list[dict[str, object]] = []
+        warnings: list[str] = []
+        for tc in raw_tool_calls:
+            norm = self._normalize_tool_call(tc)
+            if norm is None:
+                warnings.append(f"failed_to_normalize:{tc.get('name')}")
+            else:
+                normalized.append(norm)
+
+        tool_calls: list[ToolCall] = []
+        for idx, tc in enumerate(normalized):
+            tool_name = str(tc.get("name"))
+            tool_args = tc.get("args")
+            if not isinstance(tool_args, dict):
+                tool_args = {}
+            tool_calls.append(
+                ToolCall(
+                    function=ToolCall.FunctionBody(name=tool_name, arguments=json.dumps(tool_args)),
+                    id=f"doubao_{idx}",
+                )
+            )
+
+        self.last_parse_metadata = {
+            "provider": "doubao_private",
+            "thought": thought,
+            "raw_tool_calls": raw_tool_calls,
+            "normalized_tool_calls": normalized,
+            "warnings": warnings,
+        }
+
+        assistant_message = Message(role="assistant", content=content)
+        if thought:
+            assistant_message["thinking"] = thought
+        if tool_calls:
+            assistant_message["tool_calls"] = tool_calls
+            return assistant_message, True
+        return assistant_message, False
+
+
 class GptOssRenderer(Renderer):
     """
     Format like this (no newlines between messages, last message should end with <|return|> but be replaced by <|end|> when continuing the convo):
@@ -1439,5 +1666,7 @@ def get_renderer(
         return GptOssRenderer(tokenizer, use_system_prompt=True, reasoning_effort="medium")
     elif name == "gpt_oss_high_reasoning":
         return GptOssRenderer(tokenizer, use_system_prompt=True, reasoning_effort="high")
+    elif name == "doubao_private":
+        return DoubaoPrivateRenderer(tokenizer)
     else:
         raise ValueError(f"Unknown renderer: {name}")

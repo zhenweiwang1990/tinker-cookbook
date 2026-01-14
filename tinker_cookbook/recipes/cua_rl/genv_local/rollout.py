@@ -150,6 +150,7 @@ def _update_rollout_execution_details(
     rollout_recorder: GenvRolloutRecorder | None,
     *,
     execution_details_turns: list[dict[str, Any]],
+    env_build: dict[str, Any] | None = None,
 ) -> None:
     """
     Persist minimal execution_details needed by training-monitor to show:
@@ -164,7 +165,12 @@ def _update_rollout_execution_details(
     try:
         ok = rollout_recorder.recorder.update(
             trajectory_data_json=json.dumps(
-                {"execution_details": {"turns": execution_details_turns}},
+                {
+                    "execution_details": {
+                        "turns": execution_details_turns,
+                        **({"env_build": env_build} if env_build is not None else {}),
+                    }
+                },
                 ensure_ascii=False,
                 default=str,
             )
@@ -316,6 +322,14 @@ async def _run_single_episode(
     deep_link_cfg = (env_config.get("reset") or {}).get("app") or {}
     deep_link_cfg = deep_link_cfg.get("deepLink") if isinstance(deep_link_cfg, dict) else None
 
+    # IMPORTANT:
+    # genv's reset/database seeding logic needs to know where the task definitions live (tasks_dir)
+    # for tasks that use GraphQL seeds / external env.yaml files. If not provided, genv falls back
+    # to cwd-relative defaults like "./tasks", which breaks when benchmark is run from a different
+    # repo (e.g. tinker-cookbook).
+    if isinstance(reset_db_cfg, dict):
+        reset_db_cfg = {**reset_db_cfg, "tasksDir": tasks_dir}
+
     # genv reset needs db_seed + deep_link in options.
     reset_obs, reset_info = env.reset(
         options={
@@ -329,24 +343,68 @@ async def _run_single_episode(
     )
     execution_id = str(reset_info.get("execution_id") or "")
 
-    # Record initial screenshot as turn 0.
+    # Persist reset metadata in Env Build tab (but do NOT create a synthetic "turn 0").
+    # training-monitor reads this from rollout.trajectory_data_json.execution_details.env_build.
+    #
+    # Also persist the reset screenshot as a dedicated observation on turn 1, so the monitor
+    # can show it without embedding large base64 blobs in trajectory_data_json.
     if rollout_recorder is not None:
         try:
-            rollout_recorder.record_screenshot(turn=0, obs_type="reset_screenshot", screenshot=reset_obs.get("screenshot"))  # type: ignore[arg-type]
-            rollout_recorder.record_json_obs(
-                turn=0,
-                obs_type="reset_info",
-                payload={"reset_info": reset_info, "taskId": task_id_for_context, "execution_id": execution_id},
-            )
+            rollout_recorder.record_screenshot(turn=1, obs_type="env_reset_screenshot", screenshot=reset_obs.get("screenshot"))  # type: ignore[arg-type]
         except Exception:
             pass
+    env_build: dict[str, Any] = {
+        "status": "success",
+        "total_time": None,
+        "stages": [
+            {
+                "name": "env_reset",
+                "status": "success",
+                "duration": None,
+                "details": {
+                    "execution_id": execution_id,
+                    "taskId": task_id_for_context,
+                    "deep_link": deep_link_cfg,
+                    # Avoid huge blobs; keep the structured reset metadata.
+                    "reset_info": reset_info,
+                },
+            }
+        ],
+        # Reference the reset screenshot without embedding it in trajectory_data_json.
+        "reset_screenshot": {"turn": 1, "obs_type": "env_reset_screenshot"},
+        # These fields exist in the monitor UI; keep them stable even if unused for genv_local.
+        "prehook_executed": False,
+        "prehook_output": None,
+    }
+    _update_rollout_execution_details(
+        rollout_recorder,
+        execution_details_turns=[],
+        env_build=env_build,
+    )
 
     # Build initial system prompt.
     screen_w, screen_h = env.adb_device.get_screen_size()
+
+    # Provider-aware eval-only mode: core/train.py (baseline_only + provider!=tinker) passes a dummy
+    # sampling_client through TinkerTokenCompleter. We detect provider here so system prompt uses the
+    # correct tool-call format (e.g. Doubao magic tags).
+    provider = "tinker"
+    provider_model_name = None
+    provider_base_url = None
+    provider_api_key = None
+    if isinstance(policy, TinkerTokenCompleter):
+        sc = getattr(policy, "sampling_client", None)
+        provider = str(getattr(sc, "provider", "tinker") or "tinker").lower()
+        provider_model_name = getattr(sc, "model_path", None) or getattr(sc, "model_name", None)
+        provider_base_url = getattr(sc, "provider_base_url", None)
+        provider_api_key = getattr(sc, "provider_api_key", None)
+    use_provider_inference = provider != "tinker"
+
     system_prompt = create_system_prompt(
         task_description=getattr(task, "description", ""),
         max_turns=max_turns,
         box_type="android",
+        provider=provider,
         coordinate_mode="direct",
         # Direct mode in this codebase typically uses 0-1000 scaled coordinates.
         # We'll convert to genv's normalized (0-1) in action_adapter.py.
@@ -374,6 +432,14 @@ async def _run_single_episode(
     execution_details_turns: list[dict[str, Any]] = []
     total_reward = 0.0
     final_result: Optional[dict[str, Any]] = None
+    # NOTE:
+    # For genv_local, we intentionally do NOT treat env-provided terminated/truncated as a hard stop.
+    # This rollout loop should only stop when:
+    #   - the model calls `finish`, OR
+    #   - we hit max_turns
+    #
+    # We still record env termination flags for debugging and for downstream summaries, but they do
+    # not control the loop.
     terminated = False
     truncated = False
     last_obs: Optional[dict[str, Any]] = None
@@ -405,12 +471,52 @@ async def _run_single_episode(
         messages.append(user_msg)
 
         truncated_messages = _truncate_messages(messages)
-        model_input = renderer.build_generation_prompt(truncated_messages)
 
-        # Sample tokens/logprobs.
-        sampled = await policy(model_input, stop)
-        parsed_message, parse_success = renderer.parse_response(sampled.tokens)
-        last_response_text = str(parsed_message.get("content") or "")
+        if use_provider_inference:
+            # This rollout code stores (turn, model_input, tokens/logprobs) in trajectory_turns.
+            # For provider inference we don't have a "true" token-level observation prompt, so
+            # we store an empty ModelInput (benchmark-only path).
+            model_input = tinker.ModelInput.empty()
+
+            from tinker_cookbook.recipes.cua_rl.agent.inference_client_factory import create_inference_client
+
+            inf = create_inference_client(
+                provider=provider,
+                model_name=str(provider_model_name or model_path),
+                base_url=provider_base_url,
+                api_key=provider_api_key,
+                base_model_name=getattr(getattr(policy, "sampling_client", None), "model_name", None)
+                or "Qwen/Qwen3-VL-30B-A3B-Instruct",
+                renderer=renderer,
+                tokenizer=renderer.tokenizer,
+            )
+            text = await inf.generate_text(
+                messages=truncated_messages,  # type: ignore[arg-type]
+                max_tokens=getattr(policy, "max_tokens", 2048),
+                temperature=getattr(policy, "temperature", 1.0),
+            )
+
+            tokens = renderer.tokenizer.encode(text, add_special_tokens=False)
+            # Best-effort append stop sequence for renderers that require one.
+            try:
+                stops = renderer.get_stop_sequences()
+                if stops:
+                    if isinstance(stops[0], int):
+                        tokens = tokens + [stops[0]]
+                    elif isinstance(stops[0], str):
+                        tokens = tokens + renderer.tokenizer.encode(stops[0], add_special_tokens=False)
+            except Exception:
+                pass
+
+            sampled = TokensWithLogprobs(tokens=tokens, maybe_logprobs=None)
+            parsed_message, parse_success = renderer.parse_response(tokens)
+            last_response_text = str(parsed_message.get("content") or "")
+        else:
+            model_input = renderer.build_generation_prompt(truncated_messages)
+            # Sample tokens/logprobs.
+            sampled = await policy(model_input, stop)
+            parsed_message, parse_success = renderer.parse_response(sampled.tokens)
+            last_response_text = str(parsed_message.get("content") or "")
 
         tool_calls = _tool_calls_from_renderer(parsed_message)
         if not tool_calls:
@@ -419,10 +525,14 @@ async def _run_single_episode(
         # Always append assistant message text so the model has its own reasoning/history.
         messages.append(renderers.Message(role="assistant", content=last_response_text))
 
-        # Execute tool calls (we only affect the env for 'action'; 'finish' ends early).
+        # Execute tool calls (we only affect the env for 'action'; 'finish' ends the rollout loop).
         step_reward = 0.0
         turn_action_results: list[dict[str, Any]] = []
         turn_parse_error: str | None = None
+        finish_called = False
+        # Track whether env ever reported done during this turn (for logging only).
+        turn_env_terminated = False
+        turn_env_truncated = False
         # For action overlay, prefer the current screenshot's true pixel size (may differ from adb reported size).
         img_wh = _image_wh_from_ndarray(screenshot)
         img_w = img_wh[0] if img_wh else screen_w
@@ -434,6 +544,9 @@ async def _run_single_episode(
                 args = {}
 
             if name == "finish":
+                finish_called = True
+                # Mark rollout as "truncated" in the conventional RL sense (agent chose to stop),
+                # but do not rely on env termination to end the episode.
                 truncated = True
                 break
 
@@ -486,8 +599,50 @@ async def _run_single_episode(
                 except Exception:
                     pass
 
-            obs, _env_reward, terminated, truncated, info = env.step(genv_action)
+            # If the requested action isn't supported by genv, do NOT step the env.
+            # Instead, provide explicit feedback to the model in the next turn.
+            if name == "action":
+                supported_types = {"tap", "swipe", "type", "key", "long_press"}
+                a_type = genv_action.get("type")
+                if (
+                    "error" in genv_action
+                    or not isinstance(a_type, str)
+                    or a_type not in supported_types
+                ):
+                    err_msg = str(
+                        genv_action.get("error_message")
+                        or genv_action.get("error")
+                        or f"Unsupported genv action type: {a_type!r}"
+                    )
+                    messages.append(
+                        renderers.Message(
+                            role="user",
+                            content=(
+                                "Environment does not support this operation. "
+                                f"Reason: {err_msg}\n"
+                                "Supported actions: tap, swipe, type, key(home/back/menu), long_press. "
+                                "Please choose a supported action."
+                            ),
+                        )
+                    )
+                    break
+
+            try:
+                obs, _env_reward, env_terminated, env_truncated, info = env.step(genv_action)
+            except Exception as e:
+                # If the environment errors (e.g. stepping after it has internally terminated),
+                # do not crash the rollout. We keep looping until finish/max_turns.
+                err_msg = f"env_step_error: {e}"
+                action_result["error"] = err_msg
+                turn_parse_error = turn_parse_error or err_msg
+                continue
+
             last_obs = obs
+            # Record env termination flags for debugging, but do NOT break on them.
+            turn_env_terminated = turn_env_terminated or bool(env_terminated)
+            turn_env_truncated = turn_env_truncated or bool(env_truncated)
+            terminated = terminated or bool(env_terminated)
+            truncated = truncated or bool(env_truncated)
 
             # Compute reward from checks (genv default reward impl is inconsistent with status ints).
             checks = obs.get("checks") or {}
@@ -517,11 +672,11 @@ async def _run_single_episode(
                 except Exception:
                     pass
 
-            if terminated or truncated:
-                break
+            # IMPORTANT: Do NOT break on env termination; keep looping until finish/max_turns.
 
         total_reward += step_reward
-        episode_done = bool(terminated or truncated or turn >= max_turns)
+        # Only stop the episode when the model calls finish, or we hit max_turns.
+        episode_done = bool(finish_called or turn >= max_turns)
         if rollout_recorder is not None:
             try:
                 rollout_recorder.record_turn_end(
@@ -531,8 +686,10 @@ async def _run_single_episode(
                     model_response_text=last_response_text,
                     metrics={
                         "parse_success": bool(parse_success),
-                        "terminated": bool(terminated),
-                        "truncated": bool(truncated),
+                        # For monitoring/debugging: env flags are still recorded, but they do not end the loop.
+                        "terminated": bool(turn_env_terminated),
+                        "truncated": bool(turn_env_truncated or finish_called),
+                        "finish_called": bool(finish_called),
                         "step_reward": float(step_reward),
                     },
                     turn_time=time.time() - turn_start,
@@ -553,6 +710,7 @@ async def _run_single_episode(
         _update_rollout_execution_details(
             rollout_recorder,
             execution_details_turns=execution_details_turns,
+            env_build=env_build,
         )
         if episode_done:
             break
@@ -561,7 +719,11 @@ async def _run_single_episode(
     if last_obs and "final_result" in last_obs:
         final_result = last_obs.get("final_result")
     # Ensure final execution_details are persisted.
-    _update_rollout_execution_details(rollout_recorder, execution_details_turns=execution_details_turns)
+    _update_rollout_execution_details(
+        rollout_recorder,
+        execution_details_turns=execution_details_turns,
+        env_build=env_build,
+    )
 
     # Build Trajectory (per-turn rewards).
     transitions: list[Transition] = []

@@ -15,6 +15,7 @@ from tinker_cookbook.image_processing_utils import get_image_processor
 from .base_inference_client import BaseInferenceClient
 from .tinker_inference_client import TinkerInferenceClient
 from .http_inference_client import HTTPInferenceClient
+from .doubao_private_inference_client import DoubaoPrivateInferenceClient
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,12 @@ PROVIDER_DEFAULTS = {
         "base_url": "https://api.openai.com/v1",
         "requires_api_key": True,
         "env_key": "OPENAI_API_KEY",
+    },
+    "doubao_private": {
+        # Volcengine Ark OpenAI-compatible endpoint (v3).
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "requires_api_key": True,
+        "env_key": "DOUBAO_API_KEY",
     },
 }
 
@@ -97,7 +104,7 @@ def create_inference_client(
     provider = provider.lower()
     
     # Validate provider
-    supported = ["tinker", "vllm", "openrouter", "openai"]
+    supported = ["tinker", "vllm", "openrouter", "openai", "doubao_private"]
     if provider not in supported:
         raise ValueError(
             f"Unsupported provider: {provider}. "
@@ -115,6 +122,11 @@ def create_inference_client(
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = base_url + "/v1"
+    elif provider == "doubao_private" and base_url:
+        # Users may pass https://ark.cn-beijing.volces.com; ensure /api/v3 suffix.
+        base_url = base_url.rstrip("/")
+        if not base_url.endswith("/api/v3"):
+            base_url = base_url + "/api/v3"
     
     # Auto-detect API key from environment
     if not api_key:
@@ -175,19 +187,31 @@ def create_inference_client(
             renderer=renderer,
             tokenizer=tokenizer,
         )
-    
-    else:
-        # All other providers use HTTP client
+
+    if provider == "doubao_private":
         if not base_url:
-            raise ValueError(f"{provider} provider requires base_url parameter")
-        
-        logger.info(f"Creating HTTPInferenceClient: {provider} ({base_url})")
-        
-        return HTTPInferenceClient(
-            provider=provider,
+            raise ValueError("doubao_private provider requires base_url parameter")
+        if not api_key:
+            raise ValueError("doubao_private provider requires api_key parameter (DOUBAO_API_KEY)")
+        return DoubaoPrivateInferenceClient(
             model_name=model_name,
             base_url=base_url,
             api_key=api_key,
-            timeout=kwargs.get("timeout", 300.0),
+            timeout=float(kwargs.get("timeout", 60.0)),
+            thinking=str(kwargs.get("thinking", "disabled")),
         )
+
+    # All other providers use HTTP client
+    if not base_url:
+        raise ValueError(f"{provider} provider requires base_url parameter")
+
+    logger.info(f"Creating HTTPInferenceClient: {provider} ({base_url})")
+
+    return HTTPInferenceClient(
+        provider=provider,
+        model_name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        timeout=kwargs.get("timeout", 300.0),
+    )
 

@@ -11,6 +11,7 @@ def create_system_prompt(
     app_name: Optional[str] = None,  # Deprecated, kept for backward compatibility
     cua_guide: Optional[str] = None,  # New: guide text from config
     box_type: str = "android",  # "android", "linux", "windows", etc.
+    provider: Optional[str] = None,  # Inference provider (e.g., "doubao_private")
     coordinate_mode: str = "gbox",  # "gbox" or "direct"
     coordinate_scale: bool = False,  # Whether to apply coordinate scaling (Direct mode only)
     screen_width: Optional[int] = None,  # Screen width in pixels (for Direct mode without scaling)
@@ -39,26 +40,38 @@ def create_system_prompt(
     # Get the directory containing this file (utils), then go up to cua_rl
     current_dir = Path(__file__).parent.parent  # cua_rl directory
     
-    # Determine prompt file prefix based on box_type
-    # Map various box types to prompt categories
-    if box_type.lower() in ["android"]:
-        prompt_prefix = "android"
-    elif box_type.lower() in ["linux", "windows", "pc", "desktop"]:
-        prompt_prefix = "pc"
+    provider_lower = (provider or "").lower().strip()
+
+    # Provider-specific prompt selection.
+    #
+    # Doubao Private uses a custom (TS-derived) system prompt and a custom tool-call format.
+    # It currently requires Direct coordinate mode (the prompt requires explicit coordinates).
+    if provider_lower == "doubao_private":
+        if coordinate_mode != "direct":
+            raise ValueError(
+                "provider='doubao_private' currently requires coordinate_mode='direct' "
+                "(Doubao prompt requires explicit coordinates)."
+            )
+        prompt_file = current_dir / "prompts" / "doubao-private-system-prompt-direct.txt"
     else:
-        # Default to android for unknown types
-        prompt_prefix = "android"
-    
-    # Select prompt file based on coordinate mode
-    if coordinate_mode == "gbox":
-        prompt_file = current_dir / "prompts" / f"{prompt_prefix}-system-prompt-gbox.txt"
-    elif coordinate_mode == "direct":
-        prompt_file = current_dir / "prompts" / f"{prompt_prefix}-system-prompt-direct.txt"
-    else:
-        raise ValueError(
-            f"Unknown coordinate_mode: {coordinate_mode}. "
-            f"Must be 'gbox' or 'direct'"
-        )
+        # Default prompt selection based on box_type + coordinate_mode.
+        if box_type.lower() in ["android"]:
+            prompt_prefix = "android"
+        elif box_type.lower() in ["linux", "windows", "pc", "desktop"]:
+            prompt_prefix = "pc"
+        else:
+            # Default to android for unknown types
+            prompt_prefix = "android"
+
+        if coordinate_mode == "gbox":
+            prompt_file = current_dir / "prompts" / f"{prompt_prefix}-system-prompt-gbox.txt"
+        elif coordinate_mode == "direct":
+            prompt_file = current_dir / "prompts" / f"{prompt_prefix}-system-prompt-direct.txt"
+        else:
+            raise ValueError(
+                f"Unknown coordinate_mode: {coordinate_mode}. "
+                f"Must be 'gbox' or 'direct'"
+            )
 
     # Read the template from file
     with open(prompt_file, "r", encoding="utf-8") as f:

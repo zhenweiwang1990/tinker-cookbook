@@ -108,6 +108,14 @@ class CUAEnv(ProblemEnv):
         self.task = task  # Store task object for validation
         self.max_task_time_seconds = max_task_time_seconds
         self.max_turn_time_seconds = max_turn_time_seconds
+        # Doubao Private prompt/tool format currently requires Direct mode.
+        if self.provider.lower() == "doubao_private" and coordinate_mode != "direct":
+            logger.warning(
+                f"[CUAEnv] provider='doubao_private' requires coordinate_mode='direct'. "
+                f"Overriding coordinate_mode={coordinate_mode!r} -> 'direct'."
+            )
+            coordinate_mode = "direct"
+
         self.coordinate_mode = coordinate_mode  # Store coordinate mode
         self.coordinate_scale = coordinate_scale
         self.x_scale_ratio = x_scale_ratio
